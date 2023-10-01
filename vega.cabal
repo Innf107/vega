@@ -29,8 +29,10 @@ library
       Vega.Driver
       Vega.Eval
       Vega.Infer
+      Vega.LazyM
       Vega.Lexer
       Vega.Loc
+      Vega.MonadRef
       Vega.Name
       Vega.Parser
       Vega.Prelude
