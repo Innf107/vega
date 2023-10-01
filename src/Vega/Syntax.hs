@@ -8,8 +8,8 @@ module Vega.Syntax (
   Pattern (..),
   Literal (..),
   -- Core Syntax
-  CoreDeclaration (..),
-  CoreExpr (..),
+  CoreDeclarationF (..),
+  CoreExprF (..),
   CorePattern (..),
   -- Values
   ValueF (..),
@@ -80,22 +80,25 @@ data Literal
   | StringLit Text
   deriving (Generic)
 
-data CoreDeclaration
-  = CDefineFunction Name (Vector Name) CoreExpr
+data CoreDeclarationF context
+  = CDefineFunction Name (Vector Name) (CoreExprF context)
 
-type CoreType = CoreExpr
-data CoreExpr
+-- TODO: Maybe this shouldn't be a separate core type but just another TTG pass.
+-- Core cannot deviate that much from source syntax anyway since it needs to be shown in error messages
+type CoreTypeF = CoreExprF
+data CoreExprF context
   = CVar Name
-  | CApp CoreExpr CoreExpr
+  | CApp (CoreExprF context) (CoreExprF context)
   | -- Patterns are desugared in core
-    CLambda Name CoreExpr
-  | CCase CoreExpr (Vector (CorePattern, CoreExpr))
+    CLambda Name (CoreExprF context)
+  | CCase (CoreExprF context) (Vector (CorePattern, CoreExprF context))
   | CLiteral Literal
   | -- Statements are just desugared to let expressions
-    CLet Name CoreType CoreExpr
+    CLet Name (CoreTypeF context) (CoreExprF context)
   | -- Types
-    CPi (Maybe Name) CoreType CoreExpr
-  | CForall Name CoreType CoreExpr
+    CPi (Maybe Name) (CoreTypeF context) (CoreExprF context)
+  | CForall Name (CoreTypeF context) (CoreExprF context)
+  | CMeta (MetaVarF context)
 
 data CorePattern
   = CVarPat Name
@@ -111,13 +114,13 @@ data ValueF context
   | Int
   | String
   | -- TODO: Add effects
-    Pi (Maybe Name) (ValueF context) (CoreExpr, context)
-  | Forall Name (ValueF context) (CoreExpr, context)
+    Pi (Maybe Name) (ValueF context) (CoreExprF context, context)
+  | Forall Name (ValueF context) (CoreExprF context, context)
   | -- Stuck expressions
     SkolemApp Skolem (Seq (ValueF context))
   | MetaApp (MetaVarF context) (Seq (ValueF context))
 
-data ClosureF context = MkClosure Name CoreExpr context
+data ClosureF context = MkClosure Name (CoreExprF context) context
 
 data Skolem = MkSkolem Name Unique
 
@@ -140,9 +143,9 @@ instance Pretty (ValueF context) where
     Int -> constructorText "Int"
     String -> constructorText "String"
     Pi Nothing domain (core, _context) ->
-      lparen "(" <> pretty domain <+> "->" <+> pretty core <> rparen ")"
+      lparen "(" <> pretty domain <+> keyword "->" <+> pretty core <> rparen ")"
     Pi (Just name) domain (core, _context) ->
-      lparen "(" <> lparen "(" <> ident name <+> keyword ":" <+> pretty domain <> rparen ")" <+> "->" <+> pretty core <> rparen ")"
+      lparen "(" <> lparen "(" <> ident name <+> keyword ":" <+> pretty domain <> rparen ")" <+> keyword "->" <+> pretty core <> rparen ")"
     Forall name domain (core, _context) ->
       lparen "("
         <> keyword "forall"
@@ -169,7 +172,7 @@ prettyMetaApp (MkMeta name _ ref) arguments = unsafePerformIO do
   readIORef ref >>= \case
     Nothing ->
       case arguments of
-        [] -> pure $ meta (original name)
+        [] -> pure $ meta ("?" <> original name)
         arguments -> pure $ lparen "(" <> meta (original name) <+> sep (map pretty (toList arguments)) <> rparen ")"
     Just replacement -> pure $ prettyApp replacement arguments
 {-# NOINLINE prettyMetaApp #-}
@@ -187,5 +190,39 @@ prettyApp type_ arguments =
 instance Pretty Skolem where
   pretty (MkSkolem name _) = skolem name
 
-instance Pretty CoreExpr where
-  pretty = undefined
+-- TODO: PRECEDEEEENCE
+instance Pretty (CoreExprF context) where
+  pretty = \case
+    CVar name -> ident name
+    CApp funExpr argExpr ->
+      lparen "(" <> pretty funExpr <+> pretty argExpr <> rparen ")"
+    CLambda name result ->
+      lparen "(" <> keyword "\\" <> ident name <+> keyword "->" <+> pretty result <> rparen ")"
+    CCase{} -> undefined
+    CLiteral literal -> pretty literal
+    CLet name body rest ->
+      lparen "(" <> keyword "let" <+> ident name <+> "=" <+> pretty body <> ";" <+> pretty rest <> rparen ")"
+    CPi Nothing domain codomain ->
+      lparen "(" <> pretty domain <+> keyword "->" <+> pretty codomain <> rparen ")"
+    CPi (Just name) domain codomain ->
+      lparen "(" <> lparen "(" <> ident name <+> keyword ":" <+> pretty domain <> rparen ")" <+> keyword "->" <+> pretty codomain <> rparen ")"
+    CForall name domain codomain ->
+      lparen "("
+        <> keyword "forall"
+        <> lparen "("
+        <> ident name
+        <+> keyword ":"
+        <+> pretty domain
+        <> rparen ")"
+        <> keyword "."
+        <+> pretty codomain
+        <> rparen ")"
+    CMeta meta -> prettyMetaApp meta []
+
+instance Pretty Literal where
+  pretty = \case
+    TypeLit -> constructorText "Type"
+    IntTypeLit -> constructorText "Int"
+    StringTypeLit -> constructorText "String"
+    IntLit int -> number int
+    StringLit text -> literal ("\"" <> text <> "\"")

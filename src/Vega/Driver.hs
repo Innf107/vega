@@ -5,6 +5,7 @@ import Vega.Syntax
 import Vega.Pretty
 import Vega.Util (Untagged(..))
 import Vega.Loc (HasLoc)
+import Vega.Eval (CoreDeclaration)
 
 import Vega.Lexer qualified as Lexer
 import Vega.Parser qualified as Parser

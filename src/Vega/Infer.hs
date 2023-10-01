@@ -3,7 +3,7 @@ module Vega.Infer (typecheck, TypeError (..)) where
 import Vega.Prelude
 import Vega.Syntax
 
-import Vega.Eval (EvalContext, Value, applyClosure, define, emptyEvalContext, eval)
+import Vega.Eval (CoreDeclaration, CoreExpr, EvalContext, Value, applyClosure, define, emptyEvalContext, eval)
 import Vega.Name qualified as Name
 
 import Vega.Loc (HasLoc)
@@ -18,7 +18,12 @@ data TypeError
 instance HasLoc TypeError
 
 instance Pretty TypeError where
-    pretty = undefined
+    pretty (UnableToUnify _ type1 type2) =
+        "Unable to unify types "
+            <> pretty type1
+            <> "\n"
+            <> "                  and "
+            <> pretty type2
 
 type Type = Value
 type MetaVar = MetaVarF EvalContext
@@ -285,19 +290,20 @@ checkPattern _env expectedType = \case
     OrPat{} -> undefined
 
 splitFunctionType :: Loc -> Type -> Infer (Maybe Name, Type, CoreExpr, EvalContext)
-splitFunctionType loc type_ = followMetas type_ >>= \case
-    Pi name parameterType (resultClosureExpr, resultClosureContext) ->
-        pure (name, parameterType, resultClosureExpr, resultClosureContext)
-    type_ -> do
-        paramMeta <- freshAnonymousMeta
-        resultMeta <- freshAnonymousMeta
-        
-        let paramType = MetaApp paramMeta []
+splitFunctionType loc type_ =
+    followMetas type_ >>= \case
+        Pi name parameterType (resultClosureExpr, resultClosureContext) ->
+            pure (name, parameterType, resultClosureExpr, resultClosureContext)
+        type_ -> do
+            paramMeta <- freshAnonymousMeta
+            resultMeta <- freshAnonymousMeta
+            let resultClosureExpr = CMeta resultMeta
+            let resultClosureContext = emptyEvalContext
 
-        -- TODO: How do we specify that the result should be a unification variable?
-        -- The result is a *closure*?!
-        subsumes loc type_ (Pi Nothing paramType undefined)
-        undefined
+            let paramType = MetaApp paramMeta []
+
+            subsumes loc type_ (Pi Nothing paramType (resultClosureExpr, resultClosureContext))
+            pure (Nothing, paramType, resultClosureExpr, resultClosureContext)
 
 subsumes :: Loc -> Type -> Type -> Infer ()
 subsumes loc subtype supertype = do

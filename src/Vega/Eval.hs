@@ -3,6 +3,8 @@ module Vega.Eval (
     emptyEvalContext,
     define,
     Value,
+    CoreDeclaration,
+    CoreExpr,
     eval,
     applyClosure,
 ) where
@@ -11,6 +13,8 @@ import Vega.Prelude
 import Vega.Syntax
 
 type Value = ValueF EvalContext
+type CoreDeclaration = CoreDeclarationF EvalContext
+type CoreExpr = CoreExprF EvalContext
 type Closure = ClosureF EvalContext
 
 data EvalContext = MkEvalContext
@@ -55,6 +59,8 @@ eval context = \case
          in eval (define name value context) rest
     CPi name type_ body -> Pi name (eval context type_) (body, context)
     CForall name type_ body -> Forall name (eval context type_) (body, context)
+    CMeta meta ->
+        undefined
 
 applyClosure :: Closure -> Value -> Value
 applyClosure (MkClosure name coreExpr context) argument =
