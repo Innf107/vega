@@ -11,11 +11,13 @@ import Data.Char qualified as Char
 import Data.Text qualified as Text
 import Data.Vector qualified as Vector
 
-import GHC.Show qualified as S
+import GHC.Show qualified as Show
+import Prelude qualified as Read (read)
 
 data LexError
     = UnexpectedEOF Loc
     | UnexpectedChar Loc Char
+    | UnterminatedStringLiteral Loc
     deriving (Generic)
 instance HasLoc LexError
 
@@ -24,6 +26,8 @@ instance Pretty LexError where
         "Unexpected end of file"
     pretty (UnexpectedChar _ char) =
         "Unexpected character " <> quote (identText [char])
+    pretty (UnterminatedStringLiteral _) =
+        "Unterminated string literal"
 
 data TokenClass
     = IDENT Text
@@ -39,6 +43,7 @@ data TokenClass
     | RPAREN
     | COMMA
     | SEMI
+    | DOT
     | LET
     | CASE
     | FORALL
@@ -51,7 +56,7 @@ data Token
 
 instance HasLoc Token where
     getLoc (MkToken _ loc) = loc
-instance S.Show Token where
+instance Show.Show Token where
     show (MkToken class_ _) = show class_
 
 data LexState = MkLexState
@@ -196,6 +201,7 @@ lex = do
     match
         [ C "\\" $ emit LAMBDA
         , C ":" $ emit COLON
+        , C "." $ emit DOT
         , C "=" $ emit EQUALS
         , C "(" $ emit LPAREN
         , C ")" $ emit RPAREN
@@ -207,8 +213,14 @@ lex = do
         , C "let" $ emit LET
         , C "case" $ emit CASE
         , C "forall" $ emit FORALL
-        , C "\n" $ advanceLine >> lex
+        , C "--" $ lexLineComment
+        , C "\"\"\"" $ lexStringLiteral "\"\"\"" []
+        , C "\"" $ lexStringLiteral "\"" []
+        , C "\'\'\'" $ lexStringLiteral "\'\'\'" []
+        , C "\'" $ lexStringLiteral "\'" []
+        , C "\n" $ advanceLine >> advanceWhitespace >> lex
         , C (SatisfiesAdvance Char.isSpace) $ \_ -> advanceWhitespace >> lex
+        , C (SatisfiesAdvance Char.isDigit) $ \char -> lexIntLiteral [char]
         , C (SatisfiesAdvance isIdentStart) $ \char -> lexIdent [char]
         ]
         -- otherwise
@@ -219,6 +231,33 @@ lex = do
         -- on EOF
         (emit EOF)
 
+lexLineComment :: Lex Token
+lexLineComment = do
+    match
+        [ C "\n" $ advanceLine >> advanceWhitespace >> lex
+        ]
+        (\_ -> advance 1 >> advanceWhitespace >> lexLineComment)
+        (emit EOF)
+
+lexIntLiteral :: Difflist Char -> Lex Token
+lexIntLiteral chars =
+    match
+        [ C (SatisfiesAdvance Char.isDigit) \char -> lexIntLiteral (chars <> [char])
+        ]
+        (\_ -> emit (INT (Read.read (toList chars))))
+        (emit (INT (Read.read (toList chars))))
+
+lexStringLiteral :: Text -> Difflist Char -> Lex Token
+lexStringLiteral end chars =
+    match
+        [ C (Literal end) $ emit (STRING (fromString $ toList chars))
+        ]
+        (\char -> advance 1 >> lexStringLiteral end (chars <> [char]))
+        ( do
+            loc <- currentLoc
+            lexError (UnterminatedStringLiteral loc)
+        )
+
 lexIdent :: Difflist Char -> Lex Token
 lexIdent chars =
     match
@@ -227,13 +266,11 @@ lexIdent chars =
         (\_ -> emit (IDENT (toText (toList chars))))
         (emit (IDENT (toText (toList chars))))
 
-
 isIdentStart :: Char -> Bool
 isIdentStart char = Char.isAlpha char || char `Text.elem` "_"
 
 isIdent :: Char -> Bool
 isIdent char = Char.isAlphaNum char || char `Text.elem` "_'"
-
 
 newtype Lex a = MkLex (StateT LexState (Either LexError) a)
     deriving newtype (Functor, Applicative, Monad)

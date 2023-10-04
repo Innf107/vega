@@ -209,8 +209,11 @@ infer env = \case
 
         coreName <- freshName "x"
 
-        pure (Pi undefined varType undefined, CLambda coreName (bodyTrans coreName bodyCore))
+        pure (Pi Nothing varType (CQuote resultType, evalContext env), CLambda coreName (bodyTrans coreName bodyCore))
     Case loc scrutinee cases -> undefined
+    TupleLiteral _loc arguments -> do
+        (argumentTypes, argumentCores) <- munzip <$> traverse (infer env) arguments
+        pure (Tuple argumentTypes, CTupleLiteral argumentCores)
     Literal _loc literal -> pure (type_, CLiteral literal)
       where
         type_ = case literal of
@@ -252,6 +255,9 @@ infer env = \case
         codomainCore <- check (extendVariable name domainValue varValue env) Type codomain
 
         pure (Type, CForall name domainCore codomainCore)
+    ETupleType _loc arguments -> do
+        argumentCores <- traverse (check env Type) arguments
+        pure (Type, CTupleType argumentCores)
 
 check :: Env -> Type -> Expr Renamed -> Infer CoreExpr
 check env expectedType expr = do
@@ -283,11 +289,18 @@ check env expectedType expr = do
             varName <- freshName "x"
             pure (CLambda varName (coreTrans varName bodyCore))
         Case _loc _scrutinee _cases -> undefined
+        TupleLiteral loc arguments -> do
+            argumentTypes <- splitTupleType loc expectedType (length arguments)
+
+            argumentCore <- Vector.zipWithM (check env) argumentTypes arguments
+
+            pure (CTupleLiteral argumentCore)
         Literal{} -> deferToInference
         Sequence _loc _statements -> undefined
         Ascription{} -> deferToInference
-        EPi _loc name domain codomain -> deferToInference
-        EForall loc name kind body -> deferToInference
+        EPi{} -> deferToInference
+        EForall{} -> deferToInference
+        ETupleType{} -> deferToInference
 
 inferPattern :: Env -> Pattern Renamed -> Infer (Type, Env -> Env, Name -> CoreExpr -> CoreExpr)
 inferPattern env = \case
@@ -299,16 +312,27 @@ inferPattern env = \case
         pure (varType, extendVariable name varType varValue, \bound -> CLet name (CVar bound))
     IntPat _loc value -> pure (Int, id, undefined)
     StringPat _loc value -> pure (String, id, undefined)
+    TuplePat _loc subpatterns -> do
+        (subTypes, subEnvTransformers, subCoreTranformers) <- Vector.unzip3 <$> traverse (inferPattern env) subpatterns
+        pure (Tuple subTypes, compose subEnvTransformers, undefined)
     OrPat{} -> undefined
 
 checkPattern :: Env -> Type -> Pattern Renamed -> Infer (Env -> Env, Name -> CoreExpr -> CoreExpr)
-checkPattern _env expectedType = \case
+checkPattern env expectedType = \case
     VarPat _loc name -> do
         varSkolem <- freshSkolem name
         varValue <- lazyValueM $ SkolemApp varSkolem []
         pure (extendVariable name expectedType varValue, \binding -> CLet name (CVar binding))
-    IntPat{} -> undefined
-    StringPat{} -> undefined
+    IntPat loc _ -> do
+        subsumes loc Int expectedType
+        pure (id, undefined)
+    StringPat loc _ -> do
+        subsumes loc String expectedType
+        pure (id, undefined)
+    TuplePat loc subpatterns -> do
+        argumentTypes <- splitTupleType loc expectedType (length subpatterns)
+        (subEnvTransformers, subCoreTransformers) <- munzip <$> Vector.zipWithM (checkPattern env) argumentTypes subpatterns
+        pure (compose subEnvTransformers, undefined)
     OrPat{} -> undefined
 
 splitFunctionType :: Loc -> Type -> Infer (Maybe Name, Type, CoreExpr, EvalContext)
@@ -326,6 +350,17 @@ splitFunctionType loc type_ =
 
             subsumes loc type_ (Pi Nothing paramType (resultClosureExpr, resultClosureContext))
             pure (Nothing, paramType, resultClosureExpr, resultClosureContext)
+
+splitTupleType :: Loc -> Type -> Int -> Infer (Vector Type)
+splitTupleType loc type_ expectedArgCount =
+    followMetas type_ >>= \case
+        Tuple arguments
+            | length arguments == expectedArgCount -> undefined
+            | otherwise -> undefined
+        type_ -> do
+            argumentTypes <- Vector.replicateM expectedArgCount (fmap (\x -> MetaApp x []) freshAnonymousMeta)
+            subsumes loc type_ (Tuple argumentTypes)
+            pure argumentTypes
 
 subsumes :: Loc -> Type -> Type -> Infer ()
 subsumes loc subtype supertype = do

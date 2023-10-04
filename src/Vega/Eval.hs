@@ -60,6 +60,9 @@ eval context = \case
             _ -> error ("application of non-closure or variable during evaluation")
     CLambda name body -> pure $ ClosureV (MkClosure name body context)
     CCase _expr _cases -> undefined
+    CTupleLiteral arguments -> do
+        values <- traverse (eval context) arguments
+        pure (TupleV values)
     CLiteral literal -> pure $ case literal of
         TypeLit -> Type
         IntTypeLit -> Int
@@ -79,6 +82,10 @@ eval context = \case
         readRef ref >>= \case
             Nothing -> pure (MetaApp (MkMeta name unique ref) [])
             Just value -> pure value
+    CTupleType arguments -> do
+        values <- traverse (eval context) arguments
+        pure (Tuple values)
+    CQuote value -> pure value
 
 applyClosure :: Closure -> LazyM Eval Value -> Eval Value
 applyClosure (MkClosure name coreExpr context) argument =

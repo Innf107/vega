@@ -49,18 +49,20 @@ data Expr (p :: Pass)
   | Lambda Loc (Pattern p) (Expr p)
   | Case Loc (Expr p) (Vector (Pattern p, Expr p))
   | Literal Loc Literal
+  | TupleLiteral Loc (Vector (Expr p))
   | Sequence Loc (Vector (Statement p))
   | Ascription Loc (Expr p) (SourceType p)
   | -- Types
     EPi Loc (Maybe (XName p)) (Expr p) (Expr p)
   | EForall Loc (XName p) (Expr p) (Expr p)
+  | ETupleType Loc (Vector (Expr p))
   deriving (Generic)
 instance HasLoc (Expr p)
 
 data Statement (p :: Pass)
-  = Let Loc (XName p) (Maybe (SourceType p)) (Expr p)
+  = Let Loc (Pattern p) (Expr p)
   | LetFunction Loc (XName p) (Maybe (SourceType p)) (Vector (Pattern p)) (Expr p)
-  | Perform Loc (Expr p)
+  | RunExpr Loc (Expr p)
   deriving (Generic)
 instance HasLoc (Statement p)
 
@@ -68,6 +70,7 @@ data Pattern (p :: Pass)
   = VarPat Loc (XName p)
   | IntPat Loc Integer
   | StringPat Loc Text
+  | TuplePat Loc (Vector (Pattern p))
   | OrPat Loc (Pattern p) (Pattern p)
   deriving (Generic)
 instance HasLoc (Pattern p)
@@ -93,26 +96,32 @@ data CoreExprF context
     CLambda Name (CoreExprF context)
   | CCase (CoreExprF context) (Vector (CorePattern, CoreExprF context))
   | CLiteral Literal
+  | CTupleLiteral (Vector (CoreExprF context))
   | -- Statements are just desugared to let expressions
     CLet Name (CoreTypeF context) (CoreExprF context)
   | -- Types
     CPi (Maybe Name) (CoreTypeF context) (CoreExprF context)
   | CForall Name (CoreTypeF context) (CoreExprF context)
   | CMeta (MetaVarF context)
+  | CTupleType (Vector (CoreExprF context))
+  | CQuote (ValueF context)
 
 data CorePattern
   = CVarPat Name
   | CIntPat Integer
   | CStringPat Text
+  | CTuplePat (Vector Name)
 
 data ValueF context
   = IntV Integer
   | StringV Text
   | ClosureV {-# UNPACK #-} (ClosureF context)
+  | TupleV (Vector (ValueF context))
   | -- Types
     Type
   | Int
   | String
+  | Tuple (Vector (ValueF context))
   | -- TODO: Add effects
     Pi (Maybe Name) (ValueF context) (CoreExprF context, context)
   | Forall Name (ValueF context) (CoreExprF context, context)
@@ -137,11 +146,13 @@ instance Pretty (ValueF context) where
   pretty = \case
     IntV v -> number v
     StringV str -> literal ("\"" <> str <> "\"")
+    TupleV values -> lparen "(" <> intercalateMap (keyword ", ") pretty values <> rparen ")"
     ClosureV (MkClosure name core _context) ->
       keyword "\\" <> ident name <+> keyword "->" <+> pretty core
     Type -> constructorText "Type"
     Int -> constructorText "Int"
     String -> constructorText "String"
+    Tuple values -> constructorText "Tuple" <> lparen "(" <> intercalateMap (keyword ", ") pretty values <> rparen ")"
     Pi Nothing domain (core, _context) ->
       lparen "(" <> pretty domain <+> keyword "->" <+> pretty core <> rparen ")"
     Pi (Just name) domain (core, _context) ->
@@ -199,6 +210,7 @@ instance Pretty (CoreExprF context) where
     CLambda name result ->
       lparen "(" <> keyword "\\" <> ident name <+> keyword "->" <+> pretty result <> rparen ")"
     CCase{} -> undefined
+    CTupleLiteral arguments -> lparen "(" <> intercalateMap ", " pretty arguments
     CLiteral literal -> pretty literal
     CLet name body rest ->
       lparen "(" <> keyword "let" <+> ident name <+> "=" <+> pretty body <> ";" <+> pretty rest <> rparen ")"
@@ -218,6 +230,8 @@ instance Pretty (CoreExprF context) where
         <+> pretty codomain
         <> rparen ")"
     CMeta meta -> prettyMetaApp meta []
+    CTupleType arguments -> constructorText "Tuple" <> lparen "(" <> intercalateMap "," pretty arguments <> rparen ")"
+    CQuote value_ -> pretty value_
 
 instance Pretty Literal where
   pretty = \case

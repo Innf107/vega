@@ -92,6 +92,7 @@ renameExpr scope = \case
                 "Int" -> pure $ Literal loc IntTypeLit
                 "String" -> pure $ Literal loc StringTypeLit
                 "Type" -> pure $ Literal loc TypeLit
+                "Unit" -> pure $ ETupleType loc []
                 _ -> do
                     emitError (UnboundVariable loc text)
                     pure $ Var loc (dummyName text)
@@ -113,6 +114,9 @@ renameExpr scope = \case
             (pattern, scopeTrans) <- renamePattern pattern
             body <- renameExpr (scopeTrans scope) body
             pure (pattern, body)
+    TupleLiteral loc arguments -> do
+        arguments <- traverse (renameExpr scope) arguments
+        pure (TupleLiteral loc arguments)
     Literal loc literal -> pure $ Literal loc literal
     Sequence loc statements -> do
         (_finalScope, statements) <- mapAccumLM renameStatement scope statements
@@ -134,15 +138,18 @@ renameExpr scope = \case
         (name, boundScope) <- addFreshVariable text scope
         outputType <- renameExpr boundScope outputType
         pure (EForall loc name inputType outputType)
+    ETupleType loc arguments -> do
+        arguments <- traverse (renameExpr scope) arguments
+        pure (ETupleType loc arguments)
 
 renameStatement :: Scope -> Statement Parsed -> Rename (Scope, Statement Renamed)
 renameStatement scope = \case
-    Let loc text maybeTypeExpr body -> do
-        maybeTypeExpr <- traverse (renameExpr scope) maybeTypeExpr
-        (name, renamedScope) <- addFreshVariable text scope
+    Let loc pattern body -> do
+        (pattern, scopeTrans) <- renamePattern pattern
+
         -- Let's are *non*recursive so we use the unaltered environment here
         body <- renameExpr scope body
-        pure (renamedScope, Let loc name maybeTypeExpr body)
+        pure (scopeTrans scope, Let loc pattern body)
     LetFunction loc text maybeTypeExpr patterns body -> do
         maybeTypeExpr <- traverse (renameExpr scope) maybeTypeExpr
         (patterns, scopeTransformers) <- munzip <$> traverse renamePattern patterns
@@ -152,9 +159,9 @@ renameStatement scope = \case
         -- LetFunction's *are* recursive so we need renamedScope
         body <- renameExpr (compose scopeTransformers renamedScope) body
         pure (renamedScope, LetFunction loc name maybeTypeExpr patterns body)
-    Perform loc expr -> do
+    RunExpr loc expr -> do
         expr <- renameExpr scope expr
-        pure (scope, Perform loc expr)
+        pure (scope, RunExpr loc expr)
 
 renamePattern :: Pattern Parsed -> Rename (Pattern Renamed, Scope -> Scope)
 renamePattern = \case
@@ -163,4 +170,7 @@ renamePattern = \case
         pure (VarPat loc name, addVariable text name)
     IntPat loc value -> pure (IntPat loc value, id)
     StringPat loc value -> pure (StringPat loc value, id)
+    TuplePat loc subpatterns -> do
+        (subpatterns, transformers) <- munzip <$> traverse renamePattern subpatterns
+        pure (TuplePat loc subpatterns, compose transformers)
     OrPat _loc _left _right -> undefined
