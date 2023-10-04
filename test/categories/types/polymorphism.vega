@@ -6,6 +6,6 @@ f x = x;
 
 main : Unit -> Unit;
 main _ = {
-    debug(f 5);
-    debug(f "a")
+    debug (f 5);
+    debug (f "a")
 }
