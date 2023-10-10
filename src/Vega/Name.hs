@@ -12,6 +12,7 @@ module Vega.Name (
 import Vega.Prelude
 
 import Vega.Pretty
+import Vega.Debug
 
 import GHC.Show qualified as S
 import System.IO.Unsafe (unsafePerformIO)
@@ -54,3 +55,6 @@ skolem name = skolemText $ original name
 
 instance S.Show Name where
     show = toString . original
+
+instance HeadConstructorArg Name where
+  headConstructorArg = ident

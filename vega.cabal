@@ -25,6 +25,7 @@ source-repository head
 
 library
   exposed-modules:
+      Vega.Debug
       Vega.Difflist
       Vega.Driver
       Vega.Eval
@@ -37,8 +38,10 @@ library
       Vega.Parser
       Vega.Prelude
       Vega.Pretty
+      Vega.Primop
       Vega.Rename
       Vega.Syntax
+      Vega.Trace
       Vega.Util
   other-modules:
       Paths_vega
@@ -64,6 +67,8 @@ library
       DefaultSignatures
       DerivingVia
       TypeFamilyDependencies
+      ImpredicativeTypes
+      RecursiveDo
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns
   build-tools:
       alex
@@ -74,6 +79,7 @@ library
     , mtl
     , prettyprinter
     , relude
+    , transformers-base
     , vector
   default-language: GHC2021
 
@@ -103,6 +109,8 @@ executable vega
       DefaultSignatures
       DerivingVia
       TypeFamilyDependencies
+      ImpredicativeTypes
+      RecursiveDo
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -threaded -rtsopts -with-rtsopts=-N
   build-tools:
       alex
@@ -113,6 +121,7 @@ executable vega
     , mtl
     , prettyprinter
     , relude
+    , transformers-base
     , vector
     , vega
   default-language: GHC2021
@@ -144,6 +153,8 @@ test-suite vega-test
       DefaultSignatures
       DerivingVia
       TypeFamilyDependencies
+      ImpredicativeTypes
+      RecursiveDo
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -threaded -rtsopts -with-rtsopts=-N
   build-tools:
       alex
@@ -154,6 +165,7 @@ test-suite vega-test
     , mtl
     , prettyprinter
     , relude
+    , transformers-base
     , vector
     , vega
   default-language: GHC2021

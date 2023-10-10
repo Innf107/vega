@@ -1,0 +1,11 @@
+-- EXPECT: 5
+
+f : forall a. a -> a;
+f x = x;
+
+
+g : f Int;
+g = 5;
+
+main : Unit -> Unit
+main _ = debug(g)

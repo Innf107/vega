@@ -1,23 +1,28 @@
 module Vega.Infer (typecheck, TypeError (..)) where
 
-import Vega.Prelude
+import Vega.Prelude hiding (trace)
 import Vega.Syntax
 
 import Vega.Eval (CoreDeclaration, CoreExpr, Eval, EvalContext, Value, applyClosure, define, emptyEvalContext, eval, runEval)
 import Vega.Name qualified as Name
+import Vega.Primop
 
+import Vega.Debug
 import Vega.LazyM
-
 import Vega.Loc (HasLoc)
+import Vega.MonadRef
 import Vega.Pretty
+import Vega.Trace
 
+import Data.Foldable (foldrM)
 import Data.Sequence qualified as Seq
 import Data.Vector qualified as Vector
 
-import Vega.MonadRef
+import Control.Monad.Fix
 
 data TypeError
     = UnableToUnify Loc Type Type
+    | OccursCheckViolation Loc MetaVar Type
     deriving (Generic)
 instance HasLoc TypeError
 
@@ -28,6 +33,8 @@ instance Pretty TypeError where
             <> "\n"
             <> "                  and "
             <> pretty type2
+    pretty (OccursCheckViolation _ metavar type_) =
+        "Unable to construct an infinite type satisfying\n    " <> pretty (MetaApp metavar []) <> keyword " ~ " <> pretty type_
 
 type Type = Value
 type MetaVar = MetaVarF EvalContext
@@ -49,8 +56,8 @@ extendVariable name type_ value env =
 
 data InferState = MkInferState {}
 
-newtype Infer a = MkInfer (ExceptT TypeError (StateT InferState IO) a)
-    deriving (Functor, Applicative, Monad)
+newtype Infer a = MkInfer (ReaderT (TraceAction IO) (ExceptT TypeError (StateT InferState IO)) a)
+    deriving newtype (Functor, Applicative, Monad, MonadFix, MonadTrace)
 
 instance MonadRef Infer where
     type Ref Infer = IORef
@@ -64,8 +71,8 @@ typeError error = MkInfer (throwError error)
 liftEval :: Eval a -> Infer a
 liftEval eval = MkInfer (liftIO (runEval eval))
 
-runInfer :: Infer a -> IO (Either TypeError a)
-runInfer (MkInfer exceptT) = evalStateT (runExceptT exceptT) initialInferState
+runInfer :: (?traceAction :: TraceAction IO) => Infer a -> IO (Either TypeError a)
+runInfer (MkInfer exceptT) = evalStateT (runExceptT (runReaderT exceptT ?traceAction)) initialInferState
   where
     initialInferState = MkInferState{}
 
@@ -121,7 +128,16 @@ followMetas type_ = case type_ of
                                 argument <- lazyValueM argument
                                 applied <- applyClosure closure argument
                                 applyReplacement applied rest
-                    type_ -> error $ "Meta variable substituted with non-application or closure type: " <> prettyPlain (pretty type_)
+                    type_ -> case arguments of
+                        Empty -> pure type_
+                        arguments ->
+                            error
+                                $ "Meta variable substituted with non-application or closure type: "
+                                <> prettyPlain
+                                    ( pretty type_
+                                        <> "\n   arguments: "
+                                        <> sep (fmap pretty arguments)
+                                    )
     type_ -> pure type_
 
 freshSkolem :: Name -> Infer Skolem
@@ -159,7 +175,7 @@ skolemize = \case
         skolemize skolemized
     type_ -> pure type_
 
-typecheck :: Vector (Declaration Renamed) -> IO (Either TypeError (Vector CoreDeclaration))
+typecheck :: (?traceAction :: TraceAction IO) => Vector (Declaration Renamed) -> IO (Either TypeError (Vector CoreDeclaration))
 typecheck declarations = runInfer do
     (_env, declarations) <- mapAccumLM checkDeclaration emptyEnv declarations
     pure declarations
@@ -167,100 +183,122 @@ typecheck declarations = runInfer do
 checkDeclaration :: Env -> Declaration Renamed -> Infer (Env, CoreDeclaration)
 checkDeclaration env = \case
     DefineFunction _loc name typeExpr params body -> do
-        -- TODO: Ugly hack so I don't need to deal with parameters here for now
-        case params of
-            -- TODO: This is the easiest way to do this for now, but in practice
-            -- we need to be extra careful with parameterless functions around the order of (lazy?)
-            -- initialization and things
-            [] -> do
-                typeCore <- check env Type typeExpr
-                type_ <- liftEval $ eval (evalContext env) typeCore
-
-                typeToCheckAgainst <- skolemize type_
-                bodyCore <- check env typeToCheckAgainst body
-
-                value <- lazyM $ eval (evalContext env) bodyCore
-
-                pure (extendVariable name type_ value env, CDefineFunction name [] bodyCore)
-            _ -> undefined
-
-infer :: Env -> Expr Renamed -> Infer (Type, CoreExpr)
-infer env = \case
-    Var _loc name -> do
-        type_ <- instantiate (variableType env name)
-        pure (type_, CVar name)
-    App loc function argument -> do
-        (functionType, functionCore) <- infer env function
-        (parameterName, parameterType, resultClosureExpr, resultClosureContext) <- splitFunctionType loc functionType
-
-        argumentCore <- check env parameterType argument
-        argumentValue <- lazyM $ eval (evalContext env) argumentCore
-
-        let updatedContext = case parameterName of
-                Nothing -> resultClosureContext
-                Just name -> define name argumentValue resultClosureContext
-
-        resultType <- liftEval $ eval updatedContext resultClosureExpr
-        pure (resultType, CApp functionCore argumentCore)
-    Lambda _loc pattern body -> do
-        (varType, envTrans, bodyTrans) <- inferPattern env pattern
-
-        (resultType, bodyCore) <- infer (envTrans env) body
-
-        coreName <- freshName "x"
-
-        pure (Pi Nothing varType (CQuote resultType, evalContext env), CLambda coreName (bodyTrans coreName bodyCore))
-    Case loc scrutinee cases -> undefined
-    TupleLiteral _loc arguments -> do
-        (argumentTypes, argumentCores) <- munzip <$> traverse (infer env) arguments
-        pure (Tuple argumentTypes, CTupleLiteral argumentCores)
-    Literal _loc literal -> pure (type_, CLiteral literal)
-      where
-        type_ = case literal of
-            TypeLit -> Type -- Yes Type : Type, fight me
-            IntTypeLit -> Type
-            StringTypeLit -> Type
-            IntLit _ -> Int
-            StringLit _ -> String
-    Sequence loc statements -> undefined
-    Ascription _loc expr typeExpr -> do
         typeCore <- check env Type typeExpr
         type_ <- liftEval $ eval (evalContext env) typeCore
 
-        coreExpr <- check env type_ expr
-        pure (type_, coreExpr)
-    EPi _loc maybeName domain codomain -> do
-        domainCore <- check env Type domain
-        domainValue <- liftEval $ eval (evalContext env) domainCore
+        innerType <- skolemize type_
 
-        codomainEnv <- case maybeName of
-            Nothing -> pure env
-            Just name -> do
-                skolem <- freshSkolem name
-                varValue <- lazyValueM $ SkolemApp skolem []
+        (paramTypes, resultType) <- splitFunctionTypes innerType (fromList (toList (fmap getLoc params)))
 
-                pure (extendVariable name domainValue varValue env)
+        (envTransformers, coreTransformers) <- munzip <$> Vector.zipWithM (checkPattern env) (fromList $ toList paramTypes) params
 
-        codomainCore <- check codomainEnv Type codomain
+        let addLambdas core = do
+                foldrM
+                    ( \trans core -> do
+                        varName <- freshName "x"
+                        pure $ CLambda varName (trans varName core)
+                    )
+                    core
+                    coreTransformers
 
-        pure (Type, CPi maybeName domainCore codomainCore)
-    EForall _loc name domain codomain -> do
-        domainCore <- check env Type domain
-        domainValue <- liftEval $ eval (evalContext env) domainCore
+        -- Recursive definitions are able to mention themselves on the type level
+        -- so we need to do this recursive dance with mdo
+        mdo
+            (core, value) <- do
+                let envWithParams = compose envTransformers env
 
-        skolem <- freshSkolem name
+                value <- lazyM (eval (evalContext env) core)
+                -- function definitions are recursive
+                let bodyEnv = extendVariable name type_ value envWithParams
 
-        varValue <- lazyValueM $ SkolemApp skolem []
+                core <- addLambdas =<< check bodyEnv resultType body
+                pure (core, value)
+            pure (extendVariable name type_ value env, CDefineVar name core)
 
-        codomainCore <- check (extendVariable name domainValue varValue env) Type codomain
+infer :: Env -> Expr Renamed -> Infer (Type, CoreExpr)
+infer env expr = do
+    (type_, core) <- case expr of
+        Var _loc name -> do
+            type_ <- instantiate (variableType env name)
+            pure (type_, CVar name)
+        App loc function argument -> do
+            (functionType, functionCore) <- infer env function
+            (parameterName, parameterType, resultClosureExpr, resultClosureContext) <- splitFunctionType loc functionType
 
-        pure (Type, CForall name domainCore codomainCore)
-    ETupleType _loc arguments -> do
-        argumentCores <- traverse (check env Type) arguments
-        pure (Type, CTupleType argumentCores)
+            argumentCore <- check env parameterType argument
+            argumentValue <- lazyM $ eval (evalContext env) argumentCore
+
+            let updatedContext = case parameterName of
+                    Nothing -> resultClosureContext
+                    Just name -> define name argumentValue resultClosureContext
+
+            resultType <- liftEval $ eval updatedContext resultClosureExpr
+            pure (resultType, CApp functionCore argumentCore)
+        Lambda _loc pattern body -> do
+            (varType, envTrans, bodyTrans) <- inferPattern env pattern
+
+            (resultType, bodyCore) <- infer (envTrans env) body
+
+            coreName <- freshName "x"
+
+            pure (Pi Nothing varType (CQuote resultType, evalContext env), CLambda coreName (bodyTrans coreName bodyCore))
+        Case loc scrutinee cases -> undefined
+        TupleLiteral _loc arguments -> do
+            (argumentTypes, argumentCores) <- munzip <$> traverse (infer env) arguments
+            pure (Tuple argumentTypes, CTupleLiteral argumentCores)
+        Literal _loc literal -> pure (type_, CLiteral literal)
+          where
+            type_ = case literal of
+                TypeLit -> Type -- Yes Type : Type, fight me
+                IntTypeLit -> Type
+                StringTypeLit -> Type
+                IntLit _ -> Int
+                StringLit _ -> String
+        Sequence loc statements -> undefined
+        Ascription _loc expr typeExpr -> do
+            typeCore <- check env Type typeExpr
+            type_ <- liftEval $ eval (evalContext env) typeCore
+
+            coreExpr <- check env type_ expr
+            pure (type_, coreExpr)
+        EPi _loc maybeName domain codomain -> do
+            domainCore <- check env Type domain
+            domainValue <- liftEval $ eval (evalContext env) domainCore
+
+            codomainEnv <- case maybeName of
+                Nothing -> pure env
+                Just name -> do
+                    skolem <- freshSkolem name
+                    varValue <- lazyValueM $ SkolemApp skolem []
+
+                    pure (extendVariable name domainValue varValue env)
+
+            codomainCore <- check codomainEnv Type codomain
+
+            pure (Type, CPi maybeName domainCore codomainCore)
+        EForall _loc name domain codomain -> do
+            domainCore <- check env Type domain
+            domainValue <- liftEval $ eval (evalContext env) domainCore
+
+            skolem <- freshSkolem name
+
+            varValue <- lazyValueM $ SkolemApp skolem []
+
+            codomainCore <- check (extendVariable name domainValue varValue env) Type codomain
+
+            pure (Type, CForall name domainCore codomainCore)
+        ETupleType _loc arguments -> do
+            argumentCores <- traverse (check env Type) arguments
+            pure (Type, CTupleType argumentCores)
+        Primop _loc () primop -> do
+            let (WrapPrimopType type_) = primopType primop
+            pure (type_, CPrimop primop)
+    trace Types ("infer:" <+> showHeadConstructor expr <+> keyword "=>" <+> pretty type_)
+    pure (type_, core)
 
 check :: Env -> Type -> Expr Renamed -> Infer CoreExpr
 check env expectedType expr = do
+    trace Types ("check:" <+> showHeadConstructor expr <+> keyword "<=" <+> pretty expectedType)
     let deferToInference = do
             (actualType, core) <- infer env expr
             subsumes (getLoc expr) actualType expectedType
@@ -298,6 +336,7 @@ check env expectedType expr = do
         Literal{} -> deferToInference
         Sequence _loc _statements -> undefined
         Ascription{} -> deferToInference
+        Primop{} -> deferToInference
         EPi{} -> deferToInference
         EForall{} -> deferToInference
         ETupleType{} -> deferToInference
@@ -351,6 +390,23 @@ splitFunctionType loc type_ =
             subsumes loc type_ (Pi Nothing paramType (resultClosureExpr, resultClosureContext))
             pure (Nothing, paramType, resultClosureExpr, resultClosureContext)
 
+splitFunctionTypes :: Type -> Seq Loc -> Infer (Seq Type, Type)
+splitFunctionTypes type_ Empty = pure ([], type_)
+splitFunctionTypes type_ (loc :<| locs) = do
+    (maybeParamName, paramType, resultExpr, resultContext) <- splitFunctionType loc type_
+
+    evalContext <- case maybeParamName of
+        Nothing -> pure resultContext
+        Just name -> do
+            paramSkolem <- freshSkolem name
+            paramValue <- lazyValueM (SkolemApp paramSkolem [])
+            pure $ define name paramValue resultContext
+
+    resultType <- liftEval $ eval evalContext resultExpr
+
+    (remainingParams, resultType) <- splitFunctionTypes resultType locs
+    pure (paramType :<| remainingParams, resultType)
+
 splitTupleType :: Loc -> Type -> Int -> Infer (Vector Type)
 splitTupleType loc type_ expectedArgCount =
     followMetas type_ >>= \case
@@ -372,6 +428,7 @@ unify :: Loc -> Type -> Type -> Infer ()
 unify loc type1 type2 = do
     type1 <- followMetas type1
     type2 <- followMetas type2
+    trace Unify (pretty type1 <+> keyword "~" <+> pretty type2)
     case (type1, type2) of
         (IntV x, IntV y) | x == y -> pure ()
         (StringV x, StringV y) | x == y -> pure ()
@@ -386,18 +443,25 @@ unify loc type1 type2 = do
         (SkolemApp skolem1 args1, SkolemApp skolem2 args2)
             | skolem1 == skolem2 && length args1 == length args2 -> do
                 traverse_ (uncurry (unify loc)) (Seq.zip args1 args2)
-        (MetaApp metaVar1 [], type2) -> bind metaVar1 type2
-        (type1, MetaApp metaVar2 []) -> bind metaVar2 type1
+        (MetaApp metaVar1 [], type2) -> bind loc metaVar1 type2
+        (type1, MetaApp metaVar2 []) -> bind loc metaVar2 type1
         -- See Note [Pattern Unification]
         (MetaApp metaVar1 arguments1, type2) -> patternUnification metaVar1 arguments1 type2
+        -- TODO: Keep track of the change of direction here for the sake of error messages
+        (type1, MetaApp metaVar2 arguments2) -> patternUnification metaVar2 arguments2 type1
         _ -> typeError (UnableToUnify loc type1 type2)
 
 -- See Note [Pattern Unification]
 patternUnification :: MetaVar -> Seq Type -> Type -> Infer ()
-patternUnification metaVar arguments type2 =
+patternUnification metaVar arguments type2 = case type2 of
     -- TODO: This is kind of slow. We should figure out something more efficient
     -- TODO: Make sure we catch escaping skolems
-    undefined
+    SkolemApp skolem skolemArguments -> do
+        undefined
+    _ -> undefined
+
+-- f : forall a. a -> a
+-- f x = (x 5) ~ (?a 5) ==> ?a = x (?)
 
 {-  Note [Pattern Unification]
     ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -406,6 +470,7 @@ patternUnification metaVar arguments type2 =
     Whenever we see (?f a b) ~ (C c d), we know (because type constructors are injective)
     that the only way to solve this is to set ?f := C and emit a ~ c, b ~ d.
     The same reasoning applies to skolems.
+    TODO: Does it? Are skolems injective? I don't knooww.... -_-
 
     If the RHS is not a fully applied constructor or skolem application, we cannot make that kind of assumption.
     For example, if we were to try and solve `?f x y ~ List(x -> y)`, a simple constructor substitution like that
@@ -415,5 +480,45 @@ patternUnification metaVar arguments type2 =
     In the case above, this would be `?f := λx y. List(x -> y)`.
 -}
 
-bind :: MetaVar -> Type -> Infer ()
-bind = undefined
+-- TODO: This also needs to update levels.
+occursCheck :: Loc -> MetaVar -> Type -> Infer ()
+occursCheck loc meta type_ = go type_
+  where
+    go type_ =
+        followMetas type_ >>= \case
+            IntV _ -> pure ()
+            StringV _ -> pure ()
+            ClosureV _ -> undefined
+            TupleV arguments -> traverse_ go arguments
+            Type -> pure ()
+            Int -> pure ()
+            String -> pure ()
+            Tuple arguments -> traverse_ go arguments
+            Pi name domain (codomainCore, codomainContext) -> do
+                -- TODO: Rather than recomputing the codomain applied at a skolem at every occurs check,
+                -- maybe we should lazily store this in the data type and keep the cached results?
+                codomainContext <- case name of
+                    Nothing -> pure codomainContext
+                    Just name -> do
+                        codomainSkolem <- freshSkolem name
+                        skolemValue <- lazyValueM (SkolemApp codomainSkolem [])
+                        pure (define name skolemValue codomainContext)
+                codomain <- liftEval (eval codomainContext codomainCore)
+                go codomain
+            Forall _ _ _ -> undefined
+            SkolemApp _ arguments -> traverse_ go arguments
+            MetaApp otherMeta arguments -> do
+                when (meta == otherMeta) do
+                    -- TODO: Keep a bit more context here
+                    typeError (OccursCheckViolation loc meta type_)
+                traverse_ go arguments
+
+bind :: Loc -> MetaVar -> Type -> Infer ()
+bind loc metaVar type_ =
+    readMetaVar metaVar >>= \case
+        Just substituted -> do
+            unify loc substituted type_
+        Nothing -> do
+            trace Subst (pretty (MetaApp metaVar []) <+> keyword ":=" <+> pretty type_)
+            occursCheck loc metaVar type_
+            setMetaVar metaVar =<< followMetas type_

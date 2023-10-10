@@ -12,6 +12,7 @@ import Vega.Pretty
 import Vega.Util (Untagged (..))
 
 import GHC.Generics
+import Data.Data
 
 data Loc = Loc
     { fileName :: Text
@@ -20,7 +21,7 @@ data Loc = Loc
     , endLine :: {-# UNPACK #-} Int
     , endColumn :: {-# UNPACK #-} Int
     }
-    deriving (Show)
+    deriving (Show, Typeable, Data)
 
 class HasLoc a where
     getLoc :: a -> Loc

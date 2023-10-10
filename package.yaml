@@ -26,6 +26,7 @@ dependencies:
 - containers
 - mtl
 - prettyprinter
+- transformers-base
 # Needed to keep alex and happy... happy
 - array
 
@@ -92,3 +93,5 @@ default-extensions:
   - DefaultSignatures
   - DerivingVia
   - TypeFamilyDependencies
+  - ImpredicativeTypes
+  - RecursiveDo

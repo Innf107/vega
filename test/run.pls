@@ -55,7 +55,7 @@ let parseExpectation(file) = {
             if doesFileExist(errorFile) then
                 FailExpectation(!errorFile)
             else
-                fail("Invalid ")
+                fail("No expectations in test file ${file}")
         }
     }
 }

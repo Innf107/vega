@@ -4,12 +4,22 @@ import Vega.Driver qualified as Driver
 import Vega.Loc (getLoc, prettyErrorLoc)
 import Vega.Prelude
 import Vega.Pretty
+import Vega.Trace (TraceConfig (..), traceStderrAction)
 
 main :: IO ()
 main =
     getArgs >>= \case
         [file] -> do
-            contents <- readFileText file
+            let ?traceAction =
+                    traceStderrAction
+                        prettyANSII
+                        ( MkTraceConfig
+                            { types = True
+                            , unify = True
+                            , subst = True
+                            }
+                        )
+            contents <- decodeUtf8 <$> readFileBS file
 
             coreOrErrors <- Driver.parseRenameTypeCheck file contents
 

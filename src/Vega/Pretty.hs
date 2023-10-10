@@ -25,18 +25,19 @@ module Vega.Pretty (
     intercalateDoc,
     -- Utility reexports
     (PP.<+>),
-    PP.sep,
-    PP.vsep,
-    PP.cat,
-    PP.vcat,
     PP.indent,
     PP.line,
     PP.align,
+    -- Reexports with generalized types
+    sep,
+    vsep,
+    cat,
+    vcat,
 ) where
 
 import Vega.Prelude
 
-import Vega.Util (Untagged(..))
+import Vega.Util (Untagged (..))
 
 import Data.List ((!!))
 import Prettyprinter (Doc)
@@ -149,11 +150,19 @@ prettyANSII doc = renderANSII (PP.treeForm (PP.layoutSmart PP.defaultLayoutOptio
 showPlain :: (Pretty a) => a -> Text
 showPlain = prettyPlain . pretty
 
-intercalateDoc :: Doc ann -> [Doc ann] -> Doc ann
-intercalateDoc _ [] = mempty
-intercalateDoc separator (initial : rest) =
-    initial <> foldMap (\doc -> separator <> doc) rest
+intercalateDoc :: (Foldable f) => Doc ann -> f (Doc ann) -> Doc ann
+intercalateDoc separator foldable = case toList foldable of
+    [] -> mempty
+    (initial : rest) -> initial <> foldMap (\doc -> separator <> doc) rest
 
+sep :: (Foldable t) => t (Doc ann) -> Doc ann
+sep foldable = PP.sep (toList foldable)
+vsep :: (Foldable t) => t (Doc ann) -> Doc ann
+vsep foldable = PP.vsep (toList foldable)
+cat :: (Foldable t) => t (Doc ann) -> Doc ann
+cat foldable = PP.cat (toList foldable)
+vcat :: (Foldable t) => t (Doc ann) -> Doc ann
+vcat foldable = PP.vcat (toList foldable)
 
 instance (Generic a, PrettyGenUntagged (Rep a)) => Pretty (Untagged a) where
     pretty (MkUntagged x) = prettyGenUntagged (from x)
@@ -174,4 +183,3 @@ instance (Pretty c) => PrettyGenUntagged (K1 i c) where
 
 instance (PrettyGenUntagged f) => PrettyGenUntagged (M1 i t f) where
     prettyGenUntagged (M1 x) = prettyGenUntagged x
-

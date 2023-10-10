@@ -6,6 +6,8 @@ import Vega.Syntax
 import Vega.Loc (HasLoc)
 import Vega.Name qualified as Name
 
+import Vega.Primop
+
 import Vega.Pretty
 
 data RenameError
@@ -93,6 +95,7 @@ renameExpr scope = \case
                 "String" -> pure $ Literal loc StringTypeLit
                 "Type" -> pure $ Literal loc TypeLit
                 "Unit" -> pure $ ETupleType loc []
+                text | Just (primop, _) <- primopFromName text -> pure $ Primop loc () primop
                 _ -> do
                     emitError (UnboundVariable loc text)
                     pure $ Var loc (dummyName text)

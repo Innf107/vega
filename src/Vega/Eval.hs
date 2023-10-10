@@ -14,6 +14,8 @@ module Vega.Eval (
 import Vega.Prelude
 import Vega.Syntax
 
+import Vega.Primop
+
 import Vega.LazyM
 import Vega.MonadRef
 
@@ -30,6 +32,9 @@ type Closure = ClosureF EvalContext
 data EvalContext = MkEvalContext
     { varValues :: Map Name (LazyM Eval Value)
     }
+
+instance ContextFromEmpty EvalContext where
+    emptyContext = emptyEvalContext
 
 emptyEvalContext :: EvalContext
 emptyEvalContext =
@@ -72,6 +77,8 @@ eval context = \case
     CLet name expr rest -> do
         value <- lazyM (eval context expr)
         eval (define name value context) rest
+    CPrimop primop -> do
+        undefined
     CPi name type_ body -> do
         type_ <- eval context type_
         pure $ Pi name type_ (body, context)

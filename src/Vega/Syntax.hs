@@ -1,3 +1,5 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
+
 module Vega.Syntax (
   Pass (..),
   XName,
@@ -7,6 +9,7 @@ module Vega.Syntax (
   Statement (..),
   Pattern (..),
   Literal (..),
+  Primop (..),
   -- Core Syntax
   CoreDeclarationF (..),
   CoreExprF (..),
@@ -27,8 +30,13 @@ import Vega.Prelude
 import Vega.Loc (HasLoc, Loc, getLoc)
 import Vega.Name
 import Vega.Pretty
+import Vega.Debug
 
+import GHC.Records (HasField (getField))
+import GHC.TypeLits (Symbol)
 import System.IO.Unsafe (unsafePerformIO)
+
+import Unsafe.Coerce
 
 data Pass = Parsed | Renamed
 
@@ -52,12 +60,14 @@ data Expr (p :: Pass)
   | TupleLiteral Loc (Vector (Expr p))
   | Sequence Loc (Vector (Statement p))
   | Ascription Loc (Expr p) (SourceType p)
+  | Primop Loc (XPrimop p) Primop
   | -- Types
     EPi Loc (Maybe (XName p)) (Expr p) (Expr p)
   | EForall Loc (XName p) (Expr p) (Expr p)
   | ETupleType Loc (Vector (Expr p))
   deriving (Generic)
 instance HasLoc (Expr p)
+instance (HeadConstructorArg (XName p), HeadConstructorArg (XPrimop p)) => ShowHeadConstructor (Expr p)
 
 data Statement (p :: Pass)
   = Let Loc (Pattern p) (Expr p)
@@ -81,10 +91,14 @@ data Literal
   | StringTypeLit
   | IntLit Integer
   | StringLit Text
-  deriving (Generic)
+  deriving (Generic, Typeable)
+
+data Primop
+  = Debug
+  deriving (Generic, Show, Eq, Ord)
 
 data CoreDeclarationF context
-  = CDefineFunction Name (Vector Name) (CoreExprF context)
+  = CDefineVar Name (CoreExprF context)
 
 -- TODO: Maybe this shouldn't be a separate core type but just another TTG pass.
 -- Core cannot deviate that much from source syntax anyway since it needs to be shown in error messages
@@ -99,6 +113,7 @@ data CoreExprF context
   | CTupleLiteral (Vector (CoreExprF context))
   | -- Statements are just desugared to let expressions
     CLet Name (CoreTypeF context) (CoreExprF context)
+  | CPrimop Primop
   | -- Types
     CPi (Maybe Name) (CoreTypeF context) (CoreExprF context)
   | CForall Name (CoreTypeF context) (CoreExprF context)
@@ -139,6 +154,9 @@ instance Eq Skolem where
   (MkSkolem _ unique1) == (MkSkolem _ unique2) = unique1 == unique2
 
 data MetaVarF context = MkMeta Name Unique (IORef (Maybe (ValueF context)))
+
+instance Eq (MetaVarF context) where
+  MkMeta _ unique1 _ == MkMeta _ unique2 _ = unique1 == unique2
 
 -- TODO: Precedence :/
 -- TODO: This should quote things before printing so that we don't need to rely on the context as weirdly
@@ -184,7 +202,7 @@ prettyMetaApp (MkMeta name _ ref) arguments = unsafePerformIO do
     Nothing ->
       case arguments of
         [] -> pure $ meta ("?" <> original name)
-        arguments -> pure $ lparen "(" <> meta (original name) <+> sep (map pretty (toList arguments)) <> rparen ")"
+        arguments -> pure $ lparen "(" <> meta ("?" <> original name) <+> sep (map pretty (toList arguments)) <> rparen ")"
     Just replacement -> pure $ prettyApp replacement arguments
 {-# NOINLINE prettyMetaApp #-}
 
@@ -218,6 +236,7 @@ instance Pretty (CoreExprF context) where
       lparen "(" <> pretty domain <+> keyword "->" <+> pretty codomain <> rparen ")"
     CPi (Just name) domain codomain ->
       lparen "(" <> lparen "(" <> ident name <+> keyword ":" <+> pretty domain <> rparen ")" <+> keyword "->" <+> pretty codomain <> rparen ")"
+    CPrimop primop -> pretty primop
     CForall name domain codomain ->
       lparen "("
         <> keyword "forall"
@@ -240,3 +259,15 @@ instance Pretty Literal where
     StringTypeLit -> constructorText "String"
     IntLit int -> number int
     StringLit text -> literal ("\"" <> text <> "\"")
+
+instance HeadConstructorArg Literal where
+  headConstructorArg = pretty
+
+instance Pretty Primop where
+  pretty primop = identText $ case primop of
+    Debug -> "debug"
+
+type family XPrimop (p :: Pass) where
+  XPrimop Parsed = Void
+  XPrimop Renamed = ()
+
