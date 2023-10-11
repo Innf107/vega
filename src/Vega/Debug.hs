@@ -1,6 +1,9 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
+
 module Vega.Debug (
     ShowHeadConstructor (..),
     HeadConstructorArg (..),
+    getRecordFields,
 ) where
 
 import Vega.Prelude
@@ -51,3 +54,18 @@ class HeadConstructorArg a where
 
 instance {-# OVERLAPPABLE #-} HeadConstructorArg a where
     headConstructorArg _ = "_"
+
+getRecordFields :: forall a. (RecordFieldsG (Rep a)) => Seq Text
+getRecordFields = getRecordFieldsG @(Rep a)
+
+class RecordFieldsG f where
+    getRecordFieldsG :: Seq Text
+
+instance (RecordFieldsG f, RecordFieldsG g) => RecordFieldsG (f :*: g) where
+    getRecordFieldsG = getRecordFieldsG @f <> getRecordFieldsG @g
+
+instance {-# OVERLAPPABLE #-} (RecordFieldsG f) => RecordFieldsG (M1 _i _c f) where
+    getRecordFieldsG = getRecordFieldsG @f
+
+instance (KnownSymbol name) => RecordFieldsG (M1 _i (MetaSel (Just name) _unpackedness _sourcestrictness _decidedstrictness) _f) where
+    getRecordFieldsG = [toText (symbolVal (Proxy @name))]

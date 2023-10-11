@@ -27,6 +27,7 @@ dependencies:
 - mtl
 - prettyprinter
 - transformers-base
+- optparse-generic
 # Needed to keep alex and happy... happy
 - array
 

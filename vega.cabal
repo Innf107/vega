@@ -77,6 +77,7 @@ library
     , base >=4.7 && <5
     , containers
     , mtl
+    , optparse-generic
     , prettyprinter
     , relude
     , transformers-base
@@ -119,6 +120,7 @@ executable vega
     , base >=4.7 && <5
     , containers
     , mtl
+    , optparse-generic
     , prettyprinter
     , relude
     , transformers-base
@@ -163,6 +165,7 @@ test-suite vega-test
     , base >=4.7 && <5
     , containers
     , mtl
+    , optparse-generic
     , prettyprinter
     , relude
     , transformers-base

@@ -51,9 +51,9 @@ let parseExpectation(file) = {
         [[_, expectation]] -> RunExpectation(expectation)
         _ -> {
             # This is not a run test so it has to be an error test
-            let errorFile = (!dirname file) ~ "/" ~ (!basename "-s" ".vega" file)
+            let errorFile = (!dirname file) ~ "/" ~ (!basename "-s" ".vega" file) ~ ".error"
             if doesFileExist(errorFile) then
-                FailExpectation(!errorFile)
+                FailExpectation(errorFile)
             else
                 fail("No expectations in test file ${file}")
         }
@@ -68,12 +68,12 @@ let success(file, testType) = {
     }
 
     # workaround for that annoying bug where string interpolation only works once
-    print("\e[32m[${file}]" ~ "${testType}: passed")
+    print("\e[32m[${file}]" ~ "${testTypePrefix}: passed")
 }
 let failure(file, testType, failureType, details) = {
     let testTypePrefix = match testType {
         "" -> ""
-        _ -> "\e[1m(${testType})\e[0m\e[31m"
+        _ -> "\e[1m(${testType})\e[0m\e[31m\e[1m"
     }
 
     let detailMessage = match details {
@@ -85,7 +85,7 @@ let failure(file, testType, failureType, details) = {
     }
 
     # workaround for that annoying bug where string interpolation only works once
-    print("\e[31m\e[1m[${file}]" ~ "${testType}: FAILED: " ~ "${failureType}\e[0m\e[31m" ~ "${detailMessage}\e[0m")
+    print("\e[31m\e[1m[${file}]" ~ "${testTypePrefix}: FAILED: " ~ "${failureType}\e[0m\e[31m" ~ "${detailMessage}\e[0m")
 
     errors := errors! + 1
 }

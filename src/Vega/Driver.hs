@@ -39,6 +39,7 @@ parseRenameTypeCheck filename code = runExceptT do
             Left errors -> throwError (fmap RenameError errors)
             Right renamed -> pure renamed
 
-    liftIO (Infer.typecheck renamed) >>= \case
-        Left error -> throwError [TypeError error]
-        Right core -> pure core
+    (core, errors) <- liftIO (Infer.typecheck renamed)
+    case fromList (toList errors) of
+        Empty -> pure core
+        errors -> throwError (fmap TypeError errors)

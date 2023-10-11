@@ -7,5 +7,5 @@ f x = x;
 g : f Int;
 g = 5;
 
-main : Unit -> Unit
-main _ = debug(g)
+main : Unit -> Unit;
+main _ = debug(g);

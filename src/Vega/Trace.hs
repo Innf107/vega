@@ -35,7 +35,7 @@ data TraceConfig = MkTraceConfig
     { types :: Bool
     , unify :: Bool
     , subst :: Bool
-    }
+    } deriving (Generic)
 
 traceEnabled :: Category -> TraceConfig -> Bool
 traceEnabled category config = case category of

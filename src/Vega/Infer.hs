@@ -19,6 +19,8 @@ import Data.Sequence qualified as Seq
 import Data.Vector qualified as Vector
 
 import Control.Monad.Fix
+import Control.Monad.Writer.Strict (MonadWriter (tell), WriterT (runWriterT))
+import Vega.Difflist (Difflist)
 
 data TypeError
     = UnableToUnify Loc Type Type
@@ -56,7 +58,8 @@ extendVariable name type_ value env =
 
 data InferState = MkInferState {}
 
-newtype Infer a = MkInfer (ReaderT (TraceAction IO) (ExceptT TypeError (StateT InferState IO)) a)
+-- TODO: Is it okay to use WriterT here or does that leak space?
+newtype Infer a = MkInfer (ReaderT (TraceAction IO) (WriterT (Difflist TypeError) (StateT InferState IO)) a)
     deriving newtype (Functor, Applicative, Monad, MonadFix, MonadTrace)
 
 instance MonadRef Infer where
@@ -65,14 +68,14 @@ instance MonadRef Infer where
     readRef ref = MkInfer $ liftIO $ readIORef ref
     writeRef ref x = MkInfer $ liftIO $ writeIORef ref x
 
-typeError :: TypeError -> Infer a
-typeError error = MkInfer (throwError error)
+typeError :: TypeError -> Infer ()
+typeError error = MkInfer (tell [error])
 
 liftEval :: Eval a -> Infer a
 liftEval eval = MkInfer (liftIO (runEval eval))
 
-runInfer :: (?traceAction :: TraceAction IO) => Infer a -> IO (Either TypeError a)
-runInfer (MkInfer exceptT) = evalStateT (runExceptT (runReaderT exceptT ?traceAction)) initialInferState
+runInfer :: (?traceAction :: TraceAction IO) => Infer a -> IO (a, Difflist TypeError)
+runInfer (MkInfer exceptT) = evalStateT (runWriterT (runReaderT exceptT ?traceAction)) initialInferState
   where
     initialInferState = MkInferState{}
 
@@ -175,7 +178,7 @@ skolemize = \case
         skolemize skolemized
     type_ -> pure type_
 
-typecheck :: (?traceAction :: TraceAction IO) => Vector (Declaration Renamed) -> IO (Either TypeError (Vector CoreDeclaration))
+typecheck :: (?traceAction :: TraceAction IO) => Vector (Declaration Renamed) -> IO (Vector CoreDeclaration, Difflist TypeError)
 typecheck declarations = runInfer do
     (_env, declarations) <- mapAccumLM checkDeclaration emptyEnv declarations
     pure declarations
