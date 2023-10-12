@@ -37,9 +37,12 @@ let doesFileExist(file) = try {
 
 !stack "build" "--fast"
 
+let vega = "${!stack "path" "--dist-dir"}/build/vega/vega"
+
 let evalTest(file) = {
     try {
-        let result = !stack "exec" "vega" file
+        let luaCode = !env vega file
+        let result = luaCode | lua
         Success(result)
     } with {
         CommandFailure(details) -> Failure(details.stdout)
@@ -47,7 +50,7 @@ let evalTest(file) = {
 }
 
 let parseExpectation(file) = {
-    match regexpMatchGroups("EXPECT:\\s*(\\S+)", !cat file) {
+    match regexpMatchGroups("EXPECT:\\s*(.*)\n", !cat file) {
         [[_, expectation]] -> RunExpectation(expectation)
         _ -> {
             # This is not a run test so it has to be an error test
@@ -100,7 +103,7 @@ for(testFiles, \file -> {
                     if result == expectedResult then {
                         success(file, "")
                     } else {
-                        failure(file, "", "Mismatched Result", ExpectedVsActual({ expected = expectedResult, actual = result }))
+                        failure(file, "", "Incorrect Result", ExpectedVsActual({ expected = expectedResult, actual = result }))
                     }
                 }
                 Failure(message) -> failure(file, "", "Evaluation Failure", ErrorMessage(message))
@@ -113,7 +116,7 @@ for(testFiles, \file -> {
                     if message == expectedError then {
                         success(file, "fail")
                     } else {
-                        failure(file, "fail", "Mismatched Error Message", ExpectedVsActual({ expected = expectedError, actual = message }))
+                        failure(file, "fail", "Incorrect Error Message", ExpectedVsActual({ expected = expectedError, actual = message }))
                     }
                 }
             }
@@ -122,8 +125,8 @@ for(testFiles, \file -> {
 })
 
 if errors! == 0 then {
-    print("\e[32mAll tests passed successfully")
+    print("\e[32mAll tests passed successfully\e[0m")
 } else {
-    print("\e[31m\e[1m${errors!}/" ~ "${length(testFiles)} Tests failed")
+    print("\e[31m\e[1m${errors!}/" ~ "${length(testFiles)} Tests failed\e[0m")
 }
 

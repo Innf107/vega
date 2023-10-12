@@ -1,1 +1,3 @@
-aaa
+test/categories/types/xofx.vega:3:7: ERROR:
+Unable to unify types a
+                  and (a -> a)

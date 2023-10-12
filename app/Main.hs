@@ -7,9 +7,13 @@ import Vega.Pretty
 import Vega.Debug
 import Vega.Trace (TraceConfig (..), traceStderrAction)
 
+import Vega.Compile.Lua qualified as Lua
+
 import Options.Generic 
 
 import System.IO (hIsTerminalDevice)
+
+import System.FilePath qualified as FilePath
 
 data Flags = Flags { trace :: [Text] }
     deriving (Show, Generic)
@@ -64,9 +68,11 @@ main = do
 
             coreOrErrors <- Driver.parseRenameTypeCheck file contents
 
-                    -- TODO: Only use prettyANSII if the output is a tty
             case coreOrErrors of
                 Left errors -> do
                     for_ errors \error -> putTextLn (renderStdout (prettyErrorLoc (getLoc error) (pretty error)))
                     exitFailure
-                Right _core -> putTextLn "success"
+                Right core -> do
+                    luaCode <- Lua.compile core
+                    putTextLn luaCode
+                    

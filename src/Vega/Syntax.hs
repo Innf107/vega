@@ -209,6 +209,8 @@ prettyMetaApp (MkMeta name _ ref) arguments = unsafePerformIO do
 prettyApp :: ValueF context -> Seq (ValueF context) -> Doc Ann
 prettyApp (MetaApp meta arguments) additionalArguments =
   prettyMetaApp meta (arguments <> additionalArguments)
+prettyApp (SkolemApp skolem []) [] =
+  pretty skolem
 prettyApp (SkolemApp skolem arguments) additionalArguments =
   lparen "(" <> pretty skolem <+> sep (map pretty (toList (arguments <> additionalArguments))) <> rparen ")"
 prettyApp type_ arguments =

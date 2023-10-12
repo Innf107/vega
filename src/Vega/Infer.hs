@@ -491,30 +491,62 @@ unify loc type1 type2 = do
     type1 <- followMetas type1
     type2 <- followMetas type2
     trace Unify (pretty type1 <+> keyword "~" <+> pretty type2)
+
+    let unableToUnify = do
+            type1 <- quoteFully type1
+            type2 <- quoteFully type2
+            typeError (UnableToUnify loc type1 type2)
+
     case (type1, type2) of
-        (IntV x, IntV y) | x == y -> pure ()
-        (StringV x, StringV y) | x == y -> pure ()
-        (Type, Type) -> pure ()
-        (Int, Int) -> pure ()
-        (String, String) -> pure ()
-        (Pi mname1 domain1 codomain1, Pi mname2 domain2 codomain2) -> do
-            unify loc domain1 domain2
-            undefined
-        (Forall mname1 domain1 codomain1, Forall mname2 domain2 codomain2) ->
-            undefined
-        (SkolemApp skolem1 args1, SkolemApp skolem2 args2)
-            | skolem1 == skolem2 && length args1 == length args2 -> do
-                traverse_ (uncurry (unify loc)) (Seq.zip args1 args2)
         (MetaApp metaVar1 [], type2) -> bind loc metaVar1 type2
         (type1, MetaApp metaVar2 []) -> bind loc metaVar2 type1
         -- See Note [Pattern Unification]
         (MetaApp metaVar1 arguments1, type2) -> patternUnification metaVar1 arguments1 type2
         -- TODO: Keep track of the change of direction here for the sake of error messages
         (type1, MetaApp metaVar2 arguments2) -> patternUnification metaVar2 arguments2 type1
-        _ -> do
-            type1 <- quoteFully type1
-            type2 <- quoteFully type2
-            typeError (UnableToUnify loc type1 type2)
+        _ -> case type1 of
+            IntV x -> case type2 of
+                IntV y | x == y -> pure ()
+                _ -> unableToUnify
+            StringV x -> case type2 of
+                StringV y | x == y -> pure ()
+                _ -> unableToUnify
+            Type -> case type2 of
+                Type -> pure ()
+                _ -> unableToUnify
+            Int -> case type2 of
+                Int -> pure ()
+                _ -> unableToUnify
+            String -> case type2 of
+                String -> pure ()
+                _ -> unableToUnify
+            Pi mname1 domain1 (codomainCore1, codomainContext1) -> case type2 of
+                Pi mname2 domain2 (codomainCore2, codomainContext2) -> do
+                    codomain1 <- skolemizePiClosure mname1 codomainCore1 codomainContext1
+                    codomain2 <- skolemizePiClosure mname2 codomainCore2 codomainContext2
+
+                    unify loc domain1 domain2
+                    unify loc codomain1 codomain2
+                _ -> unableToUnify
+            Forall name1 domain1 (codomainCore1, codomainContext1) -> case type2 of
+                Forall name2 domain2 (codomainCore2, codomainContext2) -> do
+                    codomain1 <- skolemizePiClosure (Just name1) codomainCore1 codomainContext1
+                    codomain2 <- skolemizePiClosure (Just name2) codomainCore2 codomainContext2
+
+                    unify loc domain1 domain2
+                    unify loc codomain1 codomain2
+                _ -> unableToUnify
+            SkolemApp skolem1 args1 -> case type2 of
+                SkolemApp skolem2 args2 | skolem1 == skolem2 && length args1 == length args2 -> do
+                    traverse_ (uncurry (unify loc)) (Seq.zip args1 args2)
+                _ -> unableToUnify
+            ClosureV{} -> undefined
+            TupleV arguments1 -> case type2 of
+                TupleV arguments2 -> Vector.zipWithM_ (unify loc) arguments1 arguments2
+                _ -> unableToUnify
+            Tuple arguments1 -> case type2 of
+                Tuple arguments2 -> Vector.zipWithM_ (unify loc) arguments1 arguments2
+                _ -> unableToUnify
 
 -- See Note [Pattern Unification]
 patternUnification :: MetaVar -> Seq Type -> Type -> Infer ()
@@ -602,36 +634,40 @@ bind loc metaVar type_ =
                             typeError (OccursCheckViolation loc metaVar type_)
                         False -> setMetaVar metaVar type_
 
+-- TODO: This happens to early. If meta variables are inserted later they will still be *values* so
+-- error messages are still wrong (and still rely on unsafePerformIO) :/
 {- | Fully quote a type, e.g. for error messages.
 Note that this also follows lazy `Quote`s inside CoreExprs
 -}
 quoteFully :: Type -> Infer CoreExpr
-quoteFully type_ = followMetas type_ >>= \case
-    IntV n -> pure $ CLiteral (IntLit n)
-    StringV text -> pure $ CLiteral (StringLit text)
-    ClosureV closure -> undefined
-    TupleV arguments -> do
-        quotedArguments <- traverse quoteFully arguments
-        pure $ CTupleLiteral quotedArguments
-    Type -> pure $ CLiteral TypeLit
-    Int -> pure $ CLiteral IntTypeLit
-    String -> pure $ CLiteral StringTypeLit
-    Tuple arguments -> do
-        quotedArguments <- traverse quoteFully arguments
-        pure $ CTupleType quotedArguments
-    Pi mname domain (codomainExpr, codomainEnv) -> do
-        quotedDomain <- quoteFully domain
-        codomain <- skolemizePiClosure mname codomainExpr codomainEnv
-        quotedCodomain <- quoteFully codomain
-        pure $ CPi mname quotedDomain quotedCodomain
-    Forall name domain (codomainExpr, codomainEnv) -> do
-        quotedDomain <- quoteFully domain
-        codomain <- skolemizePiClosure (Just name) codomainExpr codomainEnv
-        quotedCodomain <- quoteFully codomain
-        pure $ CForall name quotedDomain quotedCodomain
-    SkolemApp skolem arguments -> do
-        quotedArguments <- traverse quoteFully arguments
-        undefined
-    MetaApp metaVar arguments -> do
-        quotedArguments <- traverse quoteFully arguments
-        pure $ foldl' CApp (CMeta metaVar) quotedArguments
+quoteFully type_ =
+    followMetas type_ >>= \case
+        IntV n -> pure $ CLiteral (IntLit n)
+        StringV text -> pure $ CLiteral (StringLit text)
+        ClosureV closure -> undefined
+        TupleV arguments -> do
+            quotedArguments <- traverse quoteFully arguments
+            pure $ CTupleLiteral quotedArguments
+        Type -> pure $ CLiteral TypeLit
+        Int -> pure $ CLiteral IntTypeLit
+        String -> pure $ CLiteral StringTypeLit
+        Tuple arguments -> do
+            quotedArguments <- traverse quoteFully arguments
+            pure $ CTupleType quotedArguments
+        Pi mname domain (codomainExpr, codomainEnv) -> do
+            quotedDomain <- quoteFully domain
+            codomain <- skolemizePiClosure mname codomainExpr codomainEnv
+            quotedCodomain <- quoteFully codomain
+            pure $ CPi mname quotedDomain quotedCodomain
+        Forall name domain (codomainExpr, codomainEnv) -> do
+            quotedDomain <- quoteFully domain
+            codomain <- skolemizePiClosure (Just name) codomainExpr codomainEnv
+            quotedCodomain <- quoteFully codomain
+            pure $ CForall name quotedDomain quotedCodomain
+        SkolemApp (MkSkolem skolemName _) arguments -> do
+            quotedArguments <- traverse quoteFully arguments
+            -- TODO: Let's hope this doesn't mess up the skolem uniques
+            pure $ foldl' CApp (CVar (skolemName)) quotedArguments
+        MetaApp metaVar arguments -> do
+            quotedArguments <- traverse quoteFully arguments
+            pure $ foldl' CApp (CMeta metaVar) quotedArguments

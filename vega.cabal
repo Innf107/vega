@@ -25,6 +25,7 @@ source-repository head
 
 library
   exposed-modules:
+      Vega.Compile.Lua
       Vega.Debug
       Vega.Difflist
       Vega.Driver
@@ -76,6 +77,7 @@ library
       array
     , base >=4.7 && <5
     , containers
+    , filepath
     , mtl
     , optparse-generic
     , prettyprinter
@@ -119,6 +121,7 @@ executable vega
       array
     , base >=4.7 && <5
     , containers
+    , filepath
     , mtl
     , optparse-generic
     , prettyprinter
@@ -164,6 +167,7 @@ test-suite vega-test
       array
     , base >=4.7 && <5
     , containers
+    , filepath
     , mtl
     , optparse-generic
     , prettyprinter

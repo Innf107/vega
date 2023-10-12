@@ -1,11 +1,10 @@
--- EXPECT: 5
+-- EXPECT: (5, "a")
 
 f : forall a. a -> a;
 f x = x;
 
 
-main : Unit -> Unit;
-main _ = {
-    debug (f 5);
-    debug (f "a")
+main : Unit;
+main = {
+    debug ((f 5, f "a"));
 }

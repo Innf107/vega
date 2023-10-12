@@ -28,6 +28,7 @@ dependencies:
 - prettyprinter
 - transformers-base
 - optparse-generic
+- filepath
 # Needed to keep alex and happy... happy
 - array
 
