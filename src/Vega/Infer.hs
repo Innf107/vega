@@ -23,8 +23,8 @@ import Control.Monad.Writer.Strict (MonadWriter (tell), WriterT (runWriterT))
 import Vega.Difflist (Difflist)
 
 data TypeError
-    = UnableToUnify Loc Type Type
-    | OccursCheckViolation Loc MetaVar Type
+    = UnableToUnify Loc CoreExpr CoreExpr
+    | OccursCheckViolation Loc MetaVar CoreExpr
     deriving (Generic)
 instance HasLoc TypeError
 
@@ -191,7 +191,7 @@ checkDeclaration env = \case
 
         innerType <- skolemize type_
 
-        (paramTypes, resultType) <- splitFunctionTypes innerType (fromList (toList (fmap getLoc params)))
+        (paramTypes, resultType) <- splitFunctionTypes innerType (fmap getLoc params)
 
         (envTransformers, coreTransformers) <- munzip <$> Vector.zipWithM (checkPattern env) (fromList $ toList paramTypes) params
 
@@ -257,7 +257,14 @@ infer env expr = do
                 StringTypeLit -> Type
                 IntLit _ -> Int
                 StringLit _ -> String
-        Sequence loc statements -> undefined
+        Sequence _loc [] -> pure (Tuple [], CTupleLiteral [])
+        Sequence _loc (Vector.unsnoc -> Just (statements, RunExpr _ expr)) -> do
+            (env, coreTransformers) <- mapAccumLM checkStatement env statements
+            (finalType, finalCore) <- infer env expr
+            pure (finalType, compose coreTransformers finalCore)
+        Sequence _loc statements -> do
+            (_env, coreTransformers) <- mapAccumLM checkStatement env statements
+            pure (Tuple [], compose coreTransformers (CTupleLiteral []))
         Ascription _loc expr typeExpr -> do
             typeCore <- check env Type typeExpr
             type_ <- liftEval $ eval (evalContext env) typeCore
@@ -337,12 +344,64 @@ check env expectedType expr = do
 
             pure (CTupleLiteral argumentCore)
         Literal{} -> deferToInference
-        Sequence _loc _statements -> undefined
+        Sequence _ (Vector.unsnoc -> Just (statements, RunExpr _ expr)) -> do
+            (env, coreTransformers) <- mapAccumLM checkStatement env statements
+            finalCore <- check env expectedType expr
+            pure (compose coreTransformers finalCore)
+        Sequence _ statements -> do
+            (_env, coreTransformers) <- mapAccumLM checkStatement env statements
+            pure (compose coreTransformers (CTupleLiteral []))
         Ascription{} -> deferToInference
         Primop{} -> deferToInference
         EPi{} -> deferToInference
         EForall{} -> deferToInference
         ETupleType{} -> deferToInference
+
+checkStatement :: Env -> Statement Renamed -> Infer (Env, CoreExpr -> CoreExpr)
+checkStatement env = \case
+    RunExpr _ expr -> do
+        -- TODO: Keep some context to mention in error messages that this was expected to return ()
+        -- because it is run as a statement
+        coreExpr <- check env (Tuple []) expr
+        coreName <- freshName "_"
+        pure (env, \coreCont -> CLet coreName coreExpr coreCont)
+    Let{} -> undefined
+    LetFunction _ name mtype patterns body -> do
+        (ownType, resultType, envTransformer, coreTransformers) <- case mtype of
+            Just type_ -> do
+                core <- check env Type type_
+                ownType <- liftEval (eval (evalContext env) core)
+
+                innerType <- skolemize ownType
+                (patternTypes, resultType) <- splitFunctionTypes innerType (fmap getLoc patterns)
+                (envTransformers, coreTransformers) <-
+                    munzip
+                        <$> Vector.zipWithM (checkPattern env) (fromList $ toList patternTypes) patterns
+                pure (ownType, resultType, compose envTransformers, coreTransformers)
+            Nothing -> do
+                (patternTypes, envTransformers, coreTransformers) <- Vector.unzip3 <$> traverse (inferPattern env) patterns
+                resultMeta <- freshAnonymousMeta
+                let resultType = MetaApp resultMeta []
+                let ownType = foldr (\domain codomain -> Pi Nothing domain (CQuote codomain, emptyContext)) resultType patternTypes
+                pure (ownType, resultType, compose envTransformers, coreTransformers)
+        let addLambdas core = do
+                foldrM
+                    ( \trans core -> do
+                        varName <- freshName "x"
+                        pure $ CLambda varName (trans varName core)
+                    )
+                    core
+                    coreTransformers
+        let updatedEnv = envTransformer env
+        mdo
+            (core, value) <- do
+                value <- lazyM (eval (evalContext env) core)
+                -- function definitions are recursive
+                let bodyEnv = extendVariable name ownType value updatedEnv
+
+                core <- addLambdas =<< check bodyEnv resultType body
+                pure (core, value)
+            pure (extendVariable name ownType value env, CLet name core)
 
 inferPattern :: Env -> Pattern Renamed -> Infer (Type, Env -> Env, Name -> CoreExpr -> CoreExpr)
 inferPattern env = \case
@@ -393,9 +452,9 @@ splitFunctionType loc type_ =
             subsumes loc type_ (Pi Nothing paramType (resultClosureExpr, resultClosureContext))
             pure (Nothing, paramType, resultClosureExpr, resultClosureContext)
 
-splitFunctionTypes :: Type -> Seq Loc -> Infer (Seq Type, Type)
-splitFunctionTypes type_ Empty = pure ([], type_)
-splitFunctionTypes type_ (loc :<| locs) = do
+splitFunctionTypes :: Type -> Vector Loc -> Infer (Seq Type, Type)
+splitFunctionTypes type_ (Vector.uncons -> Nothing) = pure ([], type_)
+splitFunctionTypes type_ (Vector.uncons -> Just (loc, locs)) = do
     (maybeParamName, paramType, resultExpr, resultContext) <- splitFunctionType loc type_
 
     evalContext <- case maybeParamName of
@@ -452,7 +511,10 @@ unify loc type1 type2 = do
         (MetaApp metaVar1 arguments1, type2) -> patternUnification metaVar1 arguments1 type2
         -- TODO: Keep track of the change of direction here for the sake of error messages
         (type1, MetaApp metaVar2 arguments2) -> patternUnification metaVar2 arguments2 type1
-        _ -> typeError (UnableToUnify loc type1 type2)
+        _ -> do
+            type1 <- quoteFully type1
+            type2 <- quoteFully type2
+            typeError (UnableToUnify loc type1 type2)
 
 -- See Note [Pattern Unification]
 patternUnification :: MetaVar -> Seq Type -> Type -> Infer ()
@@ -484,11 +546,15 @@ patternUnification metaVar arguments type2 = case type2 of
 -}
 
 -- TODO: This also needs to update levels.
-occursCheck :: Loc -> MetaVar -> Type -> Infer ()
-occursCheck loc meta type_ = go type_
+occursCheck :: MetaVar -> Type -> Infer Bool
+occursCheck meta type_ =
+    runExceptT (go type_) >>= \case
+        Left () -> pure True
+        Right () -> pure False
   where
-    go type_ =
-        followMetas type_ >>= \case
+    go :: Type -> ExceptT () Infer ()
+    go type_ = do
+        lift (followMetas type_) >>= \case
             IntV _ -> pure ()
             StringV _ -> pure ()
             ClosureV _ -> undefined
@@ -498,23 +564,27 @@ occursCheck loc meta type_ = go type_
             String -> pure ()
             Tuple arguments -> traverse_ go arguments
             Pi name domain (codomainCore, codomainContext) -> do
+                go domain
                 -- TODO: Rather than recomputing the codomain applied at a skolem at every occurs check,
                 -- maybe we should lazily store this in the data type and keep the cached results?
-                codomainContext <- case name of
-                    Nothing -> pure codomainContext
-                    Just name -> do
-                        codomainSkolem <- freshSkolem name
-                        skolemValue <- lazyValueM (SkolemApp codomainSkolem [])
-                        pure (define name skolemValue codomainContext)
-                codomain <- liftEval (eval codomainContext codomainCore)
+                codomain <- lift $ skolemizePiClosure name codomainCore codomainContext
                 go codomain
             Forall _ _ _ -> undefined
             SkolemApp _ arguments -> traverse_ go arguments
             MetaApp otherMeta arguments -> do
-                when (meta == otherMeta) do
-                    -- TODO: Keep a bit more context here
-                    typeError (OccursCheckViolation loc meta type_)
-                traverse_ go arguments
+                if (meta == otherMeta)
+                    then throwError ()
+                    else traverse_ go arguments
+
+skolemizePiClosure :: Maybe Name -> CoreExpr -> EvalContext -> Infer Type
+skolemizePiClosure mname codomainCore codomainContext = do
+    codomainContext <- case mname of
+        Nothing -> pure codomainContext
+        Just name -> do
+            codomainSkolem <- freshSkolem name
+            skolemValue <- lazyValueM (SkolemApp codomainSkolem [])
+            pure (define name skolemValue codomainContext)
+    liftEval (eval codomainContext codomainCore)
 
 bind :: Loc -> MetaVar -> Type -> Infer ()
 bind loc metaVar type_ =
@@ -523,5 +593,45 @@ bind loc metaVar type_ =
             unify loc substituted type_
         Nothing -> do
             trace Subst (pretty (MetaApp metaVar []) <+> keyword ":=" <+> pretty type_)
-            occursCheck loc metaVar type_
-            setMetaVar metaVar =<< followMetas type_
+            followMetas type_ >>= \case
+                MetaApp metaVar2 [] | metaVar == metaVar2 -> pure ()
+                type_ -> do
+                    occursCheck metaVar type_ >>= \case
+                        True -> do
+                            type_ <- quoteFully type_
+                            typeError (OccursCheckViolation loc metaVar type_)
+                        False -> setMetaVar metaVar type_
+
+{- | Fully quote a type, e.g. for error messages.
+Note that this also follows lazy `Quote`s inside CoreExprs
+-}
+quoteFully :: Type -> Infer CoreExpr
+quoteFully type_ = followMetas type_ >>= \case
+    IntV n -> pure $ CLiteral (IntLit n)
+    StringV text -> pure $ CLiteral (StringLit text)
+    ClosureV closure -> undefined
+    TupleV arguments -> do
+        quotedArguments <- traverse quoteFully arguments
+        pure $ CTupleLiteral quotedArguments
+    Type -> pure $ CLiteral TypeLit
+    Int -> pure $ CLiteral IntTypeLit
+    String -> pure $ CLiteral StringTypeLit
+    Tuple arguments -> do
+        quotedArguments <- traverse quoteFully arguments
+        pure $ CTupleType quotedArguments
+    Pi mname domain (codomainExpr, codomainEnv) -> do
+        quotedDomain <- quoteFully domain
+        codomain <- skolemizePiClosure mname codomainExpr codomainEnv
+        quotedCodomain <- quoteFully codomain
+        pure $ CPi mname quotedDomain quotedCodomain
+    Forall name domain (codomainExpr, codomainEnv) -> do
+        quotedDomain <- quoteFully domain
+        codomain <- skolemizePiClosure (Just name) codomainExpr codomainEnv
+        quotedCodomain <- quoteFully codomain
+        pure $ CForall name quotedDomain quotedCodomain
+    SkolemApp skolem arguments -> do
+        quotedArguments <- traverse quoteFully arguments
+        undefined
+    MetaApp metaVar arguments -> do
+        quotedArguments <- traverse quoteFully arguments
+        pure $ foldl' CApp (CMeta metaVar) quotedArguments

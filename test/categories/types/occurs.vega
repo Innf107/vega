@@ -1,7 +1,7 @@
 
 f : Int;
 f = {
-    let g x = [x];
+    let g x = (g x, x);
     5
 }
 

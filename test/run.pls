@@ -53,7 +53,7 @@ let parseExpectation(file) = {
             # This is not a run test so it has to be an error test
             let errorFile = (!dirname file) ~ "/" ~ (!basename "-s" ".vega" file) ~ ".error"
             if doesFileExist(errorFile) then
-                FailExpectation(errorFile)
+                FailExpectation(!cat errorFile)
             else
                 fail("No expectations in test file ${file}")
         }

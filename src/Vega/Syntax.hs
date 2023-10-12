@@ -201,8 +201,8 @@ prettyMetaApp (MkMeta name _ ref) arguments = unsafePerformIO do
   readIORef ref >>= \case
     Nothing ->
       case arguments of
-        [] -> pure $ meta ("?" <> original name)
-        arguments -> pure $ lparen "(" <> meta ("?" <> original name) <+> sep (map pretty (toList arguments)) <> rparen ")"
+        [] -> pure $ meta ("?" <> original name <> show (hashUnique (unique name)))
+        arguments -> pure $ lparen "(" <> meta ("?" <> original name <> show (hashUnique (unique name))) <+> sep (map pretty (toList arguments)) <> rparen ")"
     Just replacement -> pure $ prettyApp replacement arguments
 {-# NOINLINE prettyMetaApp #-}
 

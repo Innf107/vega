@@ -34,7 +34,7 @@ parseTraceConfig help = go (MkTraceConfig { types = False, unify = False, subst 
             "types" : rest -> go (config { types = True }) rest
             "unify" : rest -> go (config { unify = True }) rest
             "subst" : rest -> go (config { subst = True }) rest
-            category : rest -> do
+            category : _ -> do
                 putTextLn ("Invalid trace category: '" <> category <> "'. Valid categories include: " <> intercalate ", " (getRecordFields @TraceConfig) <> "\n")
                 help
                 exitFailure
@@ -57,6 +57,7 @@ main = do
 
                     -- TODO: Only use prettyANSII if the output is a tty
             case coreOrErrors of
-                Left errors ->
+                Left errors -> do
                     for_ errors \error -> putTextLn (prettyANSII (prettyErrorLoc (getLoc error) (pretty error)))
-                Right core -> putTextLn "success"
+                    exitFailure
+                Right _core -> putTextLn "success"
