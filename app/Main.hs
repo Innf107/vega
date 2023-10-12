@@ -9,6 +9,8 @@ import Vega.Trace (TraceConfig (..), traceStderrAction)
 
 import Options.Generic 
 
+import System.IO (hIsTerminalDevice)
+
 data Flags = Flags { trace :: [Text] }
     deriving (Show, Generic)
 
@@ -47,9 +49,16 @@ main = do
         Compile file -> do
             traceConfig <- parseTraceConfig help flags.trace
 
+            renderStderr <- hIsTerminalDevice stderr <&> \case
+                False -> prettyPlain
+                True -> prettyANSII
+            renderStdout <- hIsTerminalDevice stdout <&> \case
+                False -> prettyPlain
+                True -> prettyANSII
+
             let ?traceAction =
                             traceStderrAction
-                                prettyANSII
+                                renderStderr
                                 traceConfig
             contents <- decodeUtf8 <$> readFileBS file
 
@@ -58,6 +67,6 @@ main = do
                     -- TODO: Only use prettyANSII if the output is a tty
             case coreOrErrors of
                 Left errors -> do
-                    for_ errors \error -> putTextLn (prettyANSII (prettyErrorLoc (getLoc error) (pretty error)))
+                    for_ errors \error -> putTextLn (renderStdout (prettyErrorLoc (getLoc error) (pretty error)))
                     exitFailure
                 Right _core -> putTextLn "success"

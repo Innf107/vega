@@ -1,1 +1,3 @@
-aaa
+test/categories/types/occurs.vega:4:15: ERROR:
+Unable to construct an infinite type satisfying
+    ?a9 ~ Tuple(?a9,?a11)

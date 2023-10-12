@@ -64,7 +64,7 @@ let errors = ref 0
 let success(file, testType) = {
     let testTypePrefix = match testType {
         "" -> ""
-        _ -> "\e[1m(${testType})\e[0m\e[32m"
+        _ -> "(${testType})\e[0m\e[32m"
     }
 
     # workaround for that annoying bug where string interpolation only works once
@@ -108,12 +108,12 @@ for(testFiles, \file -> {
         }
         FailExpectation(expectedError) -> {
             match evalTest(file) {
-                Success(result) -> failure(file, "Fail", "Invalid Success", Nothing)
+                Success(result) -> failure(file, "fail", "Invalid Success", Nothing)
                 Failure(message) -> {
                     if message == expectedError then {
-                        success(file, "Fail")
+                        success(file, "fail")
                     } else {
-                        failure(file, "Fail", "Mismatched Error Message", ExpectedVsActual({ expected = expectedError, actual = message }))
+                        failure(file, "fail", "Mismatched Error Message", ExpectedVsActual({ expected = expectedError, actual = message }))
                     }
                 }
             }
