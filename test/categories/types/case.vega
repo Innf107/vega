@@ -1,0 +1,6 @@
+-- EXPECT: 5
+f : Int -> Int;
+f(x) = case x {
+    
+}
+

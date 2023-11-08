@@ -32,6 +32,7 @@ import Vega.Pretty
     '}'             { MkToken RBRACE _ }
     ','             { MkToken COMMA _ }
     ';'             { MkToken SEMI _ }
+    '|'             { MkToken PIPE _ }
     'let'           { MkToken LET _ }
     'case'          { MkToken CASE _ }
     'forall'        { MkToken FORALL _ }
@@ -136,7 +137,11 @@ type : expr { $1 }
 caseBranch : pattern '->' expr { ($1, $3) }
 
 pattern :: { Pattern Parsed }
-pattern : identLoc { VarPat (fst $1) (snd $1) }
+pattern : identLoc                                                      { VarPat (fst $1) (snd $1) }
+        | pattern '|' pattern                                           { OrPat (merge $1 $3) $1 $3 }
+        | '(' pattern ')'                                               { $2 }
+        | '(' pattern ',' pattern ')'                                   { TuplePat (merge $1 $5) [$2, $4] }
+        | '(' pattern ',' pattern ',' sepTrailingList(',', pattern) ')' { TuplePat (merge $1 $7) (fromList ($2 : $4 : $6)) }
 
 {
 data ParseError

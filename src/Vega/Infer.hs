@@ -10,7 +10,8 @@ import Vega.Primop
 import Vega.Debug
 import Vega.LazyM
 import Vega.Loc (HasLoc)
-import Vega.MonadRef
+import Vega.Monad.Ref
+import Vega.Pattern qualified as Pattern
 import Vega.Pretty
 import Vega.Trace
 
@@ -21,6 +22,8 @@ import Data.Vector qualified as Vector
 import Control.Monad.Fix
 import Control.Monad.Writer.Strict (MonadWriter (tell), WriterT (runWriterT))
 import Vega.Difflist (Difflist)
+import Vega.Monad.Unique (MonadUnique (..))
+import Vega.Util (Fix (MkFix))
 
 data TypeError
     = UnableToUnify Loc CoreExpr CoreExpr
@@ -62,6 +65,10 @@ data InferState = MkInferState {}
 newtype Infer a = MkInfer (ReaderT (TraceAction IO) (WriterT (Difflist TypeError) (StateT InferState IO)) a)
     deriving newtype (Functor, Applicative, Monad, MonadFix, MonadTrace)
 
+instance MonadUnique Infer where
+    freshName text = MkInfer (liftIO (freshName text))
+    newUnique = MkInfer (liftIO newUnique)
+
 instance MonadRef Infer where
     type Ref Infer = IORef
     newRef x = MkInfer $ liftIO $ newIORef x
@@ -78,9 +85,6 @@ runInfer :: (?traceAction :: TraceAction IO) => Infer a -> IO (a, Difflist TypeE
 runInfer (MkInfer exceptT) = evalStateT (runWriterT (runReaderT exceptT ?traceAction)) initialInferState
   where
     initialInferState = MkInferState{}
-
-freshName :: Text -> Infer Name
-freshName text = MkInfer $ liftIO $ Name.freshNameIO text
 
 freshMeta :: Name -> Infer MetaVar
 freshMeta name = MkInfer $ liftIO do
@@ -143,8 +147,8 @@ followMetas type_ = case type_ of
                                     )
     type_ -> pure type_
 
-freshSkolem :: Name -> Infer Skolem
-freshSkolem name = MkInfer $ liftIO do
+freshSkolem :: (MonadUnique m) => Name -> m Skolem
+freshSkolem name = do
     unique <- newUnique
     pure (MkSkolem name unique)
 
@@ -197,9 +201,10 @@ checkDeclaration env = \case
 
         let addLambdas core = do
                 foldrM
-                    ( \trans core -> do
+                    ( \pattern core -> do
                         varName <- freshName "x"
-                        pure $ CLambda varName (trans varName core)
+                        body <- Pattern.lowerCase [(pattern, core)] varName
+                        pure $ CLambda varName body
                     )
                     core
                     coreTransformers
@@ -238,13 +243,15 @@ infer env expr = do
             resultType <- liftEval $ eval updatedContext resultClosureExpr
             pure (resultType, CApp functionCore argumentCore)
         Lambda _loc pattern body -> do
-            (varType, envTrans, bodyTrans) <- inferPattern env pattern
+            (varType, envTrans, bodyPattern) <- inferPattern env pattern
 
             (resultType, bodyCore) <- infer (envTrans env) body
 
             coreName <- freshName "x"
 
-            pure (Pi Nothing varType (CQuote resultType, evalContext env), CLambda coreName (bodyTrans coreName bodyCore))
+            body <- Pattern.lowerCase [(bodyPattern, bodyCore)] coreName
+
+            pure (Pi Nothing varType (CQuote resultType, evalContext env), CLambda coreName body)
         Case loc scrutinee cases -> undefined
         TupleLiteral _loc arguments -> do
             (argumentTypes, argumentCores) <- munzip <$> traverse (infer env) arguments
@@ -319,7 +326,7 @@ check env expectedType expr = do
         Lambda loc pattern body -> do
             (parameterName, parameterType, resultClosureExpr, resultClosureContext) <- splitFunctionType loc expectedType
 
-            (envTrans, coreTrans) <- checkPattern env parameterType pattern
+            (envTrans, corePattern) <- checkPattern env parameterType pattern
 
             -- TODO: This is meant to be a different skolem than the one on the term level, right?
 
@@ -335,7 +342,9 @@ check env expectedType expr = do
             bodyCore <- check (envTrans env) resultType body
 
             varName <- freshName "x"
-            pure (CLambda varName (coreTrans varName bodyCore))
+            body <- Pattern.lowerCase [(corePattern, bodyCore)] varName
+
+            pure (CLambda varName body)
         Case _loc _scrutinee _cases -> undefined
         TupleLiteral loc arguments -> do
             argumentTypes <- splitTupleType loc expectedType (length arguments)
@@ -386,9 +395,10 @@ checkStatement env = \case
                 pure (ownType, resultType, compose envTransformers, coreTransformers)
         let addLambdas core = do
                 foldrM
-                    ( \trans core -> do
+                    ( \pattern core -> do
                         varName <- freshName "x"
-                        pure $ CLambda varName (trans varName core)
+                        body <- Pattern.lowerCase [(pattern, core)] varName
+                        pure $ CLambda varName body
                     )
                     core
                     coreTransformers
@@ -403,37 +413,37 @@ checkStatement env = \case
                 pure (core, value)
             pure (extendVariable name ownType value env, CLet name core)
 
-inferPattern :: Env -> Pattern Renamed -> Infer (Type, Env -> Env, Name -> CoreExpr -> CoreExpr)
+inferPattern :: Env -> Pattern Renamed -> Infer (Type, Env -> Env, CorePattern (Fix CorePattern))
 inferPattern env = \case
     VarPat _loc name -> do
         varMeta <- freshAnonymousMeta
         let varType = MetaApp varMeta []
         varSkolem <- freshSkolem name
         varValue <- lazyValueM $ SkolemApp varSkolem []
-        pure (varType, extendVariable name varType varValue, \bound -> CLet name (CVar bound))
-    IntPat _loc value -> pure (Int, id, undefined)
-    StringPat _loc value -> pure (String, id, undefined)
+        pure (varType, extendVariable name varType varValue, CVarPat name)
+    IntPat _loc value -> pure (Int, id, CIntPat value)
+    StringPat _loc value -> pure (String, id, CStringPat value)
     TuplePat _loc subpatterns -> do
-        (subTypes, subEnvTransformers, subCoreTranformers) <- Vector.unzip3 <$> traverse (inferPattern env) subpatterns
-        pure (Tuple subTypes, compose subEnvTransformers, undefined)
+        (subTypes, subEnvTransformers, subCorePatterns) <- Vector.unzip3 <$> traverse (inferPattern env) subpatterns
+        pure (Tuple subTypes, compose subEnvTransformers, CTuplePat (coerce subCorePatterns))
     OrPat{} -> undefined
 
-checkPattern :: Env -> Type -> Pattern Renamed -> Infer (Env -> Env, Name -> CoreExpr -> CoreExpr)
+checkPattern :: Env -> Type -> Pattern Renamed -> Infer (Env -> Env, CorePattern (Fix CorePattern))
 checkPattern env expectedType = \case
     VarPat _loc name -> do
         varSkolem <- freshSkolem name
         varValue <- lazyValueM $ SkolemApp varSkolem []
-        pure (extendVariable name expectedType varValue, \binding -> CLet name (CVar binding))
-    IntPat loc _ -> do
+        pure (extendVariable name expectedType varValue, CVarPat name)
+    IntPat loc n -> do
         subsumes loc Int expectedType
-        pure (id, undefined)
-    StringPat loc _ -> do
+        pure (id, CIntPat n)
+    StringPat loc literal -> do
         subsumes loc String expectedType
-        pure (id, undefined)
+        pure (id, CStringPat literal)
     TuplePat loc subpatterns -> do
         argumentTypes <- splitTupleType loc expectedType (length subpatterns)
-        (subEnvTransformers, subCoreTransformers) <- munzip <$> Vector.zipWithM (checkPattern env) argumentTypes subpatterns
-        pure (compose subEnvTransformers, undefined)
+        (subEnvTransformers, subPatterns) <- munzip <$> Vector.zipWithM (checkPattern env) argumentTypes subpatterns
+        pure (compose subEnvTransformers, CTuplePat (coerce subPatterns))
     OrPat{} -> undefined
 
 splitFunctionType :: Loc -> Type -> Infer (Maybe Name, Type, CoreExpr, EvalContext)
@@ -473,7 +483,7 @@ splitTupleType :: Loc -> Type -> Int -> Infer (Vector Type)
 splitTupleType loc type_ expectedArgCount =
     followMetas type_ >>= \case
         Tuple arguments
-            | length arguments == expectedArgCount -> undefined
+            | length arguments == expectedArgCount -> pure arguments
             | otherwise -> undefined
         type_ -> do
             argumentTypes <- Vector.replicateM expectedArgCount (fmap (\x -> MetaApp x []) freshAnonymousMeta)
@@ -522,16 +532,16 @@ unify loc type1 type2 = do
                 _ -> unableToUnify
             Pi mname1 domain1 (codomainCore1, codomainContext1) -> case type2 of
                 Pi mname2 domain2 (codomainCore2, codomainContext2) -> do
-                    codomain1 <- skolemizePiClosure mname1 codomainCore1 codomainContext1
-                    codomain2 <- skolemizePiClosure mname2 codomainCore2 codomainContext2
+                    codomain1 <- liftEval $ skolemizeClosure mname1 codomainCore1 codomainContext1
+                    codomain2 <- liftEval $ skolemizeClosure mname2 codomainCore2 codomainContext2
 
                     unify loc domain1 domain2
                     unify loc codomain1 codomain2
                 _ -> unableToUnify
             Forall name1 domain1 (codomainCore1, codomainContext1) -> case type2 of
                 Forall name2 domain2 (codomainCore2, codomainContext2) -> do
-                    codomain1 <- skolemizePiClosure (Just name1) codomainCore1 codomainContext1
-                    codomain2 <- skolemizePiClosure (Just name2) codomainCore2 codomainContext2
+                    codomain1 <- liftEval $ skolemizeClosure (Just name1) codomainCore1 codomainContext1
+                    codomain2 <- liftEval $ skolemizeClosure (Just name2) codomainCore2 codomainContext2
 
                     unify loc domain1 domain2
                     unify loc codomain1 codomain2
@@ -589,7 +599,9 @@ occursCheck meta type_ =
         lift (followMetas type_) >>= \case
             IntV _ -> pure ()
             StringV _ -> pure ()
-            ClosureV _ -> undefined
+            ClosureV (MkClosure name body context) -> do
+                value <- lift $ liftEval $ skolemizeClosure (Just name) body context
+                go value
             TupleV arguments -> traverse_ go arguments
             Type -> pure ()
             Int -> pure ()
@@ -599,7 +611,7 @@ occursCheck meta type_ =
                 go domain
                 -- TODO: Rather than recomputing the codomain applied at a skolem at every occurs check,
                 -- maybe we should lazily store this in the data type and keep the cached results?
-                codomain <- lift $ skolemizePiClosure name codomainCore codomainContext
+                codomain <- lift $ liftEval $ skolemizeClosure name codomainCore codomainContext
                 go codomain
             Forall _ _ _ -> undefined
             SkolemApp _ arguments -> traverse_ go arguments
@@ -608,15 +620,15 @@ occursCheck meta type_ =
                     then throwError ()
                     else traverse_ go arguments
 
-skolemizePiClosure :: Maybe Name -> CoreExpr -> EvalContext -> Infer Type
-skolemizePiClosure mname codomainCore codomainContext = do
+skolemizeClosure :: Maybe Name -> CoreExpr -> EvalContext -> Eval Type
+skolemizeClosure mname codomainCore codomainContext = do
     codomainContext <- case mname of
         Nothing -> pure codomainContext
         Just name -> do
             codomainSkolem <- freshSkolem name
             skolemValue <- lazyValueM (SkolemApp codomainSkolem [])
             pure (define name skolemValue codomainContext)
-    liftEval (eval codomainContext codomainCore)
+    eval codomainContext codomainCore
 
 bind :: Loc -> MetaVar -> Type -> Infer ()
 bind loc metaVar type_ =
@@ -636,6 +648,7 @@ bind loc metaVar type_ =
 
 -- TODO: This happens to early. If meta variables are inserted later they will still be *values* so
 -- error messages are still wrong (and still rely on unsafePerformIO) :/
+
 {- | Fully quote a type, e.g. for error messages.
 Note that this also follows lazy `Quote`s inside CoreExprs
 -}
@@ -644,7 +657,9 @@ quoteFully type_ =
     followMetas type_ >>= \case
         IntV n -> pure $ CLiteral (IntLit n)
         StringV text -> pure $ CLiteral (StringLit text)
-        ClosureV closure -> undefined
+        ClosureV (MkClosure name body context) -> do
+            value <- liftEval $ skolemizeClosure (Just name) body context
+            quoteFully value
         TupleV arguments -> do
             quotedArguments <- traverse quoteFully arguments
             pure $ CTupleLiteral quotedArguments
@@ -656,12 +671,12 @@ quoteFully type_ =
             pure $ CTupleType quotedArguments
         Pi mname domain (codomainExpr, codomainEnv) -> do
             quotedDomain <- quoteFully domain
-            codomain <- skolemizePiClosure mname codomainExpr codomainEnv
+            codomain <- liftEval $ skolemizeClosure mname codomainExpr codomainEnv
             quotedCodomain <- quoteFully codomain
             pure $ CPi mname quotedDomain quotedCodomain
         Forall name domain (codomainExpr, codomainEnv) -> do
             quotedDomain <- quoteFully domain
-            codomain <- skolemizePiClosure (Just name) codomainExpr codomainEnv
+            codomain <- liftEval $ skolemizeClosure (Just name) codomainExpr codomainEnv
             quotedCodomain <- quoteFully codomain
             pure $ CForall name quotedDomain quotedCodomain
         SkolemApp (MkSkolem skolemName _) arguments -> do

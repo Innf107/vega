@@ -9,7 +9,6 @@ import Vega.Difflist
 
 import Data.Char qualified as Char
 import Data.Text qualified as Text
-import Data.Vector qualified as Vector
 
 import GHC.Show qualified as Show
 import Prelude qualified as Read (read)
@@ -43,6 +42,7 @@ data TokenClass
     | RPAREN
     | COMMA
     | SEMI
+    | PIPE
     | DOT
     | LET
     | CASE
@@ -209,6 +209,7 @@ lex = do
         , C "}" $ emit RBRACE
         , C "," $ emit COMMA
         , C ";" $ emit SEMI
+        , C "|" $ emit PIPE
         , C "->" $ emit ARROW
         , C "let" $ emit LET
         , C "case" $ emit CASE

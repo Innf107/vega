@@ -4,7 +4,6 @@ import Vega.Eval (CoreDeclaration)
 import Vega.Loc (HasLoc)
 import Vega.Prelude
 import Vega.Pretty
-import Vega.Syntax
 import Vega.Util (Untagged (..))
 
 import Vega.Infer qualified as Infer

@@ -27,16 +27,12 @@ module Vega.Syntax (
 
 import Vega.Prelude
 
+import Vega.Debug
 import Vega.Loc (HasLoc, Loc, getLoc)
 import Vega.Name
 import Vega.Pretty
-import Vega.Debug
 
-import GHC.Records (HasField (getField))
-import GHC.TypeLits (Symbol)
 import System.IO.Unsafe (unsafePerformIO)
-
-import Unsafe.Coerce
 
 data Pass = Parsed | Renamed
 
@@ -108,7 +104,7 @@ data CoreExprF context
   | CApp (CoreExprF context) (CoreExprF context)
   | -- Patterns are desugared in core
     CLambda Name (CoreExprF context)
-  | CCase (CoreExprF context) (Vector (CorePattern, CoreExprF context))
+  | CCase (CoreExprF context) (Vector (CorePattern Name, CoreExprF context))
   | CLiteral Literal
   | CTupleLiteral (Vector (CoreExprF context))
   | -- Statements are just desugared to let expressions
@@ -121,11 +117,12 @@ data CoreExprF context
   | CTupleType (Vector (CoreExprF context))
   | CQuote (ValueF context)
 
-data CorePattern
+data CorePattern subPattern
   = CVarPat Name
+  | CWildcardPat
   | CIntPat Integer
   | CStringPat Text
-  | CTuplePat (Vector Name)
+  | CTuplePat (Vector subPattern)
 
 data ValueF context
   = IntV Integer
@@ -170,7 +167,8 @@ instance Pretty (ValueF context) where
     Type -> constructorText "Type"
     Int -> constructorText "Int"
     String -> constructorText "String"
-    Tuple values -> constructorText "Tuple" <> lparen "(" <> intercalateMap (keyword ", ") pretty values <> rparen ")"
+    Tuple [] -> lparen "{" <> rparen "}"
+    Tuple values -> lparen "{" <+> intercalateMap (keyword ", ") pretty values <+> rparen "}"
     Pi Nothing domain (core, _context) ->
       lparen "(" <> pretty domain <+> keyword "->" <+> pretty core <> rparen ")"
     Pi (Just name) domain (core, _context) ->
@@ -251,7 +249,8 @@ instance Pretty (CoreExprF context) where
         <+> pretty codomain
         <> rparen ")"
     CMeta meta -> prettyMetaApp meta []
-    CTupleType arguments -> constructorText "Tuple" <> lparen "(" <> intercalateMap "," pretty arguments <> rparen ")"
+    CTupleType [] -> lparen "{" <> rparen "}"
+    CTupleType arguments -> lparen "{" <+> intercalateMap ", " pretty arguments <+> rparen "}"
     CQuote value_ -> pretty value_
 
 instance Pretty Literal where
@@ -272,4 +271,3 @@ instance Pretty Primop where
 type family XPrimop (p :: Pass) where
   XPrimop Parsed = Void
   XPrimop Renamed = ()
-

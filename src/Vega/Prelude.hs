@@ -6,6 +6,7 @@ module Vega.Prelude (
   mapAccumLM,
   findM,
   findMapM,
+  findMap,
   intercalate,
   intercalateMap,
   HSType,
@@ -15,9 +16,7 @@ module Vega.Prelude (
 import Control.Exception (assert)
 import Control.Monad.Except as Export (throwError)
 import Data.Kind qualified
-import Data.List qualified as List
-import Data.Text qualified as Text
-import Data.Unique as Export (Unique, hashUnique, newUnique)
+import Data.Unique as Export (Unique, hashUnique)
 import Relude as Export hiding (Type, intercalate, words)
 import Relude.Extra as Export
 
@@ -64,6 +63,10 @@ findMapM f foldable =
     )
     (pure Nothing)
     foldable
+
+findMap :: (Foldable f) => (a -> Maybe b) -> f a -> Maybe b
+findMap f foldable = coerce $ foldMap (First . f) foldable
+
 
 intercalate :: (Foldable f, Monoid m) => m -> f m -> m
 intercalate separator foldable =

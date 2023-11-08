@@ -7,7 +7,7 @@ module Vega.LazyM (
 
 import Vega.Prelude
 
-import Vega.MonadRef
+import Vega.Monad.Ref
 
 data LazyRef m a
     = Delayed (m a)

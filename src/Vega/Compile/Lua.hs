@@ -7,9 +7,11 @@ import Vega.Prelude
 import Vega.Syntax
 
 import Vega.Name qualified as Name
+
 -- TODO: We can technically use Eval for partial evaluation here!
 import Vega.Eval
 import Vega.Name (freshNameIO)
+import qualified Data.Vector as Vector
 
 newtype Compile a = MkCompile (IO a)
     deriving (Functor, Applicative, Monad)
@@ -26,45 +28,46 @@ compile declarations = runCompile do
     pure $ definitions <> "\n\n" <> intercalate "\n\n" declCode
 
 definitions :: Text
-definitions = unlines [
-        "function debugToString(x)"
-    ,   "    if type(x) == \"string\" then"
-    ,   "        return \"\\\"\" .. x .. \"\\\"\""
-    ,   "    elseif type(x) == \"table\" then"
-    ,   "        local arrayLike = true"
-    ,   "        for key, _ in pairs(x) do"
-    ,   "            if type(key) ~= \"number\" then"
-    ,   "                arrayLike = false"
-    ,   "                break"
-    ,   "            end"
-    ,   "        end"
-    ,   "        if arrayLike then"
-    ,   "            local str = \"(\""
-    ,   "            for i, value in ipairs(x) do"
-    ,   "                if (i ~= 1) then"
-    ,   "                    str = str .. \", \""
-    ,   "                end"
-    ,   "                str = str .. debugToString(value)"
-    ,   "            end"
-    ,   "            return str .. \")\""
-    ,   "        else"
-    ,   "            local isInitial = true"
-    ,   "            local str = \"{\""
-    ,   "            for key, value in pairs(x) do"
-    ,   "                if not isInitial then"
-    ,   "                    str = str .. \", \""
-    ,   "                end"
-    ,   "                isInitial = false"
-    ,   "                str = str .. key .. \" = \" .. debugToString(value)"
-    ,   "            end"
-    ,   "            return str .. \"}\""
-    ,   "        end"
-    ,   "    else"
-    ,   "        return tostring(x)"
-    ,   "    end"
-    ,   "end"
-    ,   "function debug(x) print(debugToString(x)) end"
-    ]
+definitions =
+    unlines
+        [ "function debugToString(x)"
+        , "    if type(x) == \"string\" then"
+        , "        return \"\\\"\" .. x .. \"\\\"\""
+        , "    elseif type(x) == \"table\" then"
+        , "        local arrayLike = true"
+        , "        for key, _ in pairs(x) do"
+        , "            if type(key) ~= \"number\" then"
+        , "                arrayLike = false"
+        , "                break"
+        , "            end"
+        , "        end"
+        , "        if arrayLike then"
+        , "            local str = \"(\""
+        , "            for i, value in ipairs(x) do"
+        , "                if (i ~= 1) then"
+        , "                    str = str .. \", \""
+        , "                end"
+        , "                str = str .. debugToString(value)"
+        , "            end"
+        , "            return str .. \")\""
+        , "        else"
+        , "            local isInitial = true"
+        , "            local str = \"{\""
+        , "            for key, value in pairs(x) do"
+        , "                if not isInitial then"
+        , "                    str = str .. \", \""
+        , "                end"
+        , "                isInitial = false"
+        , "                str = str .. key .. \" = \" .. debugToString(value)"
+        , "            end"
+        , "            return str .. \"}\""
+        , "        end"
+        , "    else"
+        , "        return tostring(x)"
+        , "    end"
+        , "end"
+        , "function debug(x) print(debugToString(x)) end"
+        ]
 
 compileDeclaration :: CoreDeclaration -> Compile Text
 compileDeclaration = \case
@@ -82,7 +85,18 @@ compileExpr = \case
     CLambda name body -> do
         bodyCode <- compileExpr body
         pure ("(function (" <> renderName name <> ") return " <> bodyCode <> " end)")
-    CCase{} -> undefined
+    CCase scrutinee cases -> do
+        name <- freshName "x"
+        scrutineeCode <- compileExpr scrutinee
+        caseCode <- compileCase name cases
+        pure
+            $ "((function ()\nlocal "
+            <> renderName name
+            <> " = "
+            <> scrutineeCode
+            <> "\n"
+            <> caseCode
+            <> "\n end)())"
     CLiteral literal -> pure (compileLiteral literal)
     CTupleLiteral arguments -> do
         argumentCodes <- traverse compileExpr arguments
@@ -91,7 +105,7 @@ compileExpr = \case
     CLet name expr rest -> do
         exprCode <- compileExpr expr
         restCode <- compileExpr rest
-        pure ("((function (" <> renderName name <> ") return "  <> restCode <> " end)(" <> exprCode <> "))")
+        pure ("((function (" <> renderName name <> ") return " <> restCode <> " end)(" <> exprCode <> "))")
     CPrimop primop -> pure (compilePrimop primop)
     -- Types are irrelevant at runtime so this should be fine
     CPi{} -> pure "nil"
@@ -99,6 +113,32 @@ compileExpr = \case
     CMeta{} -> undefined
     CTupleType{} -> pure "nil"
     CQuote{} -> undefined
+
+compileCase :: Name -> (Vector (CorePattern Name, CoreExpr)) -> Compile Text
+compileCase scrutinee cases = do
+    compiledCases <- traverse go cases
+    pure $ "    " <> fold compiledCases <> "\n        error(\"PANIC! non-exhaustive pattern match\")\n    end"
+  where
+    go (pattern, expr) = do
+        (matchCode, bindCode) <- compileMatch scrutinee pattern
+        exprCode <- compileExpr expr
+        pure
+            $ "if "
+            <> matchCode
+            <> " then\n"
+            <> bindCode
+            <> "        return " <> exprCode
+            <> "\n"
+            <> "    else"
+    compileMatch scrutinee = \case
+        CWildcardPat -> pure ("true", "")
+        CVarPat name -> pure ("true", "        local " <> renderName name <> " = " <> renderName scrutinee <> "\n")
+        CIntPat i -> pure (renderName scrutinee <> " == " <> show i, "")
+        CStringPat str -> pure (renderName scrutinee <> " == " <> show str, "")
+        CTuplePat subPatterns -> do
+            let bindings = Vector.imap (\i name -> "        local " <> renderName name <> " = " <> renderName scrutinee <> "[" <> show (i + 1) <> "]") subPatterns
+            pure ("true", intercalate "\n" bindings <> "\n")
+
 
 compileLiteral :: Literal -> Text
 compileLiteral = \case

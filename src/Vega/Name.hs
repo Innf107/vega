@@ -13,6 +13,7 @@ import Vega.Prelude
 
 import Vega.Pretty
 import Vega.Debug
+import Data.Unique (newUnique)
 
 import GHC.Show qualified as S
 import System.IO.Unsafe (unsafePerformIO)

@@ -14,12 +14,19 @@ module Vega.Eval (
 import Vega.Prelude
 import Vega.Syntax
 
+import Vega.Name qualified as Name
+
 import Vega.Primop
 
 import Vega.LazyM
-import Vega.MonadRef
+import Vega.Monad.Ref
+import Vega.Monad.Unique
 
 newtype Eval a = MkEval (IO a) deriving newtype (Functor, Applicative, Monad, MonadRef)
+
+instance MonadUnique Eval where
+    freshName text = MkEval $ freshName text
+    newUnique = MkEval newUnique 
 
 runEval :: Eval a -> IO a
 runEval (MkEval io) = io
@@ -78,7 +85,9 @@ eval context = \case
         value <- lazyM (eval context expr)
         eval (define name value context) rest
     CPrimop primop -> do
-        undefined
+        case primop of
+            -- debug calls are ersased at compile time
+            Debug -> pure (ClosureV (MkClosure (Name.internal "_") (CTupleLiteral []) context))
     CPi name type_ body -> do
         type_ <- eval context type_
         pure $ Pi name type_ (body, context)

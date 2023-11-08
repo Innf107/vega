@@ -1,4 +1,4 @@
-module Vega.MonadRef (MonadRef (..)) where
+module Vega.Monad.Ref (MonadRef (..)) where
 
 import Vega.Prelude
 
