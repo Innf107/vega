@@ -95,7 +95,7 @@ renameExpr scope = \case
                 "String" -> pure $ Literal loc StringTypeLit
                 "Type" -> pure $ Literal loc TypeLit
                 "Unit" -> pure $ ETupleType loc []
-                text | Just (primop, _) <- primopFromName text -> pure $ Primop loc () primop
+                text | Just (primop, _, _) <- primopFromName text -> pure $ Primop loc primop
                 _ -> do
                     emitError (UnboundVariable loc text)
                     pure $ Var loc (dummyName text)
@@ -128,6 +128,7 @@ renameExpr scope = \case
         expr <- renameExpr scope expr
         type_ <- renameExpr scope type_
         pure (Ascription loc expr type_)
+    Primop loc primop -> pure $ Primop loc primop
     EPi loc maybeText inputType outputType -> do
         inputType <- renameExpr scope inputType
         (name, boundScope) <- case maybeText of

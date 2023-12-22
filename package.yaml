@@ -33,7 +33,7 @@ dependencies:
 - array
 
 build-tools:
-- alex
+- happy
 
 ghc-options:
 - -Wall

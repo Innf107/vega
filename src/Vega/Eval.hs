@@ -21,12 +21,13 @@ import Vega.Primop
 import Vega.LazyM
 import Vega.Monad.Ref
 import Vega.Monad.Unique
+import Vega.Pretty
 
 newtype Eval a = MkEval (IO a) deriving newtype (Functor, Applicative, Monad, MonadRef)
 
 instance MonadUnique Eval where
     freshName text = MkEval $ freshName text
-    newUnique = MkEval newUnique 
+    newUnique = MkEval newUnique
 
 runEval :: Eval a -> IO a
 runEval (MkEval io) = io
@@ -84,10 +85,7 @@ eval context = \case
     CLet name expr rest -> do
         value <- lazyM (eval context expr)
         eval (define name value context) rest
-    CPrimop primop -> do
-        case primop of
-            -- debug calls are ersased at compile time
-            Debug -> pure (ClosureV (MkClosure (Name.internal "_") (CTupleLiteral []) context))
+    CPrimop primop -> do pure (ClosureV (PrimopClosure primop []))
     CPi name type_ body -> do
         type_ <- eval context type_
         pure $ Pi name type_ (body, context)
@@ -106,3 +104,22 @@ eval context = \case
 applyClosure :: Closure -> LazyM Eval Value -> Eval Value
 applyClosure (MkClosure name coreExpr context) argument =
     eval (define name argument context) coreExpr
+applyClosure (PrimopClosure primop previousArgs) argument
+    | length previousArgs + 1 < primopArity primop = do
+        argumentValue <- forceM argument
+        pure (ClosureV (PrimopClosure primop (previousArgs :|> argumentValue)))
+    | otherwise = do
+        argumentValue <- forceM argument
+        case (primop, previousArgs :|> argumentValue) of
+            (Debug, [_]) ->
+                -- debugs are just ignored at compile time I guess?
+                pure (TupleV [])
+            (Add, [arg1, arg2]) ->
+                pure $ case (arg1, arg2) of 
+                    (IntV x, IntV y) -> IntV (x + y)
+                    (undefined, y) -> undefined
+            (Subtract, [arg1, arg2]) ->
+                undefined
+            (Multiply, [arg1, arg2]) ->
+                undefined
+            (primop, args) -> error ("Invalid primop / argument combination: " <> show primop <> " (" <> prettyPlain (intercalateDoc ", " (fmap pretty args)) <> ")")

@@ -2,7 +2,6 @@ module Vega.Loc (
     Loc (..),
     HasLoc (..),
     merge,
-    prettyErrorLoc,
 ) where
 
 import Vega.Prelude
@@ -46,10 +45,6 @@ merge hasLoc1 hasLoc2 = do
             , endLine = loc2.endLine
             , endColumn = loc2.endColumn
             }
-
-prettyErrorLoc :: Loc -> Doc Ann -> Doc Ann
-prettyErrorLoc loc doc =
-    pretty loc <> emphasis ":" <+> errorDoc "ERROR:" <> "\n" <> doc
 
 instance Pretty Loc where
     pretty (Loc{fileName, startLine, startColumn}) =

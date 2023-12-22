@@ -152,6 +152,12 @@ compileLiteral = \case
 compilePrimop :: Primop -> Text
 compilePrimop = \case
     Debug -> "debug"
+    Add -> "(function (x, y) return x + y end)"
+    Subtract -> "(function (x, y) return x - y end)"
+    Multiply -> "(function (x, y) return x * y end)"
+    IntDivide -> "(function (x, y) return x // y end)"
+
+
 
 renderName :: Name -> Text
 renderName name = Name.original name <> show (hashUnique (Name.unique name))

@@ -29,6 +29,7 @@ library
       Vega.Debug
       Vega.Difflist
       Vega.Driver
+      Vega.Error
       Vega.Eval
       Vega.Infer
       Vega.LazyM
@@ -74,7 +75,7 @@ library
       RecursiveDo
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Werror=incomplete-uni-patterns -Werror=missing-methods
   build-tools:
-      alex
+      happy
   build-depends:
       array
     , base >=4.7 && <5
@@ -118,7 +119,7 @@ executable vega
       RecursiveDo
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Werror=incomplete-uni-patterns -Werror=missing-methods -threaded -rtsopts -with-rtsopts=-N
   build-tools:
-      alex
+      happy
   build-depends:
       array
     , base >=4.7 && <5
@@ -164,7 +165,7 @@ test-suite vega-test
       RecursiveDo
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Werror=incomplete-uni-patterns -Werror=missing-methods -threaded -rtsopts -with-rtsopts=-N
   build-tools:
-      alex
+      happy
   build-depends:
       array
     , base >=4.7 && <5

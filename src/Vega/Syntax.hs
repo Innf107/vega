@@ -56,14 +56,14 @@ data Expr (p :: Pass)
   | TupleLiteral Loc (Vector (Expr p))
   | Sequence Loc (Vector (Statement p))
   | Ascription Loc (Expr p) (SourceType p)
-  | Primop Loc (XPrimop p) Primop
+  | Primop Loc Primop
   | -- Types
     EPi Loc (Maybe (XName p)) (Expr p) (Expr p)
   | EForall Loc (XName p) (Expr p) (Expr p)
   | ETupleType Loc (Vector (Expr p))
   deriving (Generic)
 instance HasLoc (Expr p)
-instance (HeadConstructorArg (XName p), HeadConstructorArg (XPrimop p)) => ShowHeadConstructor (Expr p)
+instance (HeadConstructorArg (XName p)) => ShowHeadConstructor (Expr p)
 
 data Statement (p :: Pass)
   = Let Loc (Pattern p) (Expr p)
@@ -91,6 +91,10 @@ data Literal
 
 data Primop
   = Debug
+  | Add
+  | Subtract
+  | Multiply
+  | IntDivide
   deriving (Generic, Show, Eq, Ord)
 
 data CoreDeclarationF context
@@ -141,7 +145,9 @@ data ValueF context
     SkolemApp Skolem (Seq (ValueF context))
   | MetaApp (MetaVarF context) (Seq (ValueF context))
 
-data ClosureF context = MkClosure Name (CoreExprF context) context
+data ClosureF context
+  = MkClosure Name (CoreExprF context) context
+  | PrimopClosure Primop (Seq (ValueF context))
 
 data Skolem = MkSkolem Name Unique
 
@@ -164,11 +170,13 @@ instance Pretty (ValueF context) where
     TupleV values -> lparen "(" <> intercalateMap (keyword ", ") pretty values <> rparen ")"
     ClosureV (MkClosure name core _context) ->
       keyword "\\" <> ident name <+> keyword "->" <+> pretty core
+    ClosureV (PrimopClosure primop arguments) ->
+      pretty primop <> lparen "(" <> intercalateDoc (keyword ", ") (fmap pretty arguments) <> rparen ")"
     Type -> constructorText "Type"
     Int -> constructorText "Int"
     String -> constructorText "String"
-    Tuple [] -> lparen "{" <> rparen "}"
-    Tuple values -> lparen "{" <+> intercalateMap (keyword ", ") pretty values <+> rparen "}"
+    Tuple [] -> keyword "Unit"
+    Tuple values -> lparen "(" <> intercalateMap (keyword " ** ") pretty values <> rparen ")"
     Pi Nothing domain (core, _context) ->
       lparen "(" <> pretty domain <+> keyword "->" <+> pretty core <> rparen ")"
     Pi (Just name) domain (core, _context) ->
@@ -228,10 +236,10 @@ instance Pretty (CoreExprF context) where
     CLambda name result ->
       lparen "(" <> keyword "\\" <> ident name <+> keyword "->" <+> pretty result <> rparen ")"
     CCase{} -> undefined
-    CTupleLiteral arguments -> lparen "(" <> intercalateMap ", " pretty arguments
+    CTupleLiteral arguments -> lparen "(" <> intercalateMap (keyword ", ") pretty arguments <> rparen ")"
     CLiteral literal -> pretty literal
     CLet name body rest ->
-      lparen "(" <> keyword "let" <+> ident name <+> "=" <+> pretty body <> ";" <+> pretty rest <> rparen ")"
+      lparen "(" <> keyword "let" <+> ident name <+> keyword "=" <+> pretty body <> keyword ";" <+> pretty rest <> rparen ")"
     CPi Nothing domain codomain ->
       lparen "(" <> pretty domain <+> keyword "->" <+> pretty codomain <> rparen ")"
     CPi (Just name) domain codomain ->
@@ -249,8 +257,8 @@ instance Pretty (CoreExprF context) where
         <+> pretty codomain
         <> rparen ")"
     CMeta meta -> prettyMetaApp meta []
-    CTupleType [] -> lparen "{" <> rparen "}"
-    CTupleType arguments -> lparen "{" <+> intercalateMap ", " pretty arguments <+> rparen "}"
+    CTupleType [] -> keyword "Unit"
+    CTupleType arguments -> lparen "(" <> intercalateMap (keyword " ** ") pretty arguments <> rparen ")"
     CQuote value_ -> pretty value_
 
 instance Pretty Literal where
@@ -267,7 +275,7 @@ instance HeadConstructorArg Literal where
 instance Pretty Primop where
   pretty primop = identText $ case primop of
     Debug -> "debug"
-
-type family XPrimop (p :: Pass) where
-  XPrimop Parsed = Void
-  XPrimop Renamed = ()
+    Add -> "(+)"
+    Subtract -> "(-)"
+    Multiply -> "(*)"
+    IntDivide -> "(//)"

@@ -307,7 +307,7 @@ infer env expr = do
         ETupleType _loc arguments -> do
             argumentCores <- traverse (check env Type) arguments
             pure (Type, CTupleType argumentCores)
-        Primop _loc () primop -> do
+        Primop _loc primop -> do
             let (WrapPrimopType type_) = primopType primop
             pure (type_, CPrimop primop)
     trace Types ("infer:" <+> showHeadConstructor expr <+> keyword "=>" <+> pretty type_)
@@ -345,7 +345,17 @@ check env expectedType expr = do
             body <- Pattern.lowerCase [(corePattern, bodyCore)] varName
 
             pure (CLambda varName body)
-        Case _loc _scrutinee _cases -> undefined
+        Case _loc scrutinee cases -> do
+            (scrutineeType, scrutineeCore) <- infer env scrutinee
+
+            scrutineeVar <- freshName "x"
+
+            newCases <- forM cases \(pattern, body) -> do
+                (envTrans, corePattern) <- checkPattern env scrutineeType pattern
+                coreBody <- check (envTrans env) expectedType body
+
+                pure (corePattern, coreBody)
+            CLet scrutineeVar scrutineeCore <$> Pattern.lowerCase newCases scrutineeVar
         TupleLiteral loc arguments -> do
             argumentTypes <- splitTupleType loc expectedType (length arguments)
 
@@ -602,6 +612,8 @@ occursCheck meta type_ =
             ClosureV (MkClosure name body context) -> do
                 value <- lift $ liftEval $ skolemizeClosure (Just name) body context
                 go value
+            ClosureV (PrimopClosure _primop arguments) ->
+                traverse_ go arguments
             TupleV arguments -> traverse_ go arguments
             Type -> pure ()
             Int -> pure ()
@@ -660,6 +672,9 @@ quoteFully type_ =
         ClosureV (MkClosure name body context) -> do
             value <- liftEval $ skolemizeClosure (Just name) body context
             quoteFully value
+        ClosureV (PrimopClosure primop arguments) -> do
+            quotedArguments <- traverse quoteFully arguments
+            pure $ foldl' CApp (CPrimop primop) quotedArguments
         TupleV arguments -> do
             quotedArguments <- traverse quoteFully arguments
             pure $ CTupleLiteral quotedArguments

@@ -40,6 +40,7 @@ data TokenClass
     | RBRACE
     | LPAREN
     | RPAREN
+    | DOUBLESTAR
     | COMMA
     | SEMI
     | PIPE
@@ -47,6 +48,10 @@ data TokenClass
     | LET
     | CASE
     | FORALL
+    | PLUS
+    | MINUS
+    | STAR
+    | DOUBLESLASH
     | EOF
     deriving (Generic, Show)
 
@@ -207,6 +212,7 @@ lex = do
         , C ")" $ emit RPAREN
         , C "{" $ emit LBRACE
         , C "}" $ emit RBRACE
+        , C "**" $ emit DOUBLESTAR
         , C "," $ emit COMMA
         , C ";" $ emit SEMI
         , C "|" $ emit PIPE
@@ -215,6 +221,10 @@ lex = do
         , C "case" $ emit CASE
         , C "forall" $ emit FORALL
         , C "--" $ lexLineComment
+        , C "+" $ emit PLUS
+        , C "-" $ emit MINUS
+        , C "*" $ emit STAR
+        , C "//" $ emit DOUBLESLASH
         , C "\"\"\"" $ lexStringLiteral "\"\"\"" []
         , C "\"" $ lexStringLiteral "\"" []
         , C "\'\'\'" $ lexStringLiteral "\'\'\'" []

@@ -3,6 +3,7 @@ module Vega.Primop (
     primopDefinitions,
     primopFromName,
     primopType,
+    primopArity,
     ContextFromEmpty (..),
 ) where
 
@@ -16,34 +17,67 @@ class ContextFromEmpty context where
 
 newtype PrimopType = WrapPrimopType {type_ :: forall context. (ContextFromEmpty context) => ValueF context}
 
-primopDefinitions :: [(Text, Primop, PrimopType)]
+primopDefinitions :: [(Text, Primop, Int, PrimopType)]
 primopDefinitions =
     [
         ( "debug"
         , Debug
+        , 1
         , WrapPrimopType (forallV "a" Type \a -> CVar a --> unitType)
+        )
+    ,
+        ( "+"
+        , Add
+        , 2
+        , WrapPrimopType (Int +--> intType --> intType)
+        )
+    ,
+        ( "-"
+        , Subtract
+        , 2
+        , WrapPrimopType (Int +--> intType --> intType)
+        )
+    ,
+        ( "*"
+        , Multiply
+        , 2
+        , WrapPrimopType (Int +--> intType --> intType)
+        )
+    ,
+        ( "//"
+        , IntDivide
+        , 2
+        , WrapPrimopType (Int +--> intType --> intType)
         )
     ]
 
-primopNameMap :: Map Text (Primop, PrimopType)
-primopNameMap = fromList (map (\(name, primop, type_) -> (name, (primop, type_))) primopDefinitions)
+primopNameMap :: Map Text (Primop, Int, PrimopType)
+primopNameMap = fromList (map (\(name, primop, arity, type_) -> (name, (primop, arity, type_))) primopDefinitions)
 
-primopTypeMap :: Map Primop PrimopType
-primopTypeMap = fromList (map (\(_, primop, type_) -> (primop, type_)) primopDefinitions)
+primopTypeMap :: Map Primop (Int, PrimopType)
+primopTypeMap = fromList (map (\(_, primop, arity, type_) -> (primop, (arity, type_))) primopDefinitions)
 
-primopFromName :: Text -> Maybe (Primop, PrimopType)
+primopFromName :: Text -> Maybe (Primop, Int, PrimopType)
 primopFromName name = lookup name primopNameMap
 
 primopType :: Primop -> PrimopType
 primopType primop = case lookup primop primopTypeMap of
     Nothing -> error ("primop without definition: " <> show primop)
-    Just primopType -> primopType
+    Just (_arity, primopType) -> primopType
+
+primopArity :: Primop -> Int
+primopArity primop = case lookup primop primopTypeMap of
+    Nothing -> error ("primop without definition: " <> show primop)
+    Just (arity, _primopType) -> arity
 
 type_ :: CoreExprF context
 type_ = CLiteral TypeLit
 
 unitType :: CoreExprF context
 unitType = CTupleType (fromList [])
+
+intType :: CoreExprF context
+intType = CLiteral IntTypeLit
 
 forallV
     :: (ContextFromEmpty context)
@@ -62,3 +96,8 @@ forall textName type_ cont = do
 
 (-->) :: CoreExprF context -> CoreExprF context -> CoreExprF context
 x --> y = CPi Nothing x y
+infixr 1 -->
+
+(+-->) :: (ContextFromEmpty context) => ValueF context -> CoreExprF context -> ValueF context
+x +--> y = Pi Nothing x (y, emptyContext)
+infixr 0 +-->

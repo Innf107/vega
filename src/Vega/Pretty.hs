@@ -2,10 +2,12 @@
 
 module Vega.Pretty (
     Ann,
+    plain,
     identText,
     constructorText,
     skolemText,
     number,
+    numberDoc,
     emphasis,
     errorDoc,
     quote,
@@ -60,6 +62,9 @@ data Ann
     | RParen
     | Meta
 
+plain :: Text -> Doc Ann
+plain = PP.pretty
+
 identText :: Text -> Doc Ann
 identText = PP.annotate Ident . PP.pretty
 
@@ -71,6 +76,9 @@ skolemText = PP.annotate Skolem . PP.pretty
 
 number :: (Num a, Show a) => a -> Doc Ann
 number = PP.annotate Number . PP.pretty . show @Text
+
+numberDoc :: Doc Ann -> Doc Ann
+numberDoc = PP.annotate Number
 
 emphasis :: Text -> Doc Ann
 emphasis = PP.annotate Emphasis . PP.pretty

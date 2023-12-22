@@ -3,12 +3,13 @@
 module Vega.Parser where
 
 import Prelude
-import Vega.Prelude (Generic, fromList, Text, Vector)
+import Vega.Prelude (Generic, fromList, Text, Vector, Seq((:|>), (:<|)))
 import Vega.Lexer (Token(..), TokenClass(..))
 import Vega.Syntax
 
 import Vega.Loc (HasLoc(..), merge)
 import Vega.Pretty
+import Vega.Util (viaList)
 }
 
 %name parse main
@@ -30,12 +31,17 @@ import Vega.Pretty
     ')'             { MkToken RPAREN _ }
     '{'             { MkToken LBRACE _ }
     '}'             { MkToken RBRACE _ }
+    '**'            { MkToken DOUBLESTAR _ }
     ','             { MkToken COMMA _ }
     ';'             { MkToken SEMI _ }
     '|'             { MkToken PIPE _ }
     'let'           { MkToken LET _ }
     'case'          { MkToken CASE _ }
     'forall'        { MkToken FORALL _ }
+    '+'             { MkToken PLUS _ }
+    '-'             { MkToken MINUS _ }
+    '*'             { MkToken STAR _ }
+    '//'            { MkToken DOUBLESLASH _ }
     eof             { MkToken EOF _ }
 
 
@@ -87,8 +93,30 @@ expr : expr_ascription '->' expr            { EPi (merge $1 $3) Nothing $1 $3 }
      | expr_ascription                      { $1 }
 
 expr_ascription :: { Expr Parsed }
-expr_ascription : expr_app ':' expr     { Ascription (merge $1 $3) $1 $3 }
-                | expr_app              { $1 }
+expr_ascription : expr_op_tuple ':' expr     { Ascription (merge $1 $3) $1 $3 }
+                | expr_op_tuple              { $1 }
+
+expr_op_tuple :: { Expr Parsed }
+expr_op_tuple : tuple_arguments { 
+    case $1 of
+        (first :<| (_ :|> last)) -> TupleLiteral (merge first last) (viaList $1)
+        [first] -> first
+        [] -> error "expr_op_tuple parsed an empty list"
+    }
+
+tuple_arguments :: { Seq (Expr Parsed) }
+tuple_arguments : expr_op_add '**' tuple_arguments  { $1 :<| $3 }
+                | expr_op_add                       { [$1] }
+
+expr_op_add :: { Expr Parsed }
+expr_op_add : expr_op_add '+' expr_op_mul        { binop (merge $1 $3) $2 $1 Add $3 }
+           | expr_op_add '-' expr_op_mul         { binop (merge $1 $3) $2 $1 Subtract $3 }
+           | expr_op_mul                         { $1 }
+
+expr_op_mul :: { Expr Parsed }
+expr_op_mul : expr_op_mul '*' expr_app        { binop (merge $1 $3) $2 $1 Multiply $3 }
+            | expr_op_mul '//' expr_app       { binop (merge $1 $3) $2 $1 IntDivide $3 }
+            | expr_app                     { $1 }
 
 expr_app :: { Expr Parsed }
 expr_app : expr_app expr_leaf   { App (merge $1 $2) $1 $2 }
@@ -101,13 +129,12 @@ expr_leaf : identLoc                                    { Var (fst $1) (snd $1) 
           | '(' expr ',' sepTrailingList(',', expr) ')' { TupleLiteral (merge $1 $5) (fromList ($2 : $4)) }
           | '(' ident ':' expr ')' '->' expr            { EPi (merge $1 $7) (Just $2) $4 $7 }
           | '\\' many1(pattern) '->' expr               { foldr (\pattern expr -> Lambda (merge $1 $4) pattern expr) $4 $2 }
-          | 'case' expr '{' 
-                sepTrailing(';', caseBranch) 
+          | 'case' expr_leaf '{' 
+                sepTrailing(';', caseBranch)
             '}'                                         { Case (merge $1 $5) $2 $4 }
           | literal                                     { Literal (fst $1) (snd $1) }
           | '{' sepTrailing(';', statement) '}'         { Sequence (merge $1 $3) $2 }
           -- Not sure about this syntax yet to be honest
-          | '{' sepTrailing(',', type) '}'              { ETupleType (merge $1 $3) $2 }
           | 'forall' many1(forallVar) '.' expr          { foldr (\(name, type_) rest -> EForall (merge $1 $4) name type_ rest) $4 $2 }
 
 forallVar :: { (Text, Expr Parsed) }
@@ -138,12 +165,17 @@ caseBranch : pattern '->' expr { ($1, $3) }
 
 pattern :: { Pattern Parsed }
 pattern : identLoc                                                      { VarPat (fst $1) (snd $1) }
+        | intLoc                                                        { IntPat (fst $1) (snd $1) }
+        | stringLoc                                                     { StringPat (fst $1) (snd $1) }
         | pattern '|' pattern                                           { OrPat (merge $1 $3) $1 $3 }
         | '(' pattern ')'                                               { $2 }
         | '(' pattern ',' pattern ')'                                   { TuplePat (merge $1 $5) [$2, $4] }
         | '(' pattern ',' pattern ',' sepTrailingList(',', pattern) ')' { TuplePat (merge $1 $7) (fromList ($2 : $4 : $6)) }
 
 {
+binop :: HasLoc opLoc => Loc -> opLoc -> Expr Parsed -> Primop -> Expr Parsed -> Expr Parsed
+binop loc op arg1 primop arg2 = App loc (App loc (Primop (getLoc op) primop) arg1) arg2
+
 data ParseError
     = MismatchedDeclarationName { loc :: Loc, signature :: Text, definition :: Text }
     | ParseError Loc
@@ -168,6 +200,5 @@ parseError error = MkParseM (Left error)
 
 parseErrorFrom :: [Token] -> ParseM a
 parseErrorFrom [] = undefined
-parseErrorFrom (token : _) = do
-    parseError (ParseError (getLoc token))
+parseErrorFrom (token : _) = parseError (ParseError (getLoc token))
 }
