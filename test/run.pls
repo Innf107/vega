@@ -125,7 +125,7 @@ for(testFiles, \file -> {
 })
 
 if errors! == 0 then {
-    print("\e[32mAll tests passed successfully\e[0m")
+    print("\e[1m\e[32mAll tests passed successfully\e[0m")
 } else {
     print("\e[31m\e[1m${errors!}/" ~ "${length(testFiles)} Tests failed\e[0m")
 }

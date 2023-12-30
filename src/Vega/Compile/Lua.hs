@@ -152,10 +152,10 @@ compileLiteral = \case
 compilePrimop :: Primop -> Text
 compilePrimop = \case
     Debug -> "debug"
-    Add -> "(function (x, y) return x + y end)"
-    Subtract -> "(function (x, y) return x - y end)"
-    Multiply -> "(function (x, y) return x * y end)"
-    IntDivide -> "(function (x, y) return x // y end)"
+    Add -> "(function (x) return function (y) return x + y end end)"
+    Subtract -> "(function (x) return function (y) return x - y end end)"
+    Multiply -> "(function (x) return function (y) return x * y end end)"
+    IntDivide -> "(function (x) return function (y) return x // y end end)"
 
 
 
