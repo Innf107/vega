@@ -1,0 +1,14 @@
+-- EXPECT: (1, 2, 3, 4)
+-- From "Luc Maranget. 2008. Compiling pattern matching to good decision trees https://doi.org/10.1145/1411304.1411311"
+
+f : Bool -> Bool -> Bool -> Bool;
+f (x, y, z) = case (x, y, z) {
+    (_,     False, True)  -> 1;
+    (False, True,  _)     -> 2;
+    (_,     _,     False) -> 3;
+    (_,     _,     True)  -> 4;
+};
+
+main : Unit;
+main = debug((f(True, False, True), f(False, True, True), f(True, True, False), f(True, True, True)));
+

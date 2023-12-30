@@ -15,8 +15,9 @@ import Options.Generic
 import System.IO (hIsTerminalDevice)
 
 import System.FilePath qualified as FilePath
+import Vega.Pretty (PrettyANSIIConfig (MkPrettyANSIIConfig), defaultPrettyANSIIConfig)
 
-data Flags = Flags {trace :: [Text]}
+data Flags = Flags {trace :: [Text], includeUnique :: Bool}
     deriving (Show, Generic)
 
 instance ParseRecord Flags
@@ -34,13 +35,14 @@ instance ParseRecord ArgumentsAndFlags where
     parseRecord = MkArgumentsAndFlags <$> parseRecord <*> parseRecord
 
 parseTraceConfig :: IO () -> [Text] -> IO TraceConfig
-parseTraceConfig help = go (MkTraceConfig{types = False, unify = False, subst = False})
+parseTraceConfig help = go (MkTraceConfig{types = False, unify = False, subst = False, patterns = False})
   where
     go config = \case
         [] -> pure config
         "types" : rest -> go (config{types = True}) rest
         "unify" : rest -> go (config{unify = True}) rest
         "subst" : rest -> go (config{subst = True}) rest
+        "patterns" : rest -> go (config{patterns = True}) rest
         category : _ -> do
             putTextLn ("Invalid trace category: '" <> category <> "'. Valid categories include: " <> intercalate ", " (getRecordFields @TraceConfig) <> "\n")
             help
@@ -54,6 +56,7 @@ main = do
         Compile file -> do
             traceConfig <- parseTraceConfig help flags.trace
 
+            let ?config = defaultPrettyANSIIConfig{Vega.Pretty.includeUnique = flags.includeUnique}
             renderStderr <-
                 hIsTerminalDevice stderr <&> \case
                     False -> prettyPlain

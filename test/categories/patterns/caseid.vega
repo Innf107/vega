@@ -1,0 +1,10 @@
+-- EXPECT: 5
+
+f : Int -> Int;
+f(x) = case x {
+    1 -> 1;
+    x -> x;
+};
+
+main : Unit;
+main = debug(f(5));

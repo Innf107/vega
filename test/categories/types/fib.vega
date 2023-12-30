@@ -1,8 +1,10 @@
--- EXPECT: 5
+-- EXPECT: 89
 fib : Int -> Int;
 fib(x) = case x {
    0 -> 0;
    1 -> 1;
    n -> fib(n - 1) + fib(n - 2)
-}
+};
 
+main : Unit;
+main = debug(fib(11));

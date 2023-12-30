@@ -13,6 +13,7 @@ module Vega.Pretty (
     quote,
     note,
     keyword,
+    withUnique,
     lparen,
     rparen,
     meta,
@@ -20,6 +21,8 @@ module Vega.Pretty (
     Pretty (..),
     PP.Doc,
     renderPlain,
+    PrettyANSIIConfig (..),
+    defaultPrettyANSIIConfig,
     renderANSII,
     prettyPlain,
     prettyANSII,
@@ -39,7 +42,7 @@ module Vega.Pretty (
 
 import Vega.Prelude
 
-import Vega.Util (Untagged (..))
+import Vega.Util (Fix (MkFix), Untagged (..))
 
 import Data.List ((!!))
 import Prettyprinter (Doc)
@@ -61,6 +64,7 @@ data Ann
     | LParen
     | RParen
     | Meta
+    | Unique Unique
 
 plain :: Text -> Doc Ann
 plain = PP.pretty
@@ -95,6 +99,9 @@ note = PP.annotate Note . PP.pretty
 keyword :: Text -> Doc Ann
 keyword = PP.annotate Keyword . PP.pretty
 
+withUnique :: Unique -> Doc Ann -> Doc Ann
+withUnique unique doc = PP.annotate (Unique unique) doc
+
 lparen :: Text -> Doc Ann
 lparen = PP.annotate LParen . PP.pretty
 
@@ -110,6 +117,9 @@ literal = PP.pretty
 class Pretty a where
     pretty :: a -> Doc Ann
 
+instance (forall a. (Pretty a) => Pretty (f a)) => Pretty (Fix f) where
+    pretty (MkFix x) = pretty x
+
 renderPlain :: PP.SimpleDocTree Ann -> Text
 renderPlain = PP.renderSimplyDecorated id $ \ann x -> case ann of
     Ident -> x
@@ -124,8 +134,18 @@ renderPlain = PP.renderSimplyDecorated id $ \ann x -> case ann of
     LParen -> x
     RParen -> x
     Meta -> x
+    Unique _ -> x
 
-renderANSII :: PP.SimpleDocTree Ann -> Text
+data PrettyANSIIConfig = MkPrettyANSIIConfig
+    { includeUnique :: Bool
+    }
+defaultPrettyANSIIConfig :: PrettyANSIIConfig
+defaultPrettyANSIIConfig =
+    MkPrettyANSIIConfig
+        { includeUnique = False
+        }
+
+renderANSII :: (?config :: PrettyANSIIConfig) => PP.SimpleDocTree Ann -> Text
 renderANSII =
     flip evalState 0 . PP.renderSimplyDecoratedA @(State Int) pure \ann textA -> do
         text <- textA
@@ -146,13 +166,17 @@ renderANSII =
                 colorIndex <- state (\i -> ((i - 1) `mod` (length parenColors), (i - 1) `mod` (length parenColors)))
                 pure $ parenColors !! colorIndex <> text <> "\ESC[0m\STX"
             Meta -> pure $ "\ESC[38;5;195m\STX" <> text <> "\ESC[0m\STX"
+            Unique unique
+                | ?config.includeUnique ->
+                    pure $ text <> "\ESC[38;5;159m\STX" <> show (hashUnique unique) <> "\ESC[0m\STX"
+                | otherwise -> pure text
   where
     parenColors = ["\ESC[38;5;46m\STX", "\ESC[38;5;50m\STX", "\ESC[38;5;191m\STX"]
 
 prettyPlain :: Doc Ann -> Text
 prettyPlain doc = renderPlain (PP.treeForm (PP.layoutSmart PP.defaultLayoutOptions doc))
 
-prettyANSII :: Doc Ann -> Text
+prettyANSII :: (?config :: PrettyANSIIConfig) => Doc Ann -> Text
 prettyANSII doc = renderANSII (PP.treeForm (PP.layoutSmart PP.defaultLayoutOptions doc))
 
 showPlain :: (Pretty a) => a -> Text

@@ -21,7 +21,11 @@ import Vega.Primop
 import Vega.LazyM
 import Vega.Monad.Ref
 import Vega.Monad.Unique
+import Vega.Name qualified as Name
+import Vega.Prelude
 import Vega.Pretty
+import Vega.Primop
+import Vega.Syntax
 
 newtype Eval a = MkEval (IO a) deriving newtype (Functor, Applicative, Monad, MonadRef)
 
@@ -33,8 +37,11 @@ runEval :: Eval a -> IO a
 runEval (MkEval io) = io
 
 type Value = ValueF EvalContext
+
 type CoreDeclaration = CoreDeclarationF EvalContext
+
 type CoreExpr = CoreExprF EvalContext
+
 type Closure = ClosureF EvalContext
 
 data EvalContext = MkEvalContext
@@ -115,7 +122,7 @@ applyClosure (PrimopClosure primop previousArgs) argument
                 -- debugs are just ignored at compile time I guess?
                 pure (TupleV [])
             (Add, [arg1, arg2]) ->
-                pure $ case (arg1, arg2) of 
+                pure $ case (arg1, arg2) of
                     (IntV x, IntV y) -> IntV (x + y)
                     (undefined, y) -> undefined
             (Subtract, [arg1, arg2]) ->

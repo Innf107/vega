@@ -21,6 +21,7 @@ data Category
     = Types
     | Unify
     | Subst
+    | Patterns
     deriving (Show)
 
 class MonadTrace m where
@@ -35,6 +36,7 @@ data TraceConfig = MkTraceConfig
     { types :: Bool
     , unify :: Bool
     , subst :: Bool
+    , patterns :: Bool
     } deriving (Generic)
 
 traceEnabled :: Category -> TraceConfig -> Bool
@@ -42,6 +44,7 @@ traceEnabled category config = case category of
     Types -> config.types
     Unify -> config.unify
     Subst -> config.subst
+    Patterns -> config.patterns
 
 traceStderrAction :: (Doc Ann -> Text) -> TraceConfig -> TraceAction IO
 traceStderrAction render config = MkTraceAction \category doc ->

@@ -7,13 +7,14 @@ module Vega.Name (
     ident,
     constructor,
     skolem,
+    PrettyIdent (..),
 ) where
 
 import Vega.Prelude
 
-import Vega.Pretty
-import Vega.Debug
 import Data.Unique (newUnique)
+import Vega.Debug
+import Vega.Pretty
 
 import GHC.Show qualified as S
 import System.IO.Unsafe (unsafePerformIO)
@@ -44,9 +45,14 @@ freshNameIO original = do
     unique <- newUnique
     pure (MkName original unique)
 
--- TODO: flag to include unique (also: disambiguation?)
 ident :: Name -> Doc Ann
-ident = identText . original
+ident name = withUnique (unique name) $ identText (original name)
+
+newtype PrettyIdent = MkPrettyIdent Name
+    deriving newtype (Eq, Ord)
+
+instance Pretty PrettyIdent where
+    pretty = coerce ident
 
 constructor :: Name -> Doc Ann
 constructor = constructorText . original
@@ -58,4 +64,4 @@ instance S.Show Name where
     show = toString . original
 
 instance HeadConstructorArg Name where
-  headConstructorArg = ident
+    headConstructorArg = ident
