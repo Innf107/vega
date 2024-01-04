@@ -252,7 +252,19 @@ infer env expr = do
             body <- Pattern.lowerCase [(bodyPattern, bodyCore)] coreName
 
             pure (Pi Nothing varType (CQuote resultType, evalContext env), CLambda coreName body)
-        Case loc scrutinee cases -> undefined
+        Case _loc scrutinee cases -> do
+            (scrutineeType, scrutineeCore) <- infer env scrutinee
+
+            scrutineeVar <- freshName "x"
+
+            resultType <- MetaApp <$> freshAnonymousMeta <*> pure []
+            newCases <- forM cases \(pattern, body) -> do
+                (envTrans, corePattern) <- checkPattern env scrutineeType pattern
+                coreBody <- check (envTrans env) resultType body
+
+                pure (corePattern, coreBody)
+            coreCases <- Pattern.lowerCase newCases scrutineeVar
+            pure (resultType, CLet scrutineeVar scrutineeCore coreCases)
         TupleLiteral _loc arguments -> do
             (argumentTypes, argumentCores) <- munzip <$> traverse (infer env) arguments
             pure (Tuple argumentTypes, CTupleLiteral argumentCores)
@@ -268,10 +280,12 @@ infer env expr = do
         Sequence _loc (Vector.unsnoc -> Just (statements, RunExpr _ expr)) -> do
             (env, coreTransformers) <- mapAccumLM checkStatement env statements
             (finalType, finalCore) <- infer env expr
-            pure (finalType, compose coreTransformers finalCore)
+            core <- composeM coreTransformers finalCore
+            pure (finalType, core)
         Sequence _loc statements -> do
             (_env, coreTransformers) <- mapAccumLM checkStatement env statements
-            pure (Tuple [], compose coreTransformers (CTupleLiteral []))
+            core <- composeM coreTransformers (CTupleLiteral [])
+            pure (Tuple [], core)
         Ascription _loc expr typeExpr -> do
             typeCore <- check env Type typeExpr
             type_ <- liftEval $ eval (evalContext env) typeCore
@@ -366,43 +380,56 @@ check env expectedType expr = do
         Sequence _ (Vector.unsnoc -> Just (statements, RunExpr _ expr)) -> do
             (env, coreTransformers) <- mapAccumLM checkStatement env statements
             finalCore <- check env expectedType expr
-            pure (compose coreTransformers finalCore)
+
+            composeM coreTransformers finalCore
         Sequence _ statements -> do
-            (_env, coreTransformers) <- mapAccumLM checkStatement env statements
-            pure (compose coreTransformers (CTupleLiteral []))
+            (_env, coreTransformersM) <- mapAccumLM checkStatement env statements
+            composeM coreTransformersM (CTupleLiteral [])
         Ascription{} -> deferToInference
         Primop{} -> deferToInference
         EPi{} -> deferToInference
         EForall{} -> deferToInference
         ETupleType{} -> deferToInference
 
-checkStatement :: Env -> Statement Renamed -> Infer (Env, CoreExpr -> CoreExpr)
+checkStatement :: Env -> Statement Renamed -> Infer (Env, CoreExpr -> Infer CoreExpr)
 checkStatement env = \case
     RunExpr _ expr -> do
         -- TODO: Keep some context to mention in error messages that this was expected to return ()
         -- because it is run as a statement
         coreExpr <- check env (Tuple []) expr
         coreName <- freshName "_"
-        pure (env, \coreCont -> CLet coreName coreExpr coreCont)
-    Let{} -> undefined
+        pure (env, \coreCont -> pure $ CLet coreName coreExpr coreCont)
+    Let _loc pattern body -> do
+        (patternType, envTrans, corePattern) <- inferPattern env pattern
+
+        -- TODO: dependent type things? ugh i guess just updating the env could do that?
+        bodyCore <- check (envTrans env) patternType body
+
+        let coreExpr cont = do
+                -- TODO: I'm really not happy about the unnecessary let binding here
+                coreVarName <- freshName "x"
+                caseCore <- Pattern.lowerCase [(corePattern, cont)] coreVarName
+                pure (CLet coreVarName bodyCore caseCore)
+
+        pure (envTrans env, coreExpr)
     LetFunction _ name mtype patterns body -> do
-        (ownType, resultType, envTransformer, coreTransformers) <- case mtype of
+        (ownType, resultType, envTransformer, corePatterns) <- case mtype of
             Just type_ -> do
                 core <- check env Type type_
                 ownType <- liftEval (eval (evalContext env) core)
 
                 innerType <- skolemize ownType
                 (patternTypes, resultType) <- splitFunctionTypes innerType (fmap getLoc patterns)
-                (envTransformers, coreTransformers) <-
+                (envTransformers, corePatterns) <-
                     munzip
                         <$> Vector.zipWithM (checkPattern env) (fromList $ toList patternTypes) patterns
-                pure (ownType, resultType, compose envTransformers, coreTransformers)
+                pure (ownType, resultType, compose envTransformers, corePatterns)
             Nothing -> do
-                (patternTypes, envTransformers, coreTransformers) <- Vector.unzip3 <$> traverse (inferPattern env) patterns
+                (patternTypes, envTransformers, corePatterns) <- Vector.unzip3 <$> traverse (inferPattern env) patterns
                 resultMeta <- freshAnonymousMeta
                 let resultType = MetaApp resultMeta []
                 let ownType = foldr (\domain codomain -> Pi Nothing domain (CQuote codomain, emptyContext)) resultType patternTypes
-                pure (ownType, resultType, compose envTransformers, coreTransformers)
+                pure (ownType, resultType, compose envTransformers, corePatterns)
         let addLambdas core = do
                 foldrM
                     ( \pattern core -> do
@@ -411,7 +438,7 @@ checkStatement env = \case
                         pure $ CLambda varName body
                     )
                     core
-                    coreTransformers
+                    corePatterns
         let updatedEnv = envTransformer env
         mdo
             (core, value) <- do
@@ -421,7 +448,7 @@ checkStatement env = \case
 
                 core <- addLambdas =<< check bodyEnv resultType body
                 pure (core, value)
-            pure (extendVariable name ownType value env, CLet name core)
+            pure (extendVariable name ownType value env, pure . CLet name core)
 
 inferPattern :: Env -> Pattern Renamed -> Infer (Type, Env -> Env, CorePattern (Fix CorePattern))
 inferPattern env = \case

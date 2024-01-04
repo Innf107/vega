@@ -70,6 +70,7 @@ decomposeWildcard scrutinee matrix = Vector.mapMaybe decomposeRow matrix
         Just (CStringPat _, _) -> Nothing
         Just (CTuplePat _, _) -> Nothing
 
+-- TODO: does this duplicate the body? it really shouldn't!
 lowerCase :: forall m. (MonadUnique m, MonadTrace m) => (Vector (CorePattern (Fix CorePattern), CoreExpr)) -> Name -> m CoreExpr
 lowerCase branches scrutinee = go (fmap (\(pattern, expr) -> ([pattern], expr)) branches) [scrutinee]
   where

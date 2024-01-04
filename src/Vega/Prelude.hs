@@ -3,6 +3,7 @@ module Vega.Prelude (
   assert,
   assertM,
   compose,
+  composeM,
   mapAccumLM,
   findM,
   findMapM,
@@ -33,6 +34,9 @@ assertM cond = assert cond (pure ())
 
 compose :: (Foldable f) => f (a -> a) -> a -> a
 compose foldable = appEndo $ foldMap Endo foldable
+
+composeM :: (Foldable f, Monad m) => f (a -> m a) -> a -> m a
+composeM foldable = foldr (\f rest -> f >=> rest) pure foldable 
 
 mapAccumLM :: (Traversable t, Monad m) => (s -> a -> m (s, b)) -> s -> t a -> m (s, t b)
 mapAccumLM f initial traversable = fmap swap $ runStateT (go traversable) initial

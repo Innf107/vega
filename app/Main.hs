@@ -12,7 +12,7 @@ import Vega.Compile.Lua qualified as Lua
 
 import Options.Generic
 
-import System.IO (hIsTerminalDevice)
+import System.IO (hIsTerminalDevice, hPutStrLn)
 
 import System.FilePath qualified as FilePath
 import Vega.Pretty (PrettyANSIIConfig (MkPrettyANSIIConfig), defaultPrettyANSIIConfig)

@@ -227,6 +227,10 @@ prettyApp type_ arguments =
 instance Pretty Skolem where
     pretty (MkSkolem name _) = skolem name
 
+instance Pretty (CoreDeclarationF context) where
+    pretty = \case
+        CDefineVar name body -> ident name <+> keyword "=" <+> pretty body
+
 -- TODO: PRECEDEEEENCE
 instance Pretty (CoreExprF context) where
     pretty = \case
@@ -239,7 +243,8 @@ instance Pretty (CoreExprF context) where
             keyword "case"
                 <+> pretty scrutinee
                 <+> keyword "of"
-                <> indent 2
+                <> indent
+                    2
                     ( align
                         $ "\n"
                         <> vsep

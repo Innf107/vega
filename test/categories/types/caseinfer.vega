@@ -1,0 +1,9 @@
+-- EXPECT: 5
+f : Int -> Int;
+f(x) = {
+    let y = case x { 1 -> 1; x -> x };
+    y
+};
+
+main : Unit;
+main = debug(f(5));
