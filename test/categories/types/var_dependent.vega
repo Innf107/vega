@@ -1,0 +1,10 @@
+-- EXPECT: 5
+
+x : Type;
+x = Int;
+
+y : x;
+y = 5;
+
+main : Unit;
+main = debug(y);

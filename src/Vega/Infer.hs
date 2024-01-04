@@ -399,6 +399,17 @@ checkStatement env = \case
         coreExpr <- check env (Tuple []) expr
         coreName <- freshName "_"
         pure (env, \coreCont -> pure $ CLet coreName coreExpr coreCont)
+    -- we include a special case for variable patterns that are meant to be transparent
+    -- TODO: shouldn't non-variable patterns also be transparent?
+    Let _loc (VarPat _varLoc varName) body -> do
+        mdo
+            (bodyCore, value, updatedEnv) <- do
+                (type_, bodyCore) <- infer env body
+                let updatedEnv = extendVariable varName type_ value env
+                value <- lazyM (eval (evalContext updatedEnv) bodyCore)
+                pure (bodyCore, value, updatedEnv)
+
+            pure (updatedEnv, pure . CLet varName bodyCore)
     Let _loc pattern body -> do
         (patternType, envTrans, corePattern) <- inferPattern env pattern
 
