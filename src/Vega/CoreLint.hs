@@ -64,7 +64,7 @@ lintDeclaration env (CDefineVar name expr) = do
 
 lintExpr :: Env -> CoreExpr -> Lint ()
 lintExpr env = \case
-    CVar name -> checkVar env name
+    CVar name -> checkVar emptyEnv name
     CApp funExpr argExpr -> do
         lintExpr env funExpr
         lintExpr env argExpr

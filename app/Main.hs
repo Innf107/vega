@@ -12,10 +12,7 @@ import Vega.Compile.Lua qualified as Lua
 
 import Options.Generic
 
-import System.IO (hIsTerminalDevice, hPutStrLn)
-
-import System.FilePath qualified as FilePath
-import Vega.Pretty (PrettyANSIIConfig (MkPrettyANSIIConfig), defaultPrettyANSIIConfig)
+import System.IO (hIsTerminalDevice)
 
 import qualified Data.Text.IO as Text
 
@@ -82,13 +79,13 @@ main = do
             (coreOrErrors, warnings) <- Driver.parseRenameTypeCheck file contents
 
             for_ warnings \warning -> do
-                putTextLn (renderStdout (pretty warning))
+                Text.hPutStrLn stderr (renderStderr (pretty warning))
 
             case coreOrErrors of
                 Left errors -> do
                     for_ errors \error -> do
                         doc <- prettyErrorLoc (getLoc error) (pretty error)
-                        Text.hPutStrLn stderr (renderStdout doc)
+                        putTextLn (renderStdout doc)
                     exitFailure
                 Right core -> do
                     luaCode <- Lua.compile core
