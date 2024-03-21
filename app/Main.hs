@@ -14,9 +14,9 @@ import Options.Generic
 
 import System.IO (hIsTerminalDevice)
 
-import qualified Data.Text.IO as Text
+import Data.Text.IO qualified as Text
 
-data Flags = Flags {trace :: [Text], includeUnique :: Bool, coreLint :: Bool}
+data Flags = Flags {trace :: [Text], includeUnique :: Bool, skipCoreLint :: Bool, lintError :: Bool}
     deriving (Show, Generic)
 
 instance ParseRecord Flags
@@ -31,7 +31,10 @@ data ArgumentsAndFlags = MkArgumentsAndFlags {flags :: Flags, arguments :: Argum
     deriving (Show, Generic)
 
 instance ParseRecord ArgumentsAndFlags where
-    parseRecord = MkArgumentsAndFlags <$> parseRecord <*> parseRecord
+    parseRecord =
+        MkArgumentsAndFlags
+            <$> parseRecordWithModifiers lispCaseModifiers
+            <*> parseRecordWithModifiers lispCaseModifiers
 
 parseTraceConfig :: IO () -> [Text] -> IO TraceConfig
 parseTraceConfig help = go (MkTraceConfig{types = False, unify = False, subst = False, patterns = False})
@@ -67,7 +70,7 @@ main = do
 
             let ?driverConfig =
                     Driver.MkDriverConfig
-                        { enableCoreLint = flags.coreLint
+                        { enableCoreLint = not flags.skipCoreLint
                         }
 
             let ?traceAction =
@@ -80,6 +83,9 @@ main = do
 
             for_ warnings \warning -> do
                 Text.hPutStrLn stderr (renderStderr (pretty warning))
+
+            when (flags.lintError && (not (null warnings)))
+                $ exitFailure
 
             case coreOrErrors of
                 Left errors -> do

@@ -41,7 +41,7 @@ let vega = "${!stack "path" "--dist-dir"}/build/vega/vega"
 
 let evalTest(file) = {
     try {
-        let luaCode = !env vega file
+        let luaCode = !env vega "--lint-error" file
         let result = luaCode | lua
         Success(result)
     } with {

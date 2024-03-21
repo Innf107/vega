@@ -1,4 +1,4 @@
-module Vega.Driver (parseRenameTypeCheck, DriverConfig(..)) where
+module Vega.Driver (parseRenameTypeCheck, DriverConfig (..)) where
 
 import Vega.Eval (CoreDeclaration)
 import Vega.Loc (HasLoc)
@@ -51,7 +51,7 @@ parseRenameTypeCheck filename code = runWriterT $ runExceptT do
 
     (core, errors) <- liftIO (Infer.typecheck renamed)
 
-    when ?driverConfig.enableCoreLint do
+    when (?driverConfig.enableCoreLint && null errors) do
         errors <- liftIO $ CoreLint.lint core
         tell (fmap CoreLintError errors)
 

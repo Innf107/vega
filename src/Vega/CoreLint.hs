@@ -21,7 +21,7 @@ lintPrefix = warning "[CORE LINT ERROR]: "
 instance Pretty LintError where
     pretty error =
         lintPrefix <> case error of
-            UnboundVariable name -> "Unbound variable " <> ident name
+            UnboundVariable name -> "Unbound variable: " <> ident name
 
 newtype Lint a = MkLint (WriterT (Difflist LintError) IO a)
     deriving (Functor, Applicative, Monad)
@@ -64,7 +64,7 @@ lintDeclaration env (CDefineVar name expr) = do
 
 lintExpr :: Env -> CoreExpr -> Lint ()
 lintExpr env = \case
-    CVar name -> checkVar emptyEnv name
+    CVar name -> checkVar env name
     CApp funExpr argExpr -> do
         lintExpr env funExpr
         lintExpr env argExpr
