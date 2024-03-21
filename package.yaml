@@ -43,7 +43,6 @@ ghc-options:
 - -Wincomplete-uni-patterns
 - -Wmissing-export-lists
 - -Wmissing-home-modules
-- -Wpartial-fields
 - -Wredundant-constraints
 - -Wno-name-shadowing
 - -Werror=incomplete-patterns
@@ -99,3 +98,4 @@ default-extensions:
   - TypeFamilyDependencies
   - ImpredicativeTypes
   - RecursiveDo
+  - DuplicateRecordFields

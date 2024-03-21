@@ -124,7 +124,7 @@ applyClosure (PrimopClosure primop previousArgs) argument
             (Add, [arg1, arg2]) ->
                 pure $ case (arg1, arg2) of
                     (IntV x, IntV y) -> IntV (x + y)
-                    (undefined, y) -> undefined
+                    (x, y) -> undefined
             (Subtract, [arg1, arg2]) ->
                 undefined
             (Multiply, [arg1, arg2]) ->

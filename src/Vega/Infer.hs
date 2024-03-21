@@ -61,7 +61,6 @@ extendVariable name type_ value env =
 
 data InferState = MkInferState {}
 
--- TODO: Is it okay to use WriterT here or does that leak space?
 newtype Infer a = MkInfer (ReaderT (TraceAction IO) (WriterT (Difflist TypeError) (StateT InferState IO)) a)
     deriving newtype (Functor, Applicative, Monad, MonadFix, MonadTrace)
 

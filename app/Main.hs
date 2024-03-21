@@ -17,7 +17,9 @@ import System.IO (hIsTerminalDevice, hPutStrLn)
 import System.FilePath qualified as FilePath
 import Vega.Pretty (PrettyANSIIConfig (MkPrettyANSIIConfig), defaultPrettyANSIIConfig)
 
-data Flags = Flags {trace :: [Text], includeUnique :: Bool}
+import qualified Data.Text.IO as Text
+
+data Flags = Flags {trace :: [Text], includeUnique :: Bool, coreLint :: Bool}
     deriving (Show, Generic)
 
 instance ParseRecord Flags
@@ -66,19 +68,27 @@ main = do
                     False -> prettyPlain
                     True -> prettyANSII
 
+            let ?driverConfig =
+                    Driver.MkDriverConfig
+                        { enableCoreLint = flags.coreLint
+                        }
+
             let ?traceAction =
                     traceStderrAction
                         renderStderr
                         traceConfig
             contents <- decodeUtf8 <$> readFileBS file
 
-            coreOrErrors <- Driver.parseRenameTypeCheck file contents
+            (coreOrErrors, warnings) <- Driver.parseRenameTypeCheck file contents
+
+            for_ warnings \warning -> do
+                putTextLn (renderStdout (pretty warning))
 
             case coreOrErrors of
                 Left errors -> do
                     for_ errors \error -> do
                         doc <- prettyErrorLoc (getLoc error) (pretty error)
-                        putTextLn (renderStdout doc)
+                        Text.hPutStrLn stderr (renderStdout doc)
                     exitFailure
                 Right core -> do
                     luaCode <- Lua.compile core

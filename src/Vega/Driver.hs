@@ -1,4 +1,4 @@
-module Vega.Driver (parseRenameTypeCheck) where
+module Vega.Driver (parseRenameTypeCheck, DriverConfig(..)) where
 
 import Vega.Eval (CoreDeclaration)
 import Vega.Loc (HasLoc)
@@ -6,6 +6,8 @@ import Vega.Prelude
 import Vega.Pretty
 import Vega.Util (Untagged (..))
 
+import Control.Monad.Writer (MonadWriter (tell), WriterT (..))
+import Vega.CoreLint qualified as CoreLint
 import Vega.Infer qualified as Infer
 import Vega.Lexer qualified as Lexer
 import Vega.Parser qualified as Parser
@@ -18,15 +20,24 @@ data VegaError
     | RenameError Rename.RenameError
     | TypeError Infer.TypeError
     deriving (Generic)
-    deriving (Pretty) via (Untagged VegaError)
-    deriving (HasLoc) via (Untagged VegaError)
+    deriving (Pretty, HasLoc) via (Untagged VegaError)
+
+data VegaWarning
+    = CoreLintError CoreLint.LintError
+    deriving (Generic)
+    deriving (Pretty) via (Untagged VegaWarning)
+
+data DriverConfig = MkDriverConfig
+    { enableCoreLint :: Bool
+    }
+    deriving (Show)
 
 parseRenameTypeCheck
-    :: (?traceAction :: TraceAction IO)
+    :: (?traceAction :: TraceAction IO, ?driverConfig :: DriverConfig)
     => FilePath
     -> Text
-    -> IO (Either (Seq VegaError) (Vector CoreDeclaration))
-parseRenameTypeCheck filename code = runExceptT do
+    -> IO (Either (Seq VegaError) (Vector CoreDeclaration), Seq VegaWarning)
+parseRenameTypeCheck filename code = runWriterT $ runExceptT do
     tokens <- case Lexer.run filename code of
         Left error -> throwError [LexicalError error]
         Right tokens -> pure tokens
@@ -39,6 +50,11 @@ parseRenameTypeCheck filename code = runExceptT do
             Right renamed -> pure renamed
 
     (core, errors) <- liftIO (Infer.typecheck renamed)
+
+    when ?driverConfig.enableCoreLint do
+        errors <- liftIO $ CoreLint.lint core
+        tell (fmap CoreLintError errors)
+
     case fromList (toList errors) of
         Empty -> pure core
         errors -> throwError (fmap TypeError errors)

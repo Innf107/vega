@@ -10,6 +10,7 @@ module Vega.Pretty (
     numberDoc,
     emphasis,
     errorDoc,
+    warning,
     quote,
     note,
     keyword,
@@ -58,6 +59,7 @@ data Ann
     | Number
     | Emphasis
     | Error
+    | Warning
     | Quote
     | Note
     | Keyword
@@ -89,6 +91,9 @@ emphasis = PP.annotate Emphasis . PP.pretty
 
 errorDoc :: Text -> Doc Ann
 errorDoc = PP.annotate Error . PP.pretty
+
+warning :: Text -> Doc Ann
+warning = PP.annotate Warning . PP.pretty
 
 quote :: Doc Ann -> Doc Ann
 quote = PP.annotate Quote
@@ -128,6 +133,7 @@ renderPlain = PP.renderSimplyDecorated id $ \ann x -> case ann of
     Number -> x
     Emphasis -> x
     Error -> x
+    Warning -> x
     Quote -> "'" <> x <> "'"
     Note -> x
     Keyword -> x
@@ -156,6 +162,7 @@ renderANSII =
             Number -> pure $ "\ESC[1m\ESC[93m\STX" <> text <> "\ESC[0m\STX"
             Emphasis -> pure $ "\ESC[1m\STX" <> text <> "\ESC[0m\STX"
             Error -> pure $ "\ESC[1m\ESC[31m\STX" <> text <> "\ESC[0m\STX"
+            Warning -> pure $ "\ESC[1m\ESC[93m\STX" <> text <> "\ESC[0m\STX"
             Note -> pure $ "\ESC[38;5;8m\STX" <> text <> "\ESC[0m\STX"
             Keyword -> pure $ "\ESC[94m\STX" <> text <> "\ESC[0m\STX"
             Quote -> pure text

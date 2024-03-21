@@ -1,14 +1,12 @@
 module Vega.Compile.Lua (compile) where
 
 -- Super simple compilation to lua. This is mostly meant as a sanity check.
--- The actual native code backend is going to come later
 
 import Vega.Prelude
 import Vega.Syntax
 
 import Vega.Name qualified as Name
 
--- TODO: We can technically use Eval for partial evaluation here!
 import Vega.Eval
 import Vega.Name (freshNameIO)
 import qualified Data.Vector as Vector
@@ -156,8 +154,6 @@ compilePrimop = \case
     Subtract -> "(function (x) return function (y) return x - y end end)"
     Multiply -> "(function (x) return function (y) return x * y end end)"
     IntDivide -> "(function (x) return function (y) return x // y end end)"
-
-
 
 renderName :: Name -> Text
 renderName name = Name.original name <> show (hashUnique (Name.unique name))

@@ -18,10 +18,10 @@ import Control.Exception (assert)
 import Control.Monad.Except as Export (throwError)
 import Data.Kind qualified
 import Data.Unique as Export (Unique, hashUnique)
-import Relude as Export hiding (Type, intercalate, words, trace)
+import Relude as Export hiding (Type, intercalate, words, unzip, trace)
 import Relude.Extra as Export
 
-import Data.Sequence as Export (Seq (..))
+import Data.Sequence as Export (Seq (..), unzip)
 import Data.Vector as Export (MVector, Vector)
 
 import Control.Monad.ST as Export

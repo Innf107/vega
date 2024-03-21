@@ -75,7 +75,7 @@ instance (HasLocGeneric f) => HasLocGeneric (M1 i t f) where
 
 
 instance (Generic a, HasLocGenUntagged (Rep a)) => HasLoc (Untagged a) where
-    getLoc :: (Generic a, HasLocGenUntagged (Rep a)) => Untagged a -> Loc
+    getLoc :: Untagged a -> Loc
     getLoc (MkUntagged x) = getLocGenUntagged (from x)
 
 class HasLocGenUntagged f where

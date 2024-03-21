@@ -1,6 +1,6 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.35.2.
+-- This file has been generated from package.yaml by hpack version 0.36.0.
 --
 -- see: https://github.com/sol/hpack
 
@@ -25,7 +25,14 @@ source-repository head
 
 library
   exposed-modules:
+      Vega.Compile.CoreToMIR
+      Vega.Compile.LIR
+      Vega.Compile.LIRTox86_64
       Vega.Compile.Lua
+      Vega.Compile.MIR
+      Vega.Compile.MIRToLIR
+      Vega.Compile.X86_64
+      Vega.CoreLint
       Vega.Debug
       Vega.Difflist
       Vega.Driver
@@ -73,7 +80,8 @@ library
       TypeFamilyDependencies
       ImpredicativeTypes
       RecursiveDo
-  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Werror=incomplete-uni-patterns -Werror=missing-methods
+      DuplicateRecordFields
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Werror=incomplete-uni-patterns -Werror=missing-methods
   build-tools:
       happy
   build-depends:
@@ -117,7 +125,8 @@ executable vega
       TypeFamilyDependencies
       ImpredicativeTypes
       RecursiveDo
-  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Werror=incomplete-uni-patterns -Werror=missing-methods -threaded -rtsopts -with-rtsopts=-N
+      DuplicateRecordFields
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Werror=incomplete-uni-patterns -Werror=missing-methods -threaded -rtsopts -with-rtsopts=-N
   build-tools:
       happy
   build-depends:
@@ -163,7 +172,8 @@ test-suite vega-test
       TypeFamilyDependencies
       ImpredicativeTypes
       RecursiveDo
-  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wpartial-fields -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Werror=incomplete-uni-patterns -Werror=missing-methods -threaded -rtsopts -with-rtsopts=-N
+      DuplicateRecordFields
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Werror=incomplete-uni-patterns -Werror=missing-methods -threaded -rtsopts -with-rtsopts=-N
   build-tools:
       happy
   build-depends:
