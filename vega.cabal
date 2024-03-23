@@ -35,6 +35,7 @@ library
       Vega.CoreLint
       Vega.Debug
       Vega.Difflist
+      Vega.Disambiguate
       Vega.Driver
       Vega.Error
       Vega.Eval

@@ -29,7 +29,7 @@ import Vega.Prelude
 
 import Vega.Debug
 import Vega.Loc (HasLoc, Loc, getLoc)
-import Vega.Name
+import Vega.Name as Name
 import Vega.Pretty
 
 import System.IO.Unsafe (unsafePerformIO)
@@ -164,6 +164,7 @@ instance Eq (MetaVarF context) where
 -- TODO: Precedence :/
 -- TODO: This should quote things before printing so that we don't need to rely on the context as weirdly
 instance Pretty (ValueF context) where
+    pretty :: ValueF context -> Doc Ann
     pretty = \case
         IntV v -> number v
         StringV str -> literal ("\"" <> str <> "\"")
@@ -199,16 +200,21 @@ instance Pretty (ValueF context) where
         MetaApp meta arguments ->
             prettyMetaApp meta arguments
 
--- TODO: Zap these correctly instead of using unsafePerformIO here
+-- TODO: Zonk these correctly instead of using unsafePerformIO here
 
 -- Using NOINLINE, just in case
 prettyMetaApp :: MetaVarF context -> Seq (ValueF context) -> Doc Ann
-prettyMetaApp (MkMeta name _ ref) arguments = unsafePerformIO do
+prettyMetaApp (MkMeta name unique ref) arguments = unsafePerformIO do
     readIORef ref >>= \case
         Nothing ->
             case arguments of
-                [] -> pure $ meta ("?" <> original name <> show (hashUnique (unique name)))
-                arguments -> pure $ lparen "(" <> meta ("?" <> original name <> show (hashUnique (unique name))) <+> sep (map pretty (toList arguments)) <> rparen ")"
+                [] -> pure $ meta unique ("?" <> original name)
+                arguments ->
+                    pure
+                        $ lparen "("
+                        <> meta unique ("?" <> original name)
+                        <+> sep (map pretty (toList arguments))
+                        <> rparen ")"
         Just replacement -> pure $ prettyApp replacement arguments
 {-# NOINLINE prettyMetaApp #-}
 
@@ -225,8 +231,8 @@ prettyApp type_ arguments =
         arguments -> lparen "(" <> pretty type_ <+> sep (map pretty (toList arguments)) <> rparen ")"
 
 instance Pretty Skolem where
-    pretty (MkSkolem name unique) = 
-        withUnique unique $ skolem name
+    pretty (MkSkolem name unique) =
+        withUnique unique $ skolem unique name
 
 instance Pretty (CoreDeclarationF context) where
     pretty = \case

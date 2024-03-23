@@ -4,8 +4,11 @@ module Vega.Pretty (
     Ann,
     plain,
     identText,
+    identTextWith,
     constructorText,
+    constructorTextWith,
     skolemText,
+    skolemTextWith,
     number,
     numberDoc,
     emphasis,
@@ -43,19 +46,23 @@ module Vega.Pretty (
 
 import Vega.Prelude
 
+import Vega.Disambiguate (Disambiguate, disambiguate)
+import Vega.Disambiguate qualified as Disambiguate
 import Vega.Util (Fix (MkFix), Untagged (..))
 
 import Prettyprinter (Doc)
 import Prettyprinter qualified as PP
 import Prettyprinter.Render.Util.SimpleDocTree qualified as PP
 
+import Data.Unique (newUnique)
 import Data.Vector ((!))
 import GHC.Generics
+import System.IO.Unsafe (unsafePerformIO)
 
 data Ann
-    = Ident
-    | Constructor
-    | Skolem
+    = Ident Text Unique
+    | Constructor Text Unique
+    | Skolem Text Unique
     | Number
     | Emphasis
     | Error
@@ -65,20 +72,33 @@ data Ann
     | Keyword
     | LParen
     | RParen
-    | Meta
+    | Meta Text Unique
     | Unique Unique
 
 plain :: Text -> Doc Ann
 plain = PP.pretty
 
+{-# NOINLINE textUnique #-}
+textUnique :: Unique
+textUnique = unsafePerformIO newUnique
+
+identTextWith :: Unique -> Text -> Doc Ann
+identTextWith unique name = PP.annotate (Ident name unique) ""
+
 identText :: Text -> Doc Ann
-identText = PP.annotate Ident . PP.pretty
+identText = identTextWith textUnique
+
+constructorTextWith :: Unique -> Text -> Doc Ann
+constructorTextWith unique name = PP.annotate (Constructor name unique) ""
 
 constructorText :: Text -> Doc Ann
-constructorText = PP.annotate Constructor . PP.pretty
+constructorText = constructorTextWith textUnique
+
+skolemTextWith :: Unique -> Text -> Doc Ann
+skolemTextWith unique name = PP.annotate (Skolem name unique) ""
 
 skolemText :: Text -> Doc Ann
-skolemText = PP.annotate Skolem . PP.pretty
+skolemText = skolemTextWith textUnique
 
 number :: (Num a, Show a) => a -> Doc Ann
 number = PP.annotate Number . PP.pretty . show @Text
@@ -113,8 +133,8 @@ lparen = PP.annotate LParen . PP.pretty
 rparen :: Text -> Doc Ann
 rparen = PP.annotate RParen . PP.pretty
 
-meta :: Text -> Doc Ann
-meta = PP.annotate Meta . PP.pretty
+meta :: Unique -> Text -> Doc Ann
+meta unique name = PP.annotate (Meta name unique) ""
 
 literal :: Text -> Doc Ann
 literal = PP.pretty
@@ -126,21 +146,28 @@ instance (forall a. (Pretty a) => Pretty (f a)) => Pretty (Fix f) where
     pretty (MkFix x) = pretty x
 
 renderPlain :: PP.SimpleDocTree Ann -> Text
-renderPlain = PP.renderSimplyDecorated id $ \ann x -> case ann of
-    Ident -> x
-    Constructor -> x
-    Skolem -> x
-    Number -> x
-    Emphasis -> x
-    Error -> x
-    Warning -> x
-    Quote -> "'" <> x <> "'"
-    Note -> x
-    Keyword -> x
-    LParen -> x
-    RParen -> x
-    Meta -> x
-    Unique _ -> x
+renderPlain tree = runST do
+    idents <- Disambiguate.new
+    constructors <- Disambiguate.new
+    skolems <- Disambiguate.new
+    metas <- Disambiguate.new
+    tree & PP.renderSimplyDecoratedA pure \ann textA -> do
+        text <- textA
+        case ann of
+            Ident name unique -> disambiguate idents name unique
+            Constructor name unique -> disambiguate constructors name unique
+            Skolem name unique -> disambiguate skolems name unique
+            Number -> pure text
+            Emphasis -> pure text
+            Error -> pure text
+            Warning -> pure text
+            Quote -> pure $ "'" <> text <> "'"
+            Note -> pure text
+            Keyword -> pure text
+            LParen -> pure text
+            RParen -> pure text
+            Meta name unique -> disambiguate metas name unique
+            Unique _ -> pure text
 
 data PrettyANSIIConfig = MkPrettyANSIIConfig
     { includeUnique :: Bool
@@ -152,13 +179,23 @@ defaultPrettyANSIIConfig =
         }
 
 renderANSII :: (?config :: PrettyANSIIConfig) => PP.SimpleDocTree Ann -> Text
-renderANSII =
-    flip evalState 0 . PP.renderSimplyDecoratedA @(State Int) pure \ann textA -> do
+renderANSII tree = runST do
+    idents <- Disambiguate.new
+    constructors <- Disambiguate.new
+    skolems <- Disambiguate.new
+    metas <- Disambiguate.new
+    flip evalStateT 0 $ tree & PP.renderSimplyDecoratedA pure \ann textA -> do
         text <- textA
         case ann of
-            Ident -> pure $ "\ESC[38;5;159m\STX" <> text <> "\ESC[0m\STX"
-            Constructor -> pure $ "\ESC[96m\STX" <> text <> "\ESC[0m\STX"
-            Skolem -> pure $ "\ESC[93m\STX" <> text <> "\ESC[0m\STX"
+            Ident name unique -> lift do
+                text <- disambiguate idents name unique
+                pure $ "\ESC[38;5;159m\STX" <> text <> "\ESC[0m\STX"
+            Constructor name unique -> lift do
+                text <- disambiguate constructors name unique
+                pure $ "\ESC[96m\STX" <> text <> "\ESC[0m\STX"
+            Skolem name unique -> lift do
+                text <- disambiguate skolems name unique
+                pure $ "\ESC[93m\STX" <> text <> "\ESC[0m\STX"
             Number -> pure $ "\ESC[1m\ESC[93m\STX" <> text <> "\ESC[0m\STX"
             Emphasis -> pure $ "\ESC[1m\STX" <> text <> "\ESC[0m\STX"
             Error -> pure $ "\ESC[1m\ESC[31m\STX" <> text <> "\ESC[0m\STX"
@@ -172,10 +209,12 @@ renderANSII =
             RParen -> do
                 colorIndex <- state (\i -> ((i - 1) `mod` (length parenColors), (i - 1) `mod` (length parenColors)))
                 pure $ parenColors ! colorIndex <> text <> "\ESC[0m\STX"
-            Meta -> pure $ "\ESC[38;5;195m\STX" <> text <> "\ESC[0m\STX"
+            Meta name unique -> lift do
+                text <- disambiguate metas name unique
+                pure $ "\ESC[38;5;195m\STX" <> text <> "\ESC[0m\STX"
             Unique unique
                 | ?config.includeUnique ->
-                    pure $ text <> "\ESC[38;5;159m\STX" <> show (hashUnique unique) <> "\ESC[0m\STX"
+                    pure $ text <> "\ESC[38;5;159m\STX_" <> show (hashUnique unique) <> "\ESC[0m\STX"
                 | otherwise -> pure text
   where
     parenColors = ["\ESC[38;5;46m\STX", "\ESC[38;5;50m\STX", "\ESC[38;5;191m\STX"]

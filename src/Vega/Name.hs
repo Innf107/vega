@@ -46,7 +46,7 @@ freshNameIO original = do
     pure (MkName original unique)
 
 ident :: Name -> Doc Ann
-ident name = withUnique (unique name) $ identText (original name)
+ident name = withUnique (unique name) $ identTextWith (unique name) (original name)
 
 newtype PrettyIdent = MkPrettyIdent Name
     deriving newtype (Eq, Ord)
@@ -55,10 +55,10 @@ instance Pretty PrettyIdent where
     pretty = coerce ident
 
 constructor :: Name -> Doc Ann
-constructor = constructorText . original
+constructor name = withUnique (unique name) $ constructorTextWith (unique name) (original name)
 
-skolem :: Name -> Doc Ann
-skolem name = skolemText $ original name
+skolem :: Unique -> Name -> Doc Ann
+skolem skolemUnique name = withUnique skolemUnique $ withUnique (unique name) $ skolemTextWith skolemUnique (original name)
 
 instance S.Show Name where
     show = toString . original
