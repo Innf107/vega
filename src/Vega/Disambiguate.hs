@@ -10,7 +10,6 @@ new = MkDisambiguate <$> newSTRef mempty
 disambiguate :: Disambiguate s -> Text -> Unique -> ST s Text
 disambiguate dis name unique = do
     nameMap <- readSTRef dis.contents
-    traceM ("disambiguate: " <> toString name <> " | " <> show (hashUnique unique))
     case lookup name nameMap of
         Nothing -> do
             writeSTRef dis.contents (insert name (fromList [(unique, 0)]) nameMap)
