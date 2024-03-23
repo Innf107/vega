@@ -81,6 +81,8 @@ library
       ImpredicativeTypes
       RecursiveDo
       DuplicateRecordFields
+      PatternSynonyms
+      FunctionalDependencies
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Werror=incomplete-uni-patterns -Werror=missing-methods
   build-tools:
       happy
@@ -126,6 +128,8 @@ executable vega
       ImpredicativeTypes
       RecursiveDo
       DuplicateRecordFields
+      PatternSynonyms
+      FunctionalDependencies
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Werror=incomplete-uni-patterns -Werror=missing-methods -threaded -rtsopts -with-rtsopts=-N
   build-tools:
       happy
@@ -173,6 +177,8 @@ test-suite vega-test
       ImpredicativeTypes
       RecursiveDo
       DuplicateRecordFields
+      PatternSynonyms
+      FunctionalDependencies
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Werror=incomplete-uni-patterns -Werror=missing-methods -threaded -rtsopts -with-rtsopts=-N
   build-tools:
       happy

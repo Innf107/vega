@@ -1,10 +1,9 @@
 module Vega.CoreLint (lint, LintError (..)) where
 
 import Control.Monad.Writer (MonadWriter (tell), WriterT (runWriterT))
-import Data.Foldable (foldrM)
 import Data.Set qualified as Set
 import Vega.Difflist
-import Vega.Eval (CoreDeclaration, CoreExpr, Value)
+import Vega.Eval (CoreDeclaration, CoreExpr)
 import Vega.Name (ident)
 import Vega.Prelude
 import Vega.Pretty
@@ -72,8 +71,8 @@ lintExpr env = \case
         lintExpr (defineVar name env) expr
     CCase scrutinee cases -> do
         lintExpr env scrutinee
-        forM_ cases \(pattern, body) -> do
-            env <- lintPattern env pattern
+        forM_ cases \(pattern_, body) -> do
+            env <- lintPattern env pattern_
             lintExpr env body
     CLiteral _ -> pure ()
     CTupleLiteral exprs ->

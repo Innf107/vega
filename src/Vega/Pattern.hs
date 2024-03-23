@@ -30,29 +30,29 @@ isWildcard = \case
 
 -- TODO: This is linear in the width of the pattern matrix. Maybe it should use Seq s instead
 decomposeConstructor :: CorePattern subpattern -> PatternMatrix -> PatternMatrix
-decomposeConstructor pattern matrix = Vector.mapMaybe (\(row, coreExpr) -> (,coreExpr) <$> decomposeRow row) matrix
+decomposeConstructor pattern_ matrix = Vector.mapMaybe (\(row, coreExpr) -> (,coreExpr) <$> decomposeRow row) matrix
   where
     decomposeRow row = case Vector.uncons row of
         Nothing -> error "trying to decompose a matrix without columns"
-        Just (CVarPat _, rest) -> case pattern of
+        Just (CVarPat _, rest) -> case pattern_ of
             CVarPat _ -> error "variable pattern in decomposeConstructor"
             CWildcardPat -> error "wildcard pattern in decomposeConstructor"
             CIntPat _ -> Just rest
             CStringPat _ -> Just rest
             CTuplePat subpatterns -> Just (Vector.replicate (length subpatterns) CWildcardPat <> rest)
-        Just (CWildcardPat, rest) -> case pattern of
+        Just (CWildcardPat, rest) -> case pattern_ of
             CVarPat _ -> error "variable pattern in decomposeConstructor"
             CWildcardPat -> error "wildcard pattern in decomposeConstructor"
             CIntPat _ -> Just rest
             CStringPat _ -> Just rest
             CTuplePat subpatterns -> Just (Vector.replicate (length subpatterns) CWildcardPat <> rest)
-        Just (CIntPat int, rest) -> case pattern of
+        Just (CIntPat int, rest) -> case pattern_ of
             CIntPat int2 | int == int2 -> Just rest
             _ -> Nothing
-        Just (CStringPat str, rest) -> case pattern of
+        Just (CStringPat str, rest) -> case pattern_ of
             CStringPat str2 | str == str2 -> Just rest
             _ -> Nothing
-        Just (CTuplePat subpatterns, rest) -> case pattern of
+        Just (CTuplePat subpatterns, rest) -> case pattern_ of
             -- lengths are assumed to be the same since this has already been type checked
             CTuplePat conSubPatterns -> do
                 assertM (length subpatterns == length conSubPatterns)
@@ -72,7 +72,7 @@ decomposeWildcard scrutinee matrix = Vector.mapMaybe decomposeRow matrix
 
 -- TODO: does this duplicate the body? it really shouldn't!
 lowerCase :: forall m. (MonadUnique m, MonadTrace m) => (Vector (CorePattern (Fix CorePattern), CoreExpr)) -> Name -> m CoreExpr
-lowerCase branches scrutinee = go (fmap (\(pattern, expr) -> ([pattern], expr)) branches) [scrutinee]
+lowerCase branches scrutinee = go (fmap (\(pattern_, expr) -> ([pattern_], expr)) branches) [scrutinee]
   where
     go :: PatternMatrix -> Seq Name -> m CoreExpr
     go matrix scrutinees = do
@@ -85,7 +85,7 @@ lowerCase branches scrutinee = go (fmap (\(pattern, expr) -> ([pattern], expr)) 
             (Vector.uncons -> Just (([], body), _), []) -> pure body
             (Vector.uncons -> Just ((row, body), _), scrutinees)
                 | Vector.all isWildcard row -> do
-                    let makeBinding pattern scrutinee = case pattern of
+                    let makeBinding pattern_ scrutinee = case pattern_ of
                             CVarPat varName -> CLet varName (CVar scrutinee)
                             _ -> id
 
@@ -102,17 +102,17 @@ lowerCase branches scrutinee = go (fmap (\(pattern, expr) -> ([pattern], expr)) 
                             Nothing -> error "no columns in non-empty pattern row"
                     go (fmap (updateRow) matrix) restScrutinees
                 patterns -> do
-                    matchedSubtrees <- forM patterns \pattern -> do
-                        (pattern, subVars) <- subPatternsToVars pattern
-                        subtree <- go (decomposeConstructor pattern matrix) (viaList subVars <> restScrutinees)
-                        pure (pattern, subtree)
+                    matchedSubtrees <- forM patterns \pattern_ -> do
+                        (pattern_, subVars) <- subPatternsToVars pattern_
+                        subtree <- go (decomposeConstructor pattern_ matrix) (viaList subVars <> restScrutinees)
+                        pure (pattern_, subtree)
                     trace Patterns
                         $ "matched:\n"
                         <> align
                             ( vsep
                                 $ fmap
-                                    ( \(pattern, expr) ->
-                                        pretty (coerce pattern :: CorePattern PrettyIdent) <+> keyword "->" <+> pretty expr
+                                    ( \(pattern_, expr) ->
+                                        pretty (coerce pattern_ :: CorePattern PrettyIdent) <+> keyword "->" <+> pretty expr
                                     )
                                     matchedSubtrees
                             )
@@ -125,9 +125,9 @@ lowerCase branches scrutinee = go (fmap (\(pattern, expr) -> ([pattern], expr)) 
     nonWildcardPatternsInFirstColumn matrix =
         Vector.mapMaybe
             ( \case
-                (Vector.uncons -> Just (pattern, _), _coreExpr)
-                    | isWildcard pattern -> Nothing
-                    | otherwise -> Just pattern
+                (Vector.uncons -> Just (pattern_, _), _coreExpr)
+                    | isWildcard pattern_ -> Nothing
+                    | otherwise -> Just pattern_
                 _ -> error "empty pattern matrix"
             )
             matrix
@@ -138,7 +138,7 @@ lowerCase branches scrutinee = go (fmap (\(pattern, expr) -> ([pattern], expr)) 
         _ -> Nothing
 
     subPatternsToVars :: CorePattern (Fix CorePattern) -> m (CorePattern Name, Vector Name)
-    subPatternsToVars pattern = case pattern of
+    subPatternsToVars pattern_ = case pattern_ of
         CWildcardPat -> pure (CWildcardPat, [])
         CVarPat name -> pure (CVarPat name, [])
         CIntPat int -> pure (CIntPat int, [])

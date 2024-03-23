@@ -158,7 +158,7 @@ tryMatch matchCase = do
                 pure (Just cont)
             | otherwise -> pure Nothing
         C (Or patterns) cont ->
-            findMapM tryMatch (fmap (\pattern -> (C pattern cont)) patterns)
+            findMapM tryMatch (fmap (\pattern_ -> (C pattern_ cont)) patterns)
         C (Satisfies predicate) cont -> do
             case Text.uncons underlying of
                 Just (char, _)

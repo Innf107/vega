@@ -1,0 +1,11 @@
+-- EXPECT: 5
+
+id : (a : Type) -> a -> a;
+id _a x = x;
+
+wrapId : (a : Type) -> a -> a;
+wrapId a x = (id a x);
+
+main : Unit;
+main = debug (wrapId Int 5);
+

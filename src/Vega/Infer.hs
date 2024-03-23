@@ -1,10 +1,9 @@
 module Vega.Infer (typecheck, TypeError (..)) where
 
-import Vega.Prelude hiding (trace)
+import Vega.Prelude
 import Vega.Syntax
 
 import Vega.Eval (CoreDeclaration, CoreExpr, Eval, EvalContext, Value, applyClosure, define, emptyEvalContext, eval, runEval)
-import Vega.Name qualified as Name
 import Vega.Primop
 
 import Vega.Debug
@@ -14,6 +13,7 @@ import Vega.Monad.Ref
 import Vega.Pattern qualified as Pattern
 import Vega.Pretty
 import Vega.Trace
+import Vega.Util
 
 import Data.Foldable (foldrM)
 import Data.Sequence qualified as Seq
@@ -194,25 +194,23 @@ checkDeclaration env = \case
 
         innerType <- skolemize type_
 
-        (paramTypes, resultType) <- splitFunctionTypes innerType (fmap getLoc params)
-
-        (envTransformers, coreTransformers) <- munzip <$> Vector.zipWithM (checkPattern env) (fromList $ toList paramTypes) params
+        (envTrans, corePatterns, resultType) <- checkParameterPatterns env innerType params
 
         let addLambdas core = do
                 foldrM
-                    ( \pattern core -> do
+                    ( \pattern_ core -> do
                         varName <- freshName "x"
-                        body <- Pattern.lowerCase [(pattern, core)] varName
+                        body <- Pattern.lowerCase [(pattern_, core)] varName
                         pure $ CLambda varName body
                     )
                     core
-                    coreTransformers
+                    corePatterns
 
         -- Recursive definitions are able to mention themselves on the type level
         -- so we need to do this recursive dance with mdo
         mdo
             (core, value) <- do
-                let envWithParams = compose envTransformers env
+                let envWithParams = envTrans env
 
                 value <- lazyM (eval (evalContext env) core)
                 -- function definitions are recursive
@@ -241,8 +239,8 @@ infer env expr = do
 
             resultType <- liftEval $ eval updatedContext resultClosureExpr
             pure (resultType, CApp functionCore argumentCore)
-        Lambda _loc pattern body -> do
-            (varType, envTrans, bodyPattern) <- inferPattern env pattern
+        Lambda _loc pattern_ body -> do
+            (varType, envTrans, bodyPattern) <- inferPattern env pattern_
 
             (resultType, bodyCore) <- infer (envTrans env) body
 
@@ -257,8 +255,8 @@ infer env expr = do
             scrutineeVar <- freshName "x"
 
             resultType <- MetaApp <$> freshAnonymousMeta <*> pure []
-            newCases <- forM cases \(pattern, body) -> do
-                (envTrans, corePattern) <- checkPattern env scrutineeType pattern
+            newCases <- forM cases \(pattern_, body) -> do
+                (envTrans, _patternValue, corePattern) <- checkPattern env scrutineeType pattern_
                 coreBody <- check (envTrans env) resultType body
 
                 pure (corePattern, coreBody)
@@ -336,19 +334,14 @@ check env expectedType expr = do
     case expr of
         Var{} -> deferToInference
         App{} -> deferToInference
-        Lambda loc pattern body -> do
+        Lambda loc pattern_ body -> do
             (parameterName, parameterType, resultClosureExpr, resultClosureContext) <- splitFunctionType loc expectedType
 
-            (envTrans, corePattern) <- checkPattern env parameterType pattern
+            (envTrans, parameterValue, corePattern) <- checkPattern env parameterType pattern_
 
-            -- TODO: This is meant to be a different skolem than the one on the term level, right?
-
-            updatedContext <- case parameterName of
-                Nothing -> pure resultClosureContext
-                Just name -> do
-                    parameterSkolem <- freshSkolem name
-                    parameterValue <- lazyValueM $ SkolemApp parameterSkolem []
-                    pure $ define name parameterValue resultClosureContext
+            let updatedContext = case parameterName of
+                    Nothing -> resultClosureContext
+                    Just name -> define name parameterValue resultClosureContext
 
             resultType <- liftEval $ eval updatedContext resultClosureExpr
 
@@ -363,8 +356,8 @@ check env expectedType expr = do
 
             scrutineeVar <- freshName "x"
 
-            newCases <- forM cases \(pattern, body) -> do
-                (envTrans, corePattern) <- checkPattern env scrutineeType pattern
+            newCases <- forM cases \(pattern_, body) -> do
+                (envTrans, _patternValue, corePattern) <- checkPattern env scrutineeType pattern_
                 coreBody <- check (envTrans env) expectedType body
 
                 pure (corePattern, coreBody)
@@ -409,8 +402,8 @@ checkStatement env = \case
                 pure (bodyCore, value, updatedEnv)
 
             pure (updatedEnv, pure . CLet varName bodyCore)
-    Let _loc pattern body -> do
-        (patternType, envTrans, corePattern) <- inferPattern env pattern
+    Let _loc pattern_ body -> do
+        (patternType, envTrans, corePattern) <- inferPattern env pattern_
 
         -- TODO: dependent type things? ugh i guess just updating the env could do that?
         bodyCore <- check (envTrans env) patternType body
@@ -429,11 +422,10 @@ checkStatement env = \case
                 ownType <- liftEval (eval (evalContext env) core)
 
                 innerType <- skolemize ownType
-                (patternTypes, resultType) <- splitFunctionTypes innerType (fmap getLoc patterns)
-                (envTransformers, corePatterns) <-
-                    munzip
-                        <$> Vector.zipWithM (checkPattern env) (fromList $ toList patternTypes) patterns
-                pure (ownType, resultType, compose envTransformers, corePatterns)
+
+                (envTrans, corePatterns, resultType) <- checkParameterPatterns env innerType patterns
+
+                pure (ownType, resultType, envTrans, viaList corePatterns)
             Nothing -> do
                 (patternTypes, envTransformers, corePatterns) <- Vector.unzip3 <$> traverse (inferPattern env) patterns
                 resultMeta <- freshAnonymousMeta
@@ -442,9 +434,9 @@ checkStatement env = \case
                 pure (ownType, resultType, compose envTransformers, corePatterns)
         let addLambdas core = do
                 foldrM
-                    ( \pattern core -> do
+                    ( \pattern_ core -> do
                         varName <- freshName "x"
-                        body <- Pattern.lowerCase [(pattern, core)] varName
+                        body <- Pattern.lowerCase [(pattern_, core)] varName
                         pure $ CLambda varName body
                     )
                     core
@@ -475,23 +467,43 @@ inferPattern env = \case
         pure (Tuple subTypes, compose subEnvTransformers, CTuplePat (coerce subCorePatterns))
     OrPat{} -> undefined
 
-checkPattern :: Env -> Type -> Pattern Renamed -> Infer (Env -> Env, CorePattern (Fix CorePattern))
+checkPattern :: Env -> Type -> Pattern Renamed -> Infer (Env -> Env, LazyM Eval Value, CorePattern (Fix CorePattern))
 checkPattern env expectedType = \case
     VarPat _loc name -> do
-        varSkolem <- freshSkolem name
-        varValue <- lazyValueM $ SkolemApp varSkolem []
-        pure (extendVariable name expectedType varValue, CVarPat name)
+        skolem <- freshSkolem name
+        value <- lazyValueM (SkolemApp skolem [])
+        pure (extendVariable name expectedType value, value, CVarPat name)
     IntPat loc n -> do
         subsumes loc Int expectedType
-        pure (id, CIntPat n)
+        value <- lazyValueM (IntV n)
+        pure (id, value, CIntPat n)
     StringPat loc literal -> do
         subsumes loc String expectedType
-        pure (id, CStringPat literal)
-    TuplePat loc subpatterns -> do
-        argumentTypes <- splitTupleType loc expectedType (length subpatterns)
-        (subEnvTransformers, subPatterns) <- munzip <$> Vector.zipWithM (checkPattern env) argumentTypes subpatterns
-        pure (compose subEnvTransformers, CTuplePat (coerce subPatterns))
+        value <- lazyValueM (StringV literal)
+        pure (id, value, CStringPat literal)
+    TuplePat loc subPatterns -> do
+        argumentTypes <- splitTupleType loc expectedType (length subPatterns)
+        (subEnvTransformers, subValues, subPatterns) <- Vector.unzip3 <$> Vector.zipWithM (checkPattern env) argumentTypes subPatterns
+        value <- lazyM (TupleV <$> traverse forceM subValues)
+        pure (compose subEnvTransformers, value, CTuplePat (coerce subPatterns))
     OrPat{} -> undefined
+
+checkParameterPatterns :: (Uncons t (Pattern Renamed)) => Env -> Type -> t -> Infer (Env -> Env, Seq (CorePattern (Fix CorePattern)), Type)
+checkParameterPatterns _env type_ Nil = pure (id, [], type_)
+checkParameterPatterns env type_ (pattern_ ::: restPatterns) = do
+    (mTypeParamName, domain, codomainExpr, codomainContext) <- splitFunctionType (getLoc pattern_) type_
+    (envTrans, patternValue, pattern_) <- checkPattern env domain pattern_
+
+    let evalContext = case mTypeParamName of
+            Nothing -> codomainContext
+            Just typeParamName -> define typeParamName patternValue codomainContext
+    codomain <- liftEval $ eval evalContext codomainExpr
+
+    -- We need to apply the environment transformer to the environment for the remaining pattenrs here since to allow the
+    -- remaining patterns to depend on the fact that this one has been bound (which is also how lambdas behave).
+    -- this is necessary to check definitions like `f n (xs : Vec n Int) = ...`.
+    (restTrans, restPatterns, resultType) <- checkParameterPatterns (envTrans env) codomain restPatterns
+    pure (restTrans . envTrans, pattern_ :<| restPatterns, resultType)
 
 splitFunctionType :: Loc -> Type -> Infer (Maybe Name, Type, CoreExpr, EvalContext)
 splitFunctionType loc type_ =
@@ -508,23 +520,6 @@ splitFunctionType loc type_ =
 
             subsumes loc type_ (Pi Nothing paramType (resultClosureExpr, resultClosureContext))
             pure (Nothing, paramType, resultClosureExpr, resultClosureContext)
-
-splitFunctionTypes :: Type -> Vector Loc -> Infer (Seq Type, Type)
-splitFunctionTypes type_ (Vector.uncons -> Nothing) = pure ([], type_)
-splitFunctionTypes type_ (Vector.uncons -> Just (loc, locs)) = do
-    (maybeParamName, paramType, resultExpr, resultContext) <- splitFunctionType loc type_
-
-    evalContext <- case maybeParamName of
-        Nothing -> pure resultContext
-        Just name -> do
-            paramSkolem <- freshSkolem name
-            paramValue <- lazyValueM (SkolemApp paramSkolem [])
-            pure $ define name paramValue resultContext
-
-    resultType <- liftEval $ eval evalContext resultExpr
-
-    (remainingParams, resultType) <- splitFunctionTypes resultType locs
-    pure (paramType :<| remainingParams, resultType)
 
 splitTupleType :: Loc -> Type -> Int -> Infer (Vector Type)
 splitTupleType loc type_ expectedArgCount =

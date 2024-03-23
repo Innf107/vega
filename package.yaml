@@ -99,3 +99,5 @@ default-extensions:
   - ImpredicativeTypes
   - RecursiveDo
   - DuplicateRecordFields
+  - PatternSynonyms
+  - FunctionalDependencies

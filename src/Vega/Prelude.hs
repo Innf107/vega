@@ -18,7 +18,7 @@ import Control.Exception (assert)
 import Control.Monad.Except as Export (throwError)
 import Data.Kind qualified
 import Data.Unique as Export (Unique, hashUnique)
-import Relude as Export hiding (Type, intercalate, words, unzip, trace)
+import Relude as Export hiding (Type, intercalate, words, unzip, trace, uncons)
 import Relude.Extra as Export
 
 import Data.Sequence as Export (Seq (..), unzip)

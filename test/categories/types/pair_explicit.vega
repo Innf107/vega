@@ -1,0 +1,13 @@
+-- EXPECT: 4
+
+Pair : Type -> Type -> Type;
+Pair a b = (r : Type) -> (a -> b -> r) -> r;
+
+pair : (a : Type) -> (b : Type) -> a -> b -> Pair a b;
+pair a b x y r f = f x y;
+
+doublePair : (a : Type) -> Pair a a -> Pair (Pair a a) (Pair a a);
+doublePair a p = pair (Pair a a) (Pair a a) p p;
+
+main : Unit;
+main = debug(doublePair Int (pair Int 1 1) Int (\x y -> x Int (\x y -> x + y) + y Int (\x y -> x + y)));

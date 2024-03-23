@@ -131,7 +131,7 @@ data CorePattern subPattern
 data ValueF context
     = IntV Integer
     | StringV Text
-    | ClosureV {-# UNPACK #-} (ClosureF context)
+    | ClosureV (ClosureF context)
     | TupleV (Vector (ValueF context))
     | -- Types
       Type
@@ -225,7 +225,8 @@ prettyApp type_ arguments =
         arguments -> lparen "(" <> pretty type_ <+> sep (map pretty (toList arguments)) <> rparen ")"
 
 instance Pretty Skolem where
-    pretty (MkSkolem name _) = skolem name
+    pretty (MkSkolem name unique) = 
+        withUnique unique $ skolem name
 
 instance Pretty (CoreDeclarationF context) where
     pretty = \case
@@ -249,8 +250,8 @@ instance Pretty (CoreExprF context) where
                         $ "\n"
                         <> vsep
                             ( fmap
-                                ( \(pattern, expr) ->
-                                    pretty (coerce pattern :: CorePattern PrettyIdent)
+                                ( \(pattern_, expr) ->
+                                    pretty (coerce pattern_ :: CorePattern PrettyIdent)
                                         <+> keyword "->"
                                         <+> pretty expr
                                 )

@@ -6,7 +6,6 @@ import Vega.Compile.LIR as LIR
 import Vega.Compile.MIR as MIR
 import Vega.Monad.Unique
 import Vega.Name
-import Vega.Util (viaList)
 
 newtype Compile a = MkCompile (StateT CompileState IO a)
     deriving newtype (Functor, Applicative, Monad)

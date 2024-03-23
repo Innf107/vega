@@ -117,8 +117,8 @@ compileCase scrutinee cases = do
     compiledCases <- traverse go cases
     pure $ "    " <> fold compiledCases <> "\n        error(\"PANIC! non-exhaustive pattern match\")\n    end"
   where
-    go (pattern, expr) = do
-        (matchCode, bindCode) <- compileMatch scrutinee pattern
+    go (pattern_, expr) = do
+        (matchCode, bindCode) <- compileMatch scrutinee pattern_
         exprCode <- compileExpr expr
         pure
             $ "if "

@@ -14,18 +14,13 @@ module Vega.Eval (
 import Vega.Prelude
 import Vega.Syntax
 
-import Vega.Name qualified as Name
 
 import Vega.Primop
 
 import Vega.LazyM
 import Vega.Monad.Ref
 import Vega.Monad.Unique
-import Vega.Name qualified as Name
-import Vega.Prelude
 import Vega.Pretty
-import Vega.Primop
-import Vega.Syntax
 
 newtype Eval a = MkEval (IO a) deriving newtype (Functor, Applicative, Monad, MonadRef)
 

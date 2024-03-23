@@ -1,0 +1,15 @@
+-- EXPECT: 10
+List : Type -> Type;
+List a = forall r. r -> (a -> r -> r) -> r;
+
+nil : forall a. List a;
+nil lnil lcons = lnil;
+
+cons : forall a. a -> List a -> List a;
+cons x list lnil lcons = lcons x (list lnil lcons);
+
+sum : List Int -> Int;
+sum list = list 0 (\x y -> x + y);
+
+main : Unit;
+main = debug(sum(cons 1 (cons 2 (cons 3 (cons 4 nil)))))

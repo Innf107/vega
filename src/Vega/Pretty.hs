@@ -45,11 +45,11 @@ import Vega.Prelude
 
 import Vega.Util (Fix (MkFix), Untagged (..))
 
-import Data.List ((!!))
 import Prettyprinter (Doc)
 import Prettyprinter qualified as PP
 import Prettyprinter.Render.Util.SimpleDocTree qualified as PP
 
+import Data.Vector ((!))
 import GHC.Generics
 
 data Ann
@@ -168,10 +168,10 @@ renderANSII =
             Quote -> pure text
             LParen -> do
                 colorIndex <- state (\i -> (i, (i + 1) `mod` (length parenColors)))
-                pure $ parenColors !! colorIndex <> text <> "\ESC[0m\STX"
+                pure $ parenColors ! colorIndex <> text <> "\ESC[0m\STX"
             RParen -> do
                 colorIndex <- state (\i -> ((i - 1) `mod` (length parenColors), (i - 1) `mod` (length parenColors)))
-                pure $ parenColors !! colorIndex <> text <> "\ESC[0m\STX"
+                pure $ parenColors ! colorIndex <> text <> "\ESC[0m\STX"
             Meta -> pure $ "\ESC[38;5;195m\STX" <> text <> "\ESC[0m\STX"
             Unique unique
                 | ?config.includeUnique ->

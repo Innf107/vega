@@ -10,6 +10,8 @@ import Vega.Syntax
 import Vega.Loc (HasLoc(..), merge)
 import Vega.Pretty
 import Vega.Util (viaList)
+
+import Debug.Trace (trace)
 }
 
 %name parse main
@@ -89,7 +91,12 @@ declaration
             pure $ DefineFunction (fst $1) (snd $1) $3 $6 $8 }
 
 expr :: { Expr Parsed }
-expr : expr_ascription '->' expr            { EPi (merge $1 $3) Nothing $1 $3 }
+expr : expr_op_tuple '->' expr 
+        -- Pi types and type ascriptions are horribly ambiguous, so we don't parse pi types directly
+        -- but instead convert any function with a type ascription to a variable as the domain to a pi type *afterwards*
+        { case $1 of
+            Ascription _ (Var _ name) type_ -> EPi (merge $1 $3) (Just name) type_ $3
+            _ -> EPi (merge $1 $3) Nothing $1 $3 }
      | expr_ascription                      { $1 }
 
 expr_ascription :: { Expr Parsed }
@@ -127,8 +134,7 @@ expr_leaf : identLoc                                    { Var (fst $1) (snd $1) 
           | '(' expr ')'                                { $2 }
           | '(' ')'                                     { TupleLiteral (merge $1 $2) [] }
           | '(' expr ',' sepTrailingList(',', expr) ')' { TupleLiteral (merge $1 $5) (fromList ($2 : $4)) }
-          | '(' ident ':' expr ')' '->' expr            { EPi (merge $1 $7) (Just $2) $4 $7 }
-          | '\\' many1(pattern) '->' expr               { foldr (\pattern expr -> Lambda (merge $1 $4) pattern expr) $4 $2 }
+          | '\\' many1(pattern) '->' expr               { foldr (\pattern_ expr -> Lambda (merge $1 $4) pattern_ expr) $4 $2 }
           | 'case' expr_leaf '{' 
                 sepTrailing(';', caseBranch)
             '}'                                         { Case (merge $1 $5) $2 $4 }
