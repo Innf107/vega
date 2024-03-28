@@ -28,8 +28,8 @@ extractRange loc = do
 
     let lineText = show loc.startLine
 
-    let separatorWithLine = keyword lineText <> " " <> keyword "| "
-    let separator = plain (Text.map (\_ -> ' ') lineText) <> " " <> keyword "| "
+    let separatorWithLine = keyword lineText <> " " <> keyword "┃ "
+    let separator = plain (Text.map (\_ -> ' ') lineText) <> " " <> keyword "┃ "
 
     pure
         $ separator <> "\n"
@@ -40,4 +40,4 @@ extractRange loc = do
         <> plain "\n"
         <> separator
         <> plain (Text.map (\_ -> ' ') nonHighlighted)
-        <> errorDoc (Text.map (\_ -> '^') highlighted)
+        <> errorDoc (Text.map (\_ -> '▔') highlighted)

@@ -1,6 +1,6 @@
 test/categories/types/occurs.vega:4:15: ERROR:
 Unable to construct an infinite type satisfying
-    ?a9 ~ (?a9 ** ?a11)
-  | 
-4 |     let g x = (g x, x);
-  |               ^^^^
+    ?a ~ (?a ** ?a1)
+  ┃ 
+4 ┃     let g x = (g x, x);
+  ┃               ▔▔▔▔

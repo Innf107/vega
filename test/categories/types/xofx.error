@@ -1,6 +1,6 @@
 test/categories/types/xofx.vega:3:7: ERROR:
 Unable to unify types a
                   and (a -> a)
-  | 
-3 | f x = x x
-  |       ^^^
+  ┃ 
+3 ┃ f x = x x
+  ┃       ▔▔▔
