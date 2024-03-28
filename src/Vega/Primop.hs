@@ -70,8 +70,8 @@ primopArity primop = case lookup primop primopTypeMap of
     Nothing -> error ("primop without definition: " <> show primop)
     Just (arity, _primopType) -> arity
 
-type_ :: CoreExprF context
-type_ = CLiteral TypeLit
+_type_ :: CoreExprF context
+_type_ = CLiteral TypeLit
 
 unitType :: CoreExprF context
 unitType = CTupleType (fromList [])
@@ -89,8 +89,8 @@ forallV textName type_ cont = do
     let name = Name.internal textName
     Forall name type_ (cont name, emptyContext)
 
-forall :: Text -> CoreExprF context -> (Name -> CoreExprF context) -> CoreExprF context
-forall textName type_ cont = do
+_forall_ :: Text -> CoreExprF context -> (Name -> CoreExprF context) -> CoreExprF context
+_forall_ textName type_ cont = do
     let name = Name.internal textName
     CForall name type_ (cont name)
 

@@ -14,3 +14,23 @@ sum list = list Int 0 (\x y -> x + y);
 main : Unit;
 main = debug(sum (cons Int 1 (cons Int 2 (cons Int 3 (cons Int 4 (nil Int))))))
 
+f : Int -> Int -> Int -> Int;
+f x y z = x + y + z;
+
+g : Int;
+g = f 1 2
+      3 4
+
+   ┃     vvvvv
+21 ┃ g = f 1 2
+22 ┃   3 4 5 6
+23 ┃     7 8 + 1
+   ┃ ̂^^^^^^^
+
+
+   ┃     
+21 ┃ g = f 1 2
+22 ┃   3 4 5 6 
+23 ┃     7 8 + 1
+   ┃ ▔▔▔▔▔▔▔
+
