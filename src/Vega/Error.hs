@@ -15,7 +15,10 @@ extractRange :: (MonadIO io) => Loc -> io (Doc Ann)
 extractRange loc = do
     lines <- Text.lines . decodeUtf8 <$> readFileBS (toString loc.fileName)
 
-    let lineCount = min maxDisplayedLineCount (loc.endLine - loc.startLine + 1)
+    let (isTooLong, lineCount) =
+            if (loc.endLine - loc.startLine + 1) <= maxDisplayedLineCount
+                then (False, loc.endLine - loc.startLine + 1)
+                else (True, maxDisplayedLineCount)
 
     let linePadding = Vector.maximum (fmap (length @[] . show) [loc.startLine .. (loc.startLine + lineCount - 1)])
 
@@ -31,8 +34,7 @@ extractRange loc = do
                         else ("", line)
             let (highlighted, nonHighlightedEnd) =
                     if lineIndex == (length extractedLines - 1)
-                        then -- TODO: this might need a + 1? not entirely sure
-                            Text.splitAt (loc.endColumn - Text.length nonHighlightedStart - 1) rest
+                        then Text.splitAt (loc.endColumn - Text.length nonHighlightedStart - 1) rest
                         else (rest, "")
             separatorWithLine (lineIndex + loc.startLine)
                 <> plain nonHighlightedStart
@@ -44,6 +46,7 @@ extractRange loc = do
     -- we only show an underline if there is a single line
     let underline = case lineCount of
             1 -> plain (Text.replicate (loc.startColumn - 1) " ") <> errorDoc (Text.replicate (loc.endColumn - loc.startColumn) "▔")
+            _ | isTooLong -> errorDoc "..."
             _ -> ""
 
     let separator = plain (Text.replicate linePadding " ") <> " " <> keyword "┃ "
