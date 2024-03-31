@@ -46,6 +46,7 @@ data Declaration (p :: Pass)
     = DefineFunction Loc (XName p) (SourceType p) (Vector (Pattern p)) (Expr p)
     deriving (Generic)
 instance HasLoc (Declaration p)
+instance (HeadConstructorArg (XName p)) => ShowHeadConstructor (Declaration p)
 
 data Expr (p :: Pass)
     = Var Loc (XName p)

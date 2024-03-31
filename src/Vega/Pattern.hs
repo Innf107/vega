@@ -146,3 +146,4 @@ lowerCase branches scrutinee = go (fmap (\(pattern_, expr) -> ([pattern_], expr)
         CTuplePat subpatterns -> do
             subpatternNames <- traverse (\_ -> freshName "x") subpatterns
             pure (CTuplePat subpatternNames, subpatternNames)
+

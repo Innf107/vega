@@ -7,6 +7,7 @@ module Vega.Name (
     ident,
     constructor,
     skolem,
+    makeDirectlyUnchecked,
     PrettyIdent (..),
 ) where
 
@@ -26,6 +27,9 @@ instance Eq Name where
 
 instance Ord Name where
     compare (MkName _ u1) (MkName _ u2) = compare u1 u2
+
+makeDirectlyUnchecked :: Text -> Unique -> Name
+makeDirectlyUnchecked = MkName
 
 internalUnique :: Unique
 internalUnique = unsafePerformIO newUnique

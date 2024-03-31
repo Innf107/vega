@@ -131,6 +131,8 @@ expr_app : expr_app expr_leaf   { App (merge $1 $2) $1 $2 }
 
 expr_leaf :: { Expr Parsed }
 expr_leaf : identLoc                                    { Var (fst $1) (snd $1) }
+          -- TODO: this should include the locations from the '(' ')' or error messages for
+          -- applications are going to miss the final ')'
           | '(' expr ')'                                { $2 }
           | '(' ')'                                     { TupleLiteral (merge $1 $2) [] }
           | '(' expr ',' sepTrailingList(',', expr) ')' { TupleLiteral (merge $1 $5) (fromList ($2 : $4)) }

@@ -23,6 +23,7 @@ import Control.Monad.Fix
 import Control.Monad.Writer.Strict (MonadWriter (tell), WriterT (runWriterT))
 import Vega.Difflist (Difflist)
 import Vega.Monad.Unique (MonadUnique (..))
+import Vega.Name qualified as Name
 import Vega.Util (Fix (MkFix))
 
 data TypeError
@@ -187,7 +188,7 @@ typecheck declarations = runInfer do
     pure declarations
 
 checkDeclaration :: Env -> Declaration Renamed -> Infer (Env, CoreDeclaration)
-checkDeclaration env = \case
+checkDeclaration env decl = traceDecl $ case decl of
     DefineFunction _loc name typeExpr params body -> do
         typeCore <- check env Type typeExpr
         type_ <- liftEval $ eval (evalContext env) typeCore
@@ -219,6 +220,10 @@ checkDeclaration env = \case
                 core <- addLambdas =<< check bodyEnv resultType body
                 pure (core, value)
             pure (extendVariable name type_ value env, CDefineVar name core)
+  where
+    traceDecl rest = do
+        trace Types ("checkDeclaration: " <> showHeadConstructor decl)
+        rest
 
 infer :: Env -> Expr Renamed -> Infer (Type, CoreExpr)
 infer env expr = do
@@ -726,10 +731,13 @@ quoteFully type_ =
             codomain <- liftEval $ skolemizeClosure (Just name) codomainExpr codomainEnv
             quotedCodomain <- quoteFully codomain
             pure $ CForall name quotedDomain quotedCodomain
-        SkolemApp (MkSkolem skolemName _) arguments -> do
+        SkolemApp (MkSkolem skolemName skolemUnique) arguments -> do
             quotedArguments <- traverse quoteFully arguments
-            -- TODO: Let's hope this doesn't mess up the skolem uniques
-            pure $ foldl' CApp (CVar (skolemName)) quotedArguments
+            -- We use the skolem unique as the variable unique here.
+            -- This technically loses provenance of the skolem but we don't use that anywhere
+            -- so it should be fine.
+            -- Since Uniques are globally unique, this will not
+            pure $ foldl' CApp (CVar (Name.makeDirectlyUnchecked (Name.original skolemName) skolemUnique)) quotedArguments
         MetaApp metaVar arguments -> do
             quotedArguments <- traverse quoteFully arguments
             pure $ foldl' CApp (CMeta metaVar) quotedArguments
