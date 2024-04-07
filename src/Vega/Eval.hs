@@ -21,6 +21,7 @@ import Vega.LazyM
 import Vega.Monad.Ref
 import Vega.Monad.Unique
 import Vega.Pretty
+import qualified Vega.Name as Name
 
 newtype Eval a = MkEval (IO a) deriving newtype (Functor, Applicative, Monad, MonadRef)
 
@@ -45,6 +46,14 @@ data EvalContext = MkEvalContext
 
 instance ContextFromEmpty EvalContext where
     emptyContext = emptyEvalContext
+
+instance EvalClosureForPrinting EvalContext where
+  applyNullaryClosurePrint context expr = runEval $ eval context expr
+  applyClosureForPrinting context expr name = runEval do
+    let skolem = MkSkolem name (Name.unique name)
+    lazyValue <- lazyValueM (SkolemApp skolem [])
+    applyClosure (MkClosure name expr context) lazyValue
+    
 
 emptyEvalContext :: EvalContext
 emptyEvalContext =

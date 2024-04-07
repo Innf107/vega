@@ -65,7 +65,7 @@ skolem :: Unique -> Name -> Doc Ann
 skolem skolemUnique name = withUnique skolemUnique $ withUnique (unique name) $ skolemTextWith skolemUnique (original name)
 
 instance S.Show Name where
-    show = toString . original
+    show (MkName original unique) = toString $ original <> "_" <> show (hashUnique unique)
 
 instance HeadConstructorArg Name where
     headConstructorArg = ident

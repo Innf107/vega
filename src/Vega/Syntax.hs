@@ -14,6 +14,7 @@ module Vega.Syntax (
     CoreDeclarationF (..),
     CoreExprF (..),
     CorePattern (..),
+    EvalClosureForPrinting (..),
     -- Values
     ValueF (..),
     ClosureF (..),
@@ -145,6 +146,8 @@ data ValueF context
     | -- Stuck expressions
       SkolemApp Skolem (Seq (ValueF context))
     | MetaApp (MetaVarF context) (Seq (ValueF context))
+    deriving (Generic)
+instance (HeadConstructorArg Name) => ShowHeadConstructor (ValueF context)
 
 data ClosureF context
     = MkClosure Name (CoreExprF context) context
@@ -164,7 +167,7 @@ instance Eq (MetaVarF context) where
 
 -- TODO: Precedence :/
 -- TODO: This should quote things before printing so that we don't need to rely on the context as weirdly
-instance Pretty (ValueF context) where
+instance (EvalClosureForPrinting context) => Pretty (ValueF context) where
     pretty :: ValueF context -> Doc Ann
     pretty = \case
         IntV v -> number v
@@ -179,11 +182,14 @@ instance Pretty (ValueF context) where
         String -> constructorText "String"
         Tuple [] -> keyword "Unit"
         Tuple values -> lparen "(" <> intercalateMap (keyword " ** ") pretty values <> rparen ")"
-        Pi Nothing domain (core, _context) ->
-            lparen "(" <> pretty domain <+> keyword "->" <+> pretty core <> rparen ")"
-        Pi (Just name) domain (core, _context) ->
-            lparen "(" <> lparen "(" <> ident name <+> keyword ":" <+> pretty domain <> rparen ")" <+> keyword "->" <+> pretty core <> rparen ")"
-        Forall name domain (core, _context) ->
+        Pi Nothing domain (core, context) -> do
+            let codomain = unsafePerformIO (applyNullaryClosurePrint context core)
+            lparen "(" <> pretty domain <+> keyword "->" <+> pretty codomain <> rparen ")"
+        Pi (Just name) domain (core, context) -> do
+            let codomain = unsafePerformIO (applyClosureForPrinting context core name)
+            lparen "(" <> lparen "(" <> ident name <+> keyword ":" <+> pretty domain <> rparen ")" <+> keyword "->" <+> pretty codomain <> rparen ")"
+        Forall name domain (core, context) -> do
+            let codomain = unsafePerformIO (applyClosureForPrinting context core name)
             lparen "("
                 <> keyword "forall"
                 <> lparen "("
@@ -192,7 +198,7 @@ instance Pretty (ValueF context) where
                 <+> pretty domain
                 <> rparen ")"
                 <> keyword "."
-                <+> pretty core
+                <+> pretty codomain
                 <> rparen ")"
         SkolemApp skolem [] ->
             pretty skolem
@@ -201,10 +207,14 @@ instance Pretty (ValueF context) where
         MetaApp meta arguments ->
             prettyMetaApp meta arguments
 
+class EvalClosureForPrinting context where
+    applyNullaryClosurePrint :: context -> CoreExprF context -> IO (ValueF context)
+    applyClosureForPrinting :: context -> CoreExprF context -> Name -> IO (ValueF context)
+
 -- TODO: Zonk these correctly instead of using unsafePerformIO here
 
 -- Using NOINLINE, just in case
-prettyMetaApp :: MetaVarF context -> Seq (ValueF context) -> Doc Ann
+prettyMetaApp :: (EvalClosureForPrinting context) => MetaVarF context -> Seq (ValueF context) -> Doc Ann
 prettyMetaApp (MkMeta name unique ref) arguments = unsafePerformIO do
     readIORef ref >>= \case
         Nothing ->
@@ -219,7 +229,7 @@ prettyMetaApp (MkMeta name unique ref) arguments = unsafePerformIO do
         Just replacement -> pure $ prettyApp replacement arguments
 {-# NOINLINE prettyMetaApp #-}
 
-prettyApp :: ValueF context -> Seq (ValueF context) -> Doc Ann
+prettyApp :: (EvalClosureForPrinting context) => ValueF context -> Seq (ValueF context) -> Doc Ann
 prettyApp (MetaApp meta arguments) additionalArguments =
     prettyMetaApp meta (arguments <> additionalArguments)
 prettyApp (SkolemApp skolem []) [] =
@@ -235,12 +245,12 @@ instance Pretty Skolem where
     pretty (MkSkolem name unique) =
         withUnique unique $ skolem unique name
 
-instance Pretty (CoreDeclarationF context) where
+instance (EvalClosureForPrinting context) => Pretty (CoreDeclarationF context) where
     pretty = \case
         CDefineVar name body -> ident name <+> keyword "=" <+> pretty body
 
 -- TODO: PRECEDEEEENCE
-instance Pretty (CoreExprF context) where
+instance (EvalClosureForPrinting context) => Pretty (CoreExprF context) where
     pretty = \case
         CVar name -> ident name
         CApp funExpr argExpr ->

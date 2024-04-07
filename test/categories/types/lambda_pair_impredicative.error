@@ -1,0 +1,12 @@
+test/categories/types/lambda_pair_impredicative.vega:8:16: ERROR:
+Impredicative instantiation attempted
+    ((a -> (a -> ?r)) -> ?r) ~ (forall(r : Type). ((a -> (a -> r)) -> r))
+  ┃ 
+8 ┃ doublePair p = pair p p;
+  ┃                ▔▔▔▔▔▔▔▔
+test/categories/types/lambda_pair_impredicative.vega:8:16: ERROR:
+Impredicative instantiation attempted
+    ((a -> (a -> ?r)) -> ?r) ~ (forall(r : Type). ((a -> (a -> r)) -> r))
+  ┃ 
+8 ┃ doublePair p = pair p p;
+  ┃                ▔▔▔▔▔▔▔▔

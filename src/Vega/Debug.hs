@@ -40,6 +40,9 @@ class HeadConstructorArgs f where
 instance HeadConstructorArgs V1 where
     headConstructorArgs = \case {}
 
+instance HeadConstructorArgs U1 where
+    headConstructorArgs U1 = []
+
 instance (HeadConstructorArgs f) => HeadConstructorArgs (M1 i t f) where
     headConstructorArgs (M1 x) = headConstructorArgs x
 

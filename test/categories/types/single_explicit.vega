@@ -10,4 +10,4 @@ single2 : (a : Type) -> a -> Single a;
 single2 a x = single a x;
 
 main : Unit;
-main = debug((single Int 5) (\x -> x));
+main = debug((single Int 5) Int (\x -> x));

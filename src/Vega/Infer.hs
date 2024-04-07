@@ -29,6 +29,7 @@ import Vega.Util (Fix (MkFix))
 data TypeError
     = UnableToUnify Loc CoreExpr CoreExpr
     | OccursCheckViolation Loc MetaVar CoreExpr
+    | Impredicative Loc Type Type
     deriving (Generic)
 instance HasLoc TypeError
 
@@ -41,6 +42,12 @@ instance Pretty TypeError where
             <> pretty type2
     pretty (OccursCheckViolation _ metavar type_) =
         "Unable to construct an infinite type satisfying\n    " <> pretty (MetaApp metavar []) <> keyword " ~ " <> pretty type_
+    pretty (Impredicative _ type1 type2) =
+        "Impredicative instantiation attempted\n"
+            <> "    "
+            <> pretty type1
+            <> keyword " ~ "
+            <> pretty type2
 
 type Type = Value
 type MetaVar = MetaVarF EvalContext
@@ -76,7 +83,9 @@ instance MonadRef Infer where
     writeRef ref x = MkInfer $ liftIO $ writeIORef ref x
 
 typeError :: TypeError -> Infer ()
-typeError error = MkInfer (tell [error])
+typeError error = MkInfer do
+    tell [error]
+    trace Types (errorDoc "TYPE ERROR")
 
 liftEval :: Eval a -> Infer a
 liftEval eval = MkInfer (liftIO (runEval eval))
@@ -175,10 +184,13 @@ instantiate = \case
 
 skolemize :: Type -> Infer Type
 skolemize = \case
-    Forall name _domain (codomainExpr, codomainContext) -> do
+    type_@(Forall name _domain (codomainExpr, codomainContext)) -> do
         skolem <- freshSkolem name
         varValue <- lazyValueM (SkolemApp skolem [])
         skolemized <- liftEval $ eval (define name varValue codomainContext) codomainExpr
+        quotedType <- quoteFully type_
+        skolemizedQuoteType <- quoteFully type_
+        trace Types (errorDoc "type_:" <+> pretty quotedType <+> errorDoc "skolemized: " <> pretty skolemizedQuoteType)
         skolemize skolemized
     type_ -> pure type_
 
@@ -242,7 +254,8 @@ infer env expr = do
                     Nothing -> resultClosureContext
                     Just name -> define name argumentValue resultClosureContext
 
-            resultType <- liftEval $ eval updatedContext resultClosureExpr
+            rawResultType <- liftEval $ eval updatedContext resultClosureExpr
+            resultType <- instantiate rawResultType
             pure (resultType, CApp functionCore argumentCore)
         Lambda _loc pattern_ body -> do
             (varType, envTrans, bodyPattern) <- inferPattern env pattern_
@@ -330,8 +343,23 @@ infer env expr = do
     pure (type_, core)
 
 check :: Env -> Type -> Expr Renamed -> Infer CoreExpr
-check env expectedType expr = do
-    trace Types ("check:" <+> showHeadConstructor expr <+> keyword "<=" <+> pretty expectedType)
+check env rawExpectedType expr = do
+    expectedType <- skolemize rawExpectedType
+    trace
+        Types
+        ( "check:"
+            <+> showHeadConstructor expr
+            <+> keyword "<="
+            <+> pretty rawExpectedType
+            <+> "["
+            <+> keyword "~>"
+            <+> pretty expectedType
+            <+> "]"
+            <+> "[HEAD RAW]: "
+            <> showHeadConstructor rawExpectedType
+            <+> "[HEAD SKOLEMIZED]: "
+            <> showHeadConstructor expectedType
+        )
     let deferToInference = do
             (actualType, core) <- infer env expr
             subsumes (getLoc expr) actualType expectedType
@@ -555,6 +583,19 @@ unify loc type1 type2 = do
             typeError (UnableToUnify loc type1 type2)
 
     case (type1, type2) of
+        (Forall name1 domain1 (codomainCore1, codomainContext1), Forall name2 domain2 (codomainCore2, codomainContext2)) -> do
+            skolem <- freshSkolem name1
+            skolemValue <- lazyValueM (SkolemApp skolem [])
+
+            codomain1 <- liftEval $ eval (define name1 skolemValue codomainContext1) codomainCore1
+            codomain2 <- liftEval $ eval (define name2 skolemValue codomainContext2) codomainCore2
+
+            unify loc domain1 domain2
+            unify loc codomain1 codomain2
+        -- TODO: produce a more helpful error message
+        -- TODO: this might not actually be an impredicative instantiation in all cases
+        (Forall{}, _) -> typeError (Impredicative loc type1 type2)
+        (_, Forall{}) -> typeError (Impredicative loc type1 type2)
         (MetaApp metaVar1 [], type2) -> bind loc metaVar1 type2
         (type1, MetaApp metaVar2 []) -> bind loc metaVar2 type1
         -- See Note [Pattern Unification]
@@ -579,16 +620,16 @@ unify loc type1 type2 = do
                 _ -> unableToUnify
             Pi mname1 domain1 (codomainCore1, codomainContext1) -> case type2 of
                 Pi mname2 domain2 (codomainCore2, codomainContext2) -> do
-                    codomain1 <- liftEval $ skolemizeClosure mname1 codomainCore1 codomainContext1
-                    codomain2 <- liftEval $ skolemizeClosure mname2 codomainCore2 codomainContext2
+                    defaultName <- freshName "a"
+                    skolem <- freshSkolem (fromMaybe defaultName (mname1 <|> mname2))
+                    skolemValue <- lazyValueM (SkolemApp skolem [])
 
-                    unify loc domain1 domain2
-                    unify loc codomain1 codomain2
-                _ -> unableToUnify
-            Forall name1 domain1 (codomainCore1, codomainContext1) -> case type2 of
-                Forall name2 domain2 (codomainCore2, codomainContext2) -> do
-                    codomain1 <- liftEval $ skolemizeClosure (Just name1) codomainCore1 codomainContext1
-                    codomain2 <- liftEval $ skolemizeClosure (Just name2) codomainCore2 codomainContext2
+                    codomain1 <- case mname1 of
+                        Nothing -> liftEval $ eval codomainContext1 codomainCore1
+                        Just name1 -> liftEval $ eval (define name1 skolemValue codomainContext1) codomainCore1
+                    codomain2 <- case mname2 of
+                        Nothing -> liftEval $ eval codomainContext2 codomainCore2
+                        Just name2 -> liftEval $ eval (define name2 skolemValue codomainContext2) codomainCore2
 
                     unify loc domain1 domain2
                     unify loc codomain1 codomain2
@@ -662,7 +703,11 @@ occursCheck meta type_ =
                 -- maybe we should lazily store this in the data type and keep the cached results?
                 codomain <- lift $ liftEval $ skolemizeClosure name codomainCore codomainContext
                 go codomain
-            Forall _ _ _ -> undefined
+            Forall name domain (codomainCore, codomainContext) -> do
+                go domain
+
+                codomain <- lift $ liftEval $ skolemizeClosure (Just name) codomainCore codomainContext
+                go codomain
             SkolemApp _ arguments -> traverse_ go arguments
             MetaApp otherMeta arguments -> do
                 if (meta == otherMeta)

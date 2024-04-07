@@ -10,4 +10,4 @@ doublePair : (a : Type) -> Pair a a -> Pair (Pair a a) (Pair a a);
 doublePair a p = pair (Pair a a) (Pair a a) p p;
 
 main : Unit;
-main = debug(doublePair Int (pair Int 1 1) Int (\x y -> x Int (\x y -> x + y) + y Int (\x y -> x + y)));
+main = debug(doublePair Int (pair Int Int 1 1) Int (\p1 p2 -> (p1 Int (\x y -> x + y)) + (p2 Int (\x y -> x + y))));
