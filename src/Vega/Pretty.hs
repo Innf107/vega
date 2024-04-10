@@ -220,10 +220,10 @@ renderANSII tree = runST do
     parenColors = ["\ESC[38;5;46m\STX", "\ESC[38;5;50m\STX", "\ESC[38;5;191m\STX"]
 
 prettyPlain :: Doc Ann -> Text
-prettyPlain doc = renderPlain (PP.treeForm (PP.layoutSmart PP.defaultLayoutOptions doc))
+prettyPlain doc = renderPlain (PP.treeForm (PP.layoutSmart (PP.defaultLayoutOptions{PP.layoutPageWidth = PP.Unbounded}) doc))
 
 prettyANSII :: (?config :: PrettyANSIIConfig) => Doc Ann -> Text
-prettyANSII doc = renderANSII (PP.treeForm (PP.layoutSmart PP.defaultLayoutOptions doc))
+prettyANSII doc = renderANSII (PP.treeForm (PP.layoutSmart (PP.defaultLayoutOptions{PP.layoutPageWidth = PP.Unbounded}) doc))
 
 showPlain :: (Pretty a) => a -> Text
 showPlain = prettyPlain . pretty

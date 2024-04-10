@@ -6,6 +6,7 @@ module Vega.Util (
     Uncons (..),
     pattern Nil,
     pattern (:::),
+    AllConstraints
 ) where
 
 import Vega.Prelude
@@ -44,3 +45,8 @@ instance Uncons (Seq a) a where
 
 instance Uncons (Vector a) a where
     uncons = Vector.uncons
+
+type AllConstraints :: (HSType -> Constraint) -> [HSType] -> Constraint
+type family AllConstraints c xs where
+    AllConstraints c '[] = ()
+    AllConstraints c (x : xs) = (c x, AllConstraints c xs)

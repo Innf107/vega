@@ -184,13 +184,10 @@ instantiate = \case
 
 skolemize :: Type -> Infer Type
 skolemize = \case
-    type_@(Forall name _domain (codomainExpr, codomainContext)) -> do
+    Forall name _domain (codomainExpr, codomainContext) -> do
         skolem <- freshSkolem name
         varValue <- lazyValueM (SkolemApp skolem [])
         skolemized <- liftEval $ eval (define name varValue codomainContext) codomainExpr
-        quotedType <- quoteFully type_
-        skolemizedQuoteType <- quoteFully type_
-        trace Types (errorDoc "type_:" <+> pretty quotedType <+> errorDoc "skolemized: " <> pretty skolemizedQuoteType)
         skolemize skolemized
     type_ -> pure type_
 
@@ -200,7 +197,7 @@ typecheck declarations = runInfer do
     pure declarations
 
 checkDeclaration :: Env -> Declaration Renamed -> Infer (Env, CoreDeclaration)
-checkDeclaration env decl = traceDecl $ case decl of
+checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadConstructor decl) $ case decl of
     DefineFunction _loc name typeExpr params body -> do
         typeCore <- check env Type typeExpr
         type_ <- liftEval $ eval (evalContext env) typeCore
@@ -232,13 +229,9 @@ checkDeclaration env decl = traceDecl $ case decl of
                 core <- addLambdas =<< check bodyEnv resultType body
                 pure (core, value)
             pure (extendVariable name type_ value env, CDefineVar name core)
-  where
-    traceDecl rest = do
-        trace Types ("checkDeclaration: " <> showHeadConstructor decl)
-        rest
 
 infer :: Env -> Expr Renamed -> Infer (Type, CoreExpr)
-infer env expr = do
+infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
     (type_, core) <- case expr of
         Var _loc name -> do
             type_ <- instantiate (variableType env name)
@@ -343,78 +336,66 @@ infer env expr = do
     pure (type_, core)
 
 check :: Env -> Type -> Expr Renamed -> Infer CoreExpr
-check env rawExpectedType expr = do
-    expectedType <- skolemize rawExpectedType
-    trace
-        Types
-        ( "check:"
-            <+> showHeadConstructor expr
-            <+> keyword "<="
-            <+> pretty rawExpectedType
-            <+> "["
-            <+> keyword "~>"
-            <+> pretty expectedType
-            <+> "]"
-            <+> "[HEAD RAW]: "
-            <> showHeadConstructor rawExpectedType
-            <+> "[HEAD SKOLEMIZED]: "
-            <> showHeadConstructor expectedType
-        )
-    let deferToInference = do
-            (actualType, core) <- infer env expr
-            subsumes (getLoc expr) actualType expectedType
-            pure core
-    case expr of
-        Var{} -> deferToInference
-        App{} -> deferToInference
-        Lambda loc pattern_ body -> do
-            (parameterName, parameterType, resultClosureExpr, resultClosureContext) <- splitFunctionType loc expectedType
+check env rawExpectedType expr = withTrace
+    Types
+    ("check:" <+> showHeadConstructor expr <+> keyword "<=" <+> pretty rawExpectedType)
+    do
+        expectedType <- skolemize rawExpectedType
+        let deferToInference = do
+                (actualType, core) <- infer env expr
+                subsumes (getLoc expr) actualType expectedType
+                pure core
+        case expr of
+            Var{} -> deferToInference
+            App{} -> deferToInference
+            Lambda loc pattern_ body -> do
+                (parameterName, parameterType, resultClosureExpr, resultClosureContext) <- splitFunctionType loc expectedType
 
-            (envTrans, parameterValue, corePattern) <- checkPattern env parameterType pattern_
+                (envTrans, parameterValue, corePattern) <- checkPattern env parameterType pattern_
 
-            let updatedContext = case parameterName of
-                    Nothing -> resultClosureContext
-                    Just name -> define name parameterValue resultClosureContext
+                let updatedContext = case parameterName of
+                        Nothing -> resultClosureContext
+                        Just name -> define name parameterValue resultClosureContext
 
-            resultType <- liftEval $ eval updatedContext resultClosureExpr
+                resultType <- liftEval $ eval updatedContext resultClosureExpr
 
-            bodyCore <- check (envTrans env) resultType body
+                bodyCore <- check (envTrans env) resultType body
 
-            varName <- freshName "x"
-            body <- Pattern.lowerCase [(corePattern, bodyCore)] varName
+                varName <- freshName "x"
+                body <- Pattern.lowerCase [(corePattern, bodyCore)] varName
 
-            pure (CLambda varName body)
-        Case _loc scrutinee cases -> do
-            (scrutineeType, scrutineeCore) <- infer env scrutinee
+                pure (CLambda varName body)
+            Case _loc scrutinee cases -> do
+                (scrutineeType, scrutineeCore) <- infer env scrutinee
 
-            scrutineeVar <- freshName "x"
+                scrutineeVar <- freshName "x"
 
-            newCases <- forM cases \(pattern_, body) -> do
-                (envTrans, _patternValue, corePattern) <- checkPattern env scrutineeType pattern_
-                coreBody <- check (envTrans env) expectedType body
+                newCases <- forM cases \(pattern_, body) -> do
+                    (envTrans, _patternValue, corePattern) <- checkPattern env scrutineeType pattern_
+                    coreBody <- check (envTrans env) expectedType body
 
-                pure (corePattern, coreBody)
-            CLet scrutineeVar scrutineeCore <$> Pattern.lowerCase newCases scrutineeVar
-        TupleLiteral loc arguments -> do
-            argumentTypes <- splitTupleType loc expectedType (length arguments)
+                    pure (corePattern, coreBody)
+                CLet scrutineeVar scrutineeCore <$> Pattern.lowerCase newCases scrutineeVar
+            TupleLiteral loc arguments -> do
+                argumentTypes <- splitTupleType loc expectedType (length arguments)
 
-            argumentCore <- Vector.zipWithM (check env) argumentTypes arguments
+                argumentCore <- Vector.zipWithM (check env) argumentTypes arguments
 
-            pure (CTupleLiteral argumentCore)
-        Literal{} -> deferToInference
-        Sequence _ (Vector.unsnoc -> Just (statements, RunExpr _ expr)) -> do
-            (env, coreTransformers) <- mapAccumLM checkStatement env statements
-            finalCore <- check env expectedType expr
+                pure (CTupleLiteral argumentCore)
+            Literal{} -> deferToInference
+            Sequence _ (Vector.unsnoc -> Just (statements, RunExpr _ expr)) -> do
+                (env, coreTransformers) <- mapAccumLM checkStatement env statements
+                finalCore <- check env expectedType expr
 
-            composeM coreTransformers finalCore
-        Sequence _ statements -> do
-            (_env, coreTransformersM) <- mapAccumLM checkStatement env statements
-            composeM coreTransformersM (CTupleLiteral [])
-        Ascription{} -> deferToInference
-        Primop{} -> deferToInference
-        EPi{} -> deferToInference
-        EForall{} -> deferToInference
-        ETupleType{} -> deferToInference
+                composeM coreTransformers finalCore
+            Sequence _ statements -> do
+                (_env, coreTransformersM) <- mapAccumLM checkStatement env statements
+                composeM coreTransformersM (CTupleLiteral [])
+            Ascription{} -> deferToInference
+            Primop{} -> deferToInference
+            EPi{} -> deferToInference
+            EForall{} -> deferToInference
+            ETupleType{} -> deferToInference
 
 checkStatement :: Env -> Statement Renamed -> Infer (Env, CoreExpr -> Infer CoreExpr)
 checkStatement env = \case

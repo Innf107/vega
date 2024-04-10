@@ -32,6 +32,7 @@ import Vega.Debug
 import Vega.Loc (HasLoc, Loc, getLoc)
 import Vega.Name as Name
 import Vega.Pretty
+import Vega.Util
 
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -47,7 +48,6 @@ data Declaration (p :: Pass)
     = DefineFunction Loc (XName p) (SourceType p) (Vector (Pattern p)) (Expr p)
     deriving (Generic)
 instance HasLoc (Declaration p)
-instance (HeadConstructorArg (XName p)) => ShowHeadConstructor (Declaration p)
 
 data Expr (p :: Pass)
     = Var Loc (XName p)
@@ -65,7 +65,6 @@ data Expr (p :: Pass)
     | ETupleType Loc (Vector (Expr p))
     deriving (Generic)
 instance HasLoc (Expr p)
-instance (HeadConstructorArg (XName p)) => ShowHeadConstructor (Expr p)
 
 data Statement (p :: Pass)
     = Let Loc (Pattern p) (Expr p)
@@ -147,7 +146,6 @@ data ValueF context
       SkolemApp Skolem (Seq (ValueF context))
     | MetaApp (MetaVarF context) (Seq (ValueF context))
     deriving (Generic)
-instance (HeadConstructorArg Name) => ShowHeadConstructor (ValueF context)
 
 data ClosureF context
     = MkClosure Name (CoreExprF context) context
@@ -326,3 +324,13 @@ instance Pretty Primop where
         Subtract -> "(-)"
         Multiply -> "(*)"
         IntDivide -> "(//)"
+
+instance (HeadConstructorOverrides p) => HeadConstructorArg (Expr p) where
+    headConstructorArg (Var _ name) = headConstructorArg name
+    headConstructorArg (Literal _ literal) = headConstructorArg literal
+    headConstructorArg app@App{} = showHeadConstructor app
+    headConstructorArg pi@EPi{} = showHeadConstructor pi
+    headConstructorArg forall_@EForall{} = showHeadConstructor forall_
+    headConstructorArg _ = defaultHeadConstructorArg
+
+type HeadConstructorOverrides p = AllConstraints HeadConstructorArg '[XName p, Expr p]

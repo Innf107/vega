@@ -1,8 +1,9 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 
 module Vega.Debug (
-    ShowHeadConstructor (..),
+    showHeadConstructor,
     HeadConstructorArg (..),
+    defaultHeadConstructorArg,
     getRecordFields,
 ) where
 
@@ -13,10 +14,10 @@ import Vega.Pretty
 import GHC.Generics
 import GHC.TypeLits (KnownSymbol, symbolVal)
 
-class ShowHeadConstructor a where
-    showHeadConstructor :: a -> Doc Ann
-    default showHeadConstructor :: (Generic a, ShowHeadConstructorGen (Rep a)) => a -> Doc Ann
-    showHeadConstructor x = showHeadConstructorGen (from x)
+-- | Pretty-print the first constructor of a data type that implements 'Generic' for debugging purposes.
+-- This will include every argument that implements 'HeadConstructorArg' and display everything else as @_@.
+showHeadConstructor :: (Generic a, ShowHeadConstructorGen (Rep a)) => a -> Doc Ann
+showHeadConstructor x = showHeadConstructorGen (from x)
 
 class ShowHeadConstructorGen f where
     showHeadConstructorGen :: f x -> Doc Ann
@@ -52,12 +53,29 @@ instance (HeadConstructorArgs f, HeadConstructorArgs g) => HeadConstructorArgs (
 instance (HeadConstructorArg x) => HeadConstructorArgs (K1 _i x) where
     headConstructorArgs (K1 x) = [headConstructorArg x]
 
+{- | This class can be used to override the way an argument
+    to a constructor is displayed by 'showHeadConstructor'.
+
+    Since this uses overlapping instances, there is a chance of incoherence so make
+    sure you define these instances early enough. Since 'showHeadConstructor'
+    is only used for debugging, this shouldn't cause any major issues though.
+-}
 class HeadConstructorArg a where
     headConstructorArg :: a -> Doc Ann
 
 instance {-# OVERLAPPABLE #-} HeadConstructorArg a where
-    headConstructorArg _ = "_"
+    headConstructorArg _ = defaultHeadConstructorArg
 
+instance HeadConstructorArg a => HeadConstructorArg (Maybe a) where
+    headConstructorArg Nothing = keyword "Nothing"
+    headConstructorArg (Just x) = headConstructorArg x
+
+defaultHeadConstructorArg :: Doc Ann
+defaultHeadConstructorArg = "_"
+
+{- | Get the names of all fields in a record type that implements 'Generic'.
+    This only works on record types with a single constructor.
+-}
 getRecordFields :: forall a. (RecordFieldsG (Rep a)) => Seq Text
 getRecordFields = getRecordFieldsG @(Rep a)
 

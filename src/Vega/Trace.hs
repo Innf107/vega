@@ -15,7 +15,12 @@ import Vega.Pretty
 import Control.Monad.Base (MonadBase, liftBase)
 import Data.Text.IO (hPutStrLn)
 
-newtype TraceAction m = MkTraceAction (Category -> Doc Ann -> m ())
+import Data.Text qualified as Text
+
+data TraceAction m = MkTraceAction
+    { depth :: Int
+    , action :: Int -> Category -> Doc Ann -> m ()
+    }
 
 data Category
     = Types
@@ -26,18 +31,23 @@ data Category
 
 class MonadTrace m where
     trace :: Category -> Doc Ann -> m ()
+    withTrace :: Category -> Doc Ann -> m a -> m a
 
 instance (MonadBase traceM m) => MonadTrace (ReaderT (TraceAction traceM) m) where
     trace category doc = do
-        MkTraceAction action <- ask
-        liftBase (action category doc)
+        MkTraceAction{action, depth} <- ask
+        liftBase (action depth category doc)
+    withTrace category doc cont = do
+        trace category doc
+        local (\action -> action{depth = action.depth + 1}) cont
 
 data TraceConfig = MkTraceConfig
     { types :: Bool
     , unify :: Bool
     , subst :: Bool
     , patterns :: Bool
-    } deriving (Generic)
+    }
+    deriving (Generic)
 
 traceEnabled :: Category -> TraceConfig -> Bool
 traceEnabled category config = case category of
@@ -47,6 +57,6 @@ traceEnabled category config = case category of
     Patterns -> config.patterns
 
 traceStderrAction :: (Doc Ann -> Text) -> TraceConfig -> TraceAction IO
-traceStderrAction render config = MkTraceAction \category doc ->
+traceStderrAction render config = MkTraceAction 0 \depth category doc ->
     when (traceEnabled category config) do
-        hPutStrLn stderr ("[" <> show category <> "]: " <> render doc)
+        hPutStrLn stderr ("[" <> show category <> "]: " <> Text.replicate depth "│ " <> render doc)
