@@ -1,0 +1,6 @@
+test/categories/types/typepat_mismatch.vega:3:22: ERROR:
+Unable to unify types Int
+                  and Type
+  ┃ 
+3 ┃     let (y : Type) = x;
+  ┃                      ▔

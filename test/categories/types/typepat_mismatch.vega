@@ -1,0 +1,5 @@
+f : Int -> Int;
+f x = {
+    let (y : Type) = x;
+    5
+};

@@ -1,0 +1,11 @@
+-- EXPECT: 5
+
+f : Int -> Int;
+f x = {
+    let (y : Int) = x;
+    y
+};
+
+
+main : Unit;
+main = debug(f(5));

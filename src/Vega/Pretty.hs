@@ -46,7 +46,7 @@ module Vega.Pretty (
 
 import Vega.Prelude
 
-import Vega.Disambiguate (Disambiguate, disambiguate)
+import Vega.Disambiguate (disambiguate)
 import Vega.Disambiguate qualified as Disambiguate
 import Vega.Util (Fix (MkFix), Untagged (..))
 
@@ -83,19 +83,19 @@ textUnique :: Unique
 textUnique = unsafePerformIO newUnique
 
 identTextWith :: Unique -> Text -> Doc Ann
-identTextWith unique name = PP.annotate (Ident name unique) ""
+identTextWith unique name = PP.annotate (Ident name unique) (PP.pretty name)
 
 identText :: Text -> Doc Ann
 identText = identTextWith textUnique
 
 constructorTextWith :: Unique -> Text -> Doc Ann
-constructorTextWith unique name = PP.annotate (Constructor name unique) ""
+constructorTextWith unique name = PP.annotate (Constructor name unique) (PP.pretty name)
 
 constructorText :: Text -> Doc Ann
 constructorText = constructorTextWith textUnique
 
 skolemTextWith :: Unique -> Text -> Doc Ann
-skolemTextWith unique name = PP.annotate (Skolem name unique) ""
+skolemTextWith unique name = PP.annotate (Skolem name unique) (PP.pretty name)
 
 skolemText :: Text -> Doc Ann
 skolemText = skolemTextWith textUnique
@@ -134,7 +134,7 @@ rparen :: Text -> Doc Ann
 rparen = PP.annotate RParen . PP.pretty
 
 meta :: Unique -> Text -> Doc Ann
-meta unique name = PP.annotate (Meta name unique) ""
+meta unique name = PP.annotate (Meta name unique) (PP.pretty name)
 
 literal :: Text -> Doc Ann
 literal = PP.pretty

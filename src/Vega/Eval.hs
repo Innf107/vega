@@ -67,7 +67,7 @@ define name value context = context{varValues = insert name value context.varVal
 -- TODO: This needs to implement effect handlers. Not sure how to combine that with
 -- partial evaluation
 eval :: EvalContext -> CoreExpr -> Eval Value
-eval context = \case
+eval context expr = case expr of
     CVar name -> case lookup name context.varValues of
         Nothing -> error ("variable not found during evaluation: " <> show name)
         Just value -> forceM value

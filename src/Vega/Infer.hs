@@ -24,7 +24,6 @@ import Control.Monad.Writer.Strict (MonadWriter (tell), WriterT (runWriterT))
 import Vega.Difflist (Difflist)
 import Vega.Monad.Unique (MonadUnique (..))
 import Vega.Name qualified as Name
-import Vega.Util (Fix (MkFix))
 
 data TypeError
     = UnableToUnify Loc CoreExpr CoreExpr
@@ -229,6 +228,7 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
                 core <- addLambdas =<< check bodyEnv resultType body
                 pure (core, value)
             pure (extendVariable name type_ value env, CDefineVar name core)
+    DefineGADT{} -> undefined
 
 infer :: Env -> Expr Renamed -> Infer (Type, CoreExpr)
 infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
@@ -474,12 +474,19 @@ inferPattern env = \case
         varSkolem <- freshSkolem name
         varValue <- lazyValueM $ SkolemApp varSkolem []
         pure (varType, extendVariable name varType varValue, CVarPat name)
+    ConstructorPat _ _ _ -> undefined
     IntPat _loc value -> pure (Int, id, CIntPat value)
     StringPat _loc value -> pure (String, id, CStringPat value)
     TuplePat _loc subpatterns -> do
         (subTypes, subEnvTransformers, subCorePatterns) <- Vector.unzip3 <$> traverse (inferPattern env) subpatterns
         pure (Tuple subTypes, compose subEnvTransformers, CTuplePat (coerce subCorePatterns))
     OrPat{} -> undefined
+    TypePat loc pattern_ type_ -> do
+        typeCore <- check env Type type_
+        type_ <- liftEval $ eval env.evalContext typeCore
+        -- TODO: why don't we need the value here?
+        (env_trans, _value, corePattern) <- checkPattern env type_ pattern_
+        pure (type_, env_trans, corePattern)
 
 checkPattern :: Env -> Type -> Pattern Renamed -> Infer (Env -> Env, LazyM Eval Value, CorePattern (Fix CorePattern))
 checkPattern env expectedType = \case
@@ -487,6 +494,7 @@ checkPattern env expectedType = \case
         skolem <- freshSkolem name
         value <- lazyValueM (SkolemApp skolem [])
         pure (extendVariable name expectedType value, value, CVarPat name)
+    ConstructorPat _ _ _ -> undefined
     IntPat loc n -> do
         subsumes loc Int expectedType
         value <- lazyValueM (IntV n)
@@ -501,6 +509,12 @@ checkPattern env expectedType = \case
         value <- lazyM (TupleV <$> traverse forceM subValues)
         pure (compose subEnvTransformers, value, CTuplePat (coerce subPatterns))
     OrPat{} -> undefined
+    TypePat loc pattern_ type_ -> do
+        typeCore <- check env Type type_
+        type_ <- liftEval $ eval env.evalContext typeCore
+        (env_trans, value, corePattern) <- checkPattern env type_ pattern_
+        subsumes loc type_ expectedType
+        pure (env_trans, value, corePattern)
 
 checkParameterPatterns :: (Uncons t (Pattern Renamed)) => Env -> Type -> t -> Infer (Env -> Env, Seq (CorePattern (Fix CorePattern)), Type)
 checkParameterPatterns _env type_ Nil = pure (id, [], type_)

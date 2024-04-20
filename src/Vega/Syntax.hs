@@ -46,6 +46,7 @@ type SourceType = Expr
 
 data Declaration (p :: Pass)
     = DefineFunction Loc (XName p) (SourceType p) (Vector (Pattern p)) (Expr p)
+    | DefineGADT Loc (XName p) (SourceType p) (Vector (XName p, SourceType p))
     deriving (Generic)
 instance HasLoc (Declaration p)
 
@@ -75,10 +76,12 @@ instance HasLoc (Statement p)
 
 data Pattern (p :: Pass)
     = VarPat Loc (XName p)
+    | ConstructorPat Loc (XName p) (Vector (Pattern p))
     | IntPat Loc Integer
     | StringPat Loc Text
     | TuplePat Loc (Vector (Pattern p))
     | OrPat Loc (Pattern p) (Pattern p)
+    | TypePat Loc (Pattern p) (SourceType p)
     deriving (Generic)
 instance HasLoc (Pattern p)
 

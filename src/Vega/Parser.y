@@ -176,6 +176,7 @@ pattern : identLoc                                                      { VarPat
         | intLoc                                                        { IntPat (fst $1) (snd $1) }
         | stringLoc                                                     { StringPat (fst $1) (snd $1) }
         | pattern '|' pattern                                           { OrPat (merge $1 $3) $1 $3 }
+        | '(' pattern ':' expr ')'                                      { TypePat (merge $1 $5) $2 $4 }
         | '(' pattern ')'                                               { $2 }
         | '(' pattern ',' pattern ')'                                   { TuplePat (merge $1 $5) [$2, $4] }
         | '(' pattern ',' pattern ',' sepTrailingList(',', pattern) ')' { TuplePat (merge $1 $7) (fromList ($2 : $4 : $6)) }
