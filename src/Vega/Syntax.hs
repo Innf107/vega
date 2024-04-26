@@ -6,6 +6,7 @@ module Vega.Syntax (
     -- Surface Syntax
     Declaration (..),
     Expr (..),
+    SourceType,
     Statement (..),
     Pattern (..),
     Literal (..),
@@ -142,6 +143,7 @@ data ValueF context
     | Int
     | String
     | Tuple (Vector (ValueF context))
+    | TypeConstructorApp Name (Seq (ValueF context))
     | -- TODO: Add effects
       Pi (Maybe Name) (ValueF context) (CoreExprF context, context)
     | Forall Name (ValueF context) (CoreExprF context, context)

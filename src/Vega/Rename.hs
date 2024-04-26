@@ -81,7 +81,18 @@ renameDeclaration scope = \case
         -- Function declarations are recursive so we use the extended scope when renaming the body
         body <- renameExpr (compose scopeTransformers scopeWithFunction) body
         pure (scopeWithFunction, DefineFunction loc name type_ patterns body)
-    DefineGADT{} -> undefined
+    DefineGADT loc name kind constructors -> do
+        kind <- renameExpr scope kind
+        (name, scope) <- addFreshVariable name scope
+
+        let renameConstructor scope (name, type_) = do
+                (name, scopeWithConstructor) <- addFreshVariable name scope
+                type_ <- renameExpr scope type_
+                pure (scopeWithConstructor, (name, type_))
+
+        (scope, constructors) <- mapAccumLM renameConstructor scope constructors
+
+        pure (scope, DefineGADT loc name kind constructors)
 
 renameExpr :: Scope -> Expr Parsed -> Rename (Expr Renamed)
 renameExpr scope = \case

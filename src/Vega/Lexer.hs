@@ -48,6 +48,7 @@ data TokenClass
     | LET
     | CASE
     | FORALL
+    | DATA
     | PLUS
     | MINUS
     | STAR
@@ -217,9 +218,6 @@ lex = do
         , C ";" $ emit SEMI
         , C "|" $ emit PIPE
         , C "->" $ emit ARROW
-        , C "let" $ emit LET
-        , C "case" $ emit CASE
-        , C "forall" $ emit FORALL
         , C "--" $ lexLineComment
         , C "+" $ emit PLUS
         , C "-" $ emit MINUS
@@ -274,8 +272,15 @@ lexIdent chars =
     match
         [ C (SatisfiesAdvance isIdent) \char -> lexIdent (chars <> [char])
         ]
-        (\_ -> emit (IDENT (toText (toList chars))))
-        (emit (IDENT (toText (toList chars))))
+        (\_ -> emit (mkIdent (toText (toList chars))))
+        (emit (mkIdent (toText (toList chars))))
+  where
+    mkIdent = \case
+        "let" -> LET
+        "case" -> CASE
+        "forall" -> FORALL
+        "data" -> DATA
+        text -> IDENT text
 
 isIdentStart :: Char -> Bool
 isIdentStart char = Char.isAlpha char || char `Text.elem` "_"

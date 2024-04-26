@@ -40,6 +40,7 @@ import Debug.Trace (trace)
     'let'           { MkToken LET _ }
     'case'          { MkToken CASE _ }
     'forall'        { MkToken FORALL _ }
+    'data'          { MkToken DATA _ }
     '+'             { MkToken PLUS _ }
     '-'             { MkToken MINUS _ }
     '*'             { MkToken STAR _ }
@@ -89,6 +90,11 @@ declaration
             parseError (MismatchedDeclarationName { loc = merge $1 $8, signature = snd $1, definition = $5 })
            else
             pure $ DefineFunction (fst $1) (snd $1) $3 $6 $8 }
+    | 'data' ident ':' expr_leaf_no_block '{' sepTrailing(';', dataConstructor) '}'
+        { DefineGADT(merge $1 $4) $2 $4 $6 }
+
+dataConstructor :: { (Text, SourceType Parsed) }
+dataConstructor : ident ':' type { ($1, $3) }
 
 expr :: { Expr Parsed }
 expr : expr_op_tuple '->' expr 
@@ -130,20 +136,25 @@ expr_app : expr_app expr_leaf   { App (merge $1 $2) $1 $2 }
          | expr_leaf            { $1 }
 
 expr_leaf :: { Expr Parsed }
-expr_leaf : identLoc                                    { Var (fst $1) (snd $1) }
-          -- TODO: this should include the locations from the '(' ')' or error messages for
-          -- applications are going to miss the final ')'
-          | '(' expr ')'                                { $2 }
-          | '(' ')'                                     { TupleLiteral (merge $1 $2) [] }
-          | '(' expr ',' sepTrailingList(',', expr) ')' { TupleLiteral (merge $1 $5) (fromList ($2 : $4)) }
-          | '\\' many1(pattern) '->' expr               { foldr (\pattern_ expr -> Lambda (merge $1 $4) pattern_ expr) $4 $2 }
-          | 'case' expr_leaf '{' 
-                sepTrailing(';', caseBranch)
-            '}'                                         { Case (merge $1 $5) $2 $4 }
-          | literal                                     { Literal (fst $1) (snd $1) }
+expr_leaf : expr_leaf_no_block                          { $1 }
           | '{' sepTrailing(';', statement) '}'         { Sequence (merge $1 $3) $2 }
-          -- Not sure about this syntax yet to be honest
-          | 'forall' many1(forallVar) '.' expr          { foldr (\(name, type_) rest -> EForall (merge $1 $4) name type_ rest) $4 $2 }
+
+
+expr_leaf_no_block :: { Expr Parsed }
+expr_leaf_no_block
+    : identLoc                                    { Var (fst $1) (snd $1) }
+    -- TODO: this should include the locations from the '(' ')' or error messages for
+    -- applications are going to miss the final ')'
+    | '(' expr ')'                                { $2 }
+    | '(' ')'                                     { TupleLiteral (merge $1 $2) [] }
+    | '(' expr ',' sepTrailingList(',', expr) ')' { TupleLiteral (merge $1 $5) (fromList ($2 : $4)) }
+    | '\\' many1(pattern) '->' expr               { foldr (\pattern_ expr -> Lambda (merge $1 $4) pattern_ expr) $4 $2 }
+    | 'case' expr_leaf '{' 
+        sepTrailing(';', caseBranch)
+    '}'                                           { Case (merge $1 $5) $2 $4 }
+    | literal                                     { Literal (fst $1) (snd $1) }
+    -- Not sure about this syntax yet to be honest
+    | 'forall' many1(forallVar) '.' expr          { foldr (\(name, type_) rest -> EForall (merge $1 $4) name type_ rest) $4 $2 }
 
 forallVar :: { (Text, Expr Parsed) }
 forallVar : identLoc                { (snd $1, Literal (fst $1) TypeLit ) }

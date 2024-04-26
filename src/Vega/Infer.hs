@@ -53,6 +53,7 @@ type MetaVar = MetaVarF EvalContext
 
 data Env = MkEnv
     { varTypes :: Map Name Type
+    , dataConstructors :: Map Name Type
     , evalContext :: EvalContext
     }
 
@@ -164,6 +165,7 @@ emptyEnv :: Env
 emptyEnv =
     MkEnv
         { varTypes = mempty
+        , dataConstructors = mempty
         , evalContext = emptyEvalContext
         }
 
@@ -228,7 +230,12 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
                 core <- addLambdas =<< check bodyEnv resultType body
                 pure (core, value)
             pure (extendVariable name type_ value env, CDefineVar name core)
-    DefineGADT{} -> undefined
+    DefineGADT loc name kind constructors -> do
+        kindCore <- check env Type kind
+        kindValue <- liftEval $ eval env.evalContext kindCore
+        let typeConValue = liftEval $ lazyValueM $ TypeConstructorApp name []
+        let envWithGADT = extendVariable name kindValue typeConValue env
+        undefined
 
 infer :: Env -> Expr Renamed -> Infer (Type, CoreExpr)
 infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
