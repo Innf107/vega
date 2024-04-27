@@ -233,8 +233,16 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
     DefineGADT loc name kind constructors -> do
         kindCore <- check env Type kind
         kindValue <- liftEval $ eval env.evalContext kindCore
-        let typeConValue = liftEval $ lazyValueM $ TypeConstructorApp name []
+        typeConValue <- liftEval $ lazyValueM $ TypeConstructorApp name []
         let envWithGADT = extendVariable name kindValue typeConValue env
+
+        constructors <- forAccumL envWithGADT constructors \env (name, sourceType) -> do
+            coreType <- check env Type sourceType
+            type_ <- liftEval $ eval env.evalContext coreType
+            -- TODO: Somehow check that the core type actually ends in `$name ...`
+
+            undefined
+
         undefined
 
 infer :: Env -> Expr Renamed -> Infer (Type, CoreExpr)
@@ -647,6 +655,11 @@ unify loc type1 type2 = do
             Tuple arguments1 -> case type2 of
                 Tuple arguments2 -> Vector.zipWithM_ (unify loc) arguments1 arguments2
                 _ -> unableToUnify
+            TypeConstructorApp name1 arguments1 -> case type2 of
+                TypeConstructorApp name2 arguments2 | name1 == name2 -> do
+                    assertM (length arguments1 == length arguments2)
+                    zipWithM_ (unify loc) (toList arguments1) (toList arguments2)
+                _ -> unableToUnify
 
 -- See Note [Pattern Unification]
 patternUnification :: MetaVar -> Seq Type -> Type -> Infer ()
@@ -695,6 +708,7 @@ occursCheck meta type_ =
             ClosureV (PrimopClosure _primop arguments) ->
                 traverse_ go arguments
             TupleV arguments -> traverse_ go arguments
+            TypeConstructorApp _name arguments -> traverse_ go arguments
             Type -> pure ()
             Int -> pure ()
             String -> pure ()
@@ -762,6 +776,8 @@ quoteFully type_ =
         TupleV arguments -> do
             quotedArguments <- traverse quoteFully arguments
             pure $ CTupleLiteral quotedArguments
+        TypeConstructorApp{} -> do
+            undefined
         Type -> pure $ CLiteral TypeLit
         Int -> pure $ CLiteral IntTypeLit
         String -> pure $ CLiteral StringTypeLit

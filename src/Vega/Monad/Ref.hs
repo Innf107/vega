@@ -2,6 +2,14 @@ module Vega.Monad.Ref (MonadRef (..)) where
 
 import Vega.Prelude
 
+{- | MonadRef represents a canonical way to create and manipulate mutable references.
+These are in general **NOT** expected to be thread safe but should otherwise
+satisfy some obvious properties (again ignoring any concurrent accesses):
+
+> writeRef ref x >> readRef x = writeRef ref x >> pure x
+> writeRef ref x >> writeRef ref y = writeRef ref y
+> newRef x >>= readRef = pure x
+-}
 class (Monad m) => MonadRef m where
     type Ref m :: HSType -> HSType
 

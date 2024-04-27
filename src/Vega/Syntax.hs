@@ -184,6 +184,8 @@ instance (EvalClosureForPrinting context) => Pretty (ValueF context) where
         Int -> constructorText "Int"
         String -> constructorText "String"
         Tuple [] -> keyword "Unit"
+        TypeConstructorApp name [] -> constructor name
+        TypeConstructorApp name args -> lparen "(" <> constructor name <+> sep (fmap pretty args) <> rparen ")"
         Tuple values -> lparen "(" <> intercalateMap (keyword " ** ") pretty values <> rparen ")"
         Pi Nothing domain (core, context) -> do
             let codomain = unsafePerformIO (applyNullaryClosurePrint context core)
