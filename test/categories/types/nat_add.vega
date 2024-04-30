@@ -1,4 +1,4 @@
--- EXPECT: 4
+-- EXPECT: {1 = {1 = {1 = {1 = {tag = "Z2"}, tag = "S3"}, tag = "S3"}, tag = "S3"}, tag = "S3"}
 
 data Nat : Type {
     Z : Nat;

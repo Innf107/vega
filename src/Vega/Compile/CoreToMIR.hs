@@ -17,7 +17,7 @@ coreToMIR = runCompile . traverse compileDeclaration
 
 compileDeclaration :: Eval.CoreDeclaration -> Compile MIR.Declaration
 compileDeclaration (CDefineVar name body) = MIR.DefineVar name <$> compilePureExpr body
-compileDeclaration CDefineGADT = undefined
+compileDeclaration (CDefineGADT _ _) = undefined
 
 -- TODO: this needs to keep track of effects from the core and selectively
 -- transform (possibly) *effectful* expressions into CPS/statement forms

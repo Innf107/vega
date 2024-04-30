@@ -7,9 +7,9 @@ import Vega.Syntax
 
 import Vega.Name qualified as Name
 
+import Data.Vector qualified as Vector
 import Vega.Eval
 import Vega.Name (freshNameIO)
-import qualified Data.Vector as Vector
 
 newtype Compile a = MkCompile (IO a)
     deriving (Functor, Applicative, Monad)
@@ -72,7 +72,11 @@ compileDeclaration = \case
     CDefineVar name expr -> do
         exprCode <- compileExpr expr
         pure (renderName name <> " = " <> exprCode)
-    CDefineGADT -> pure ""
+    CDefineGADT _typeName constructors -> do
+        let defineConstructor (name, argumentCount) = do
+                let result = "{ tag = \"" <> renderName name <> "\"" <> foldMap (\i -> ", x" <> show i) ([1 .. argumentCount] :: Vector Int) <> " }"
+                "local " <> renderName name <> " = " <> foldr (\i rest -> "function (x" <> show i <> ") return " <> rest <> " end") result ([1 .. argumentCount] :: Vector Int)
+        pure $ intercalate "\n" (fmap defineConstructor constructors)
 
 compileExpr :: CoreExpr -> Compile Text
 compileExpr = \case
@@ -126,7 +130,8 @@ compileCase scrutinee cases = do
             <> matchCode
             <> " then\n"
             <> bindCode
-            <> "        return " <> exprCode
+            <> "        return "
+            <> exprCode
             <> "\n"
             <> "    else"
     compileMatch scrutinee = \case
@@ -137,7 +142,9 @@ compileCase scrutinee cases = do
         CTuplePat subPatterns -> do
             let bindings = Vector.imap (\i name -> "        local " <> renderName name <> " = " <> renderName scrutinee <> "[" <> show (i + 1) <> "]") subPatterns
             pure ("true", intercalate "\n" bindings <> "\n")
-
+        CConstructorPat name subPatterns -> do
+            let bindings = Vector.imap (\i name -> "        local " <> renderName name <> " = " <> renderName scrutinee <> "[" <> show (i + 1) <> "]") subPatterns
+            pure (renderName scrutinee <> ".tag == \"" <> renderName name <> "\"", intercalate "\n" bindings <> "\n")
 
 compileLiteral :: Literal -> Text
 compileLiteral = \case

@@ -60,7 +60,7 @@ lintDeclaration env (CDefineVar name expr) = do
     env <- pure $ defineVar name env
     lintExpr env expr
     pure env
-lintDeclaration env (CDefineGADT) = pure env
+lintDeclaration env (CDefineGADT typeName constructors) = pure $ foldr (defineVar . fst) (defineVar typeName env) constructors
 
 lintExpr :: Env -> CoreExpr -> Lint ()
 lintExpr env = \case
@@ -104,3 +104,4 @@ lintPattern env = \case
     CStringPat _ -> pure env
     CTuplePat boundNames ->
         pure (foldr defineVar env boundNames)
+    CConstructorPat _name boundNames -> pure (foldr defineVar env boundNames)

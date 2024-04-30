@@ -40,12 +40,14 @@ decomposeConstructor pattern_ matrix = Vector.mapMaybe (\(row, coreExpr) -> (,co
             CIntPat _ -> Just rest
             CStringPat _ -> Just rest
             CTuplePat subpatterns -> Just (Vector.replicate (length subpatterns) CWildcardPat <> rest)
+            CConstructorPat _name subpatterns -> Just (Vector.replicate (length subpatterns) CWildcardPat <> rest)
         Just (CWildcardPat, rest) -> case pattern_ of
             CVarPat _ -> error "variable pattern in decomposeConstructor"
             CWildcardPat -> error "wildcard pattern in decomposeConstructor"
             CIntPat _ -> Just rest
             CStringPat _ -> Just rest
             CTuplePat subpatterns -> Just (Vector.replicate (length subpatterns) CWildcardPat <> rest)
+            CConstructorPat _name subPatterns -> Just (Vector.replicate (length subPatterns) CWildcardPat <> rest)
         Just (CIntPat int, rest) -> case pattern_ of
             CIntPat int2 | int == int2 -> Just rest
             _ -> Nothing
@@ -58,6 +60,10 @@ decomposeConstructor pattern_ matrix = Vector.mapMaybe (\(row, coreExpr) -> (,co
                 assertM (length subpatterns == length conSubPatterns)
                 Just (coerce subpatterns <> rest)
             _ -> Nothing
+        Just (CConstructorPat name subPatterns, rest) -> case pattern_ of
+            CConstructorPat decomposedName _decomposedSubPatterns
+                | name == decomposedName -> Just (coerce subPatterns <> rest)
+            _ -> Nothing
 
 decomposeWildcard :: Name -> PatternMatrix -> PatternMatrix
 decomposeWildcard scrutinee matrix = Vector.mapMaybe decomposeRow matrix
@@ -69,6 +75,7 @@ decomposeWildcard scrutinee matrix = Vector.mapMaybe decomposeRow matrix
         Just (CIntPat _, _) -> Nothing
         Just (CStringPat _, _) -> Nothing
         Just (CTuplePat _, _) -> Nothing
+        Just (CConstructorPat _ _, _) -> Nothing
 
 -- TODO: does this duplicate the body? it really shouldn't!
 lowerCase :: forall m. (MonadUnique m, MonadTrace m) => (Vector (CorePattern (Fix CorePattern), CoreExpr)) -> Name -> m CoreExpr
@@ -143,7 +150,9 @@ lowerCase branches scrutinee = go (fmap (\(pattern_, expr) -> ([pattern_], expr)
         CVarPat name -> pure (CVarPat name, [])
         CIntPat int -> pure (CIntPat int, [])
         CStringPat str -> pure (CStringPat str, [])
-        CTuplePat subpatterns -> do
-            subpatternNames <- traverse (\_ -> freshName "x") subpatterns
-            pure (CTuplePat subpatternNames, subpatternNames)
-
+        CTuplePat subPatterns -> do
+            subPatternNames <- traverse (\_ -> freshName "x") subPatterns
+            pure (CTuplePat subPatternNames, subPatternNames)
+        CConstructorPat constructorName subPatterns -> do
+            subPatternNames <- traverse (\_ -> freshName "x") subPatterns
+            pure (CConstructorPat constructorName subPatternNames, subPatternNames)

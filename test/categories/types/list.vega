@@ -1,0 +1,15 @@
+-- EXPECT: 3
+
+data List : (Type -> Type) {
+    Nil : forall a. List a;
+    Cons : forall a. a -> List a -> List a;
+};
+
+sum : List Int -> Int;
+sum list = case list {
+    Nil -> 0;
+    Cons x xs -> x + sum xs;
+};
+
+main : Unit;
+main = debug(sum(Cons 1 (Cons 2 Nil)));

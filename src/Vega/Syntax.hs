@@ -104,7 +104,7 @@ data Primop
 
 data CoreDeclarationF context
     = CDefineVar Name (CoreExprF context)
-    | CDefineGADT -- TODO: figure out what you actually need here. ideally core should just keep all data declarations as meta data shouldn't it?
+    | CDefineGADT Name (Vector (Name, Int))
 
 -- TODO: Maybe this shouldn't be a separate core type but just another TTG pass.
 -- Core cannot deviate that much from source syntax anyway since it needs to be shown in error messages
@@ -133,6 +133,7 @@ data CorePattern subPattern
     | CIntPat Integer
     | CStringPat Text
     | CTuplePat (Vector subPattern)
+    | CConstructorPat Name (Vector subPattern)
 
 data ValueF context
     = IntV Integer
@@ -257,7 +258,7 @@ instance Pretty Skolem where
 instance (EvalClosureForPrinting context) => Pretty (CoreDeclarationF context) where
     pretty = \case
         CDefineVar name body -> ident name <+> keyword "=" <+> pretty body
-        CDefineGADT -> "<<DEFINE GADT>>"
+        CDefineGADT _ _ -> "<<DEFINE GADT>>"
 
 -- TODO: PRECEDEEEENCE
 instance (EvalClosureForPrinting context) => Pretty (CoreExprF context) where
@@ -318,6 +319,7 @@ instance (Pretty subPattern) => Pretty (CorePattern subPattern) where
         CIntPat n -> number n
         CStringPat text -> literal ("\"" <> text <> "\"")
         CTuplePat subPatterns -> lparen "(" <> intercalateMap (keyword ", ") pretty subPatterns <> rparen ")"
+        CConstructorPat name subPatterns -> lparen "(" <> constructor name <+> sep (fmap pretty subPatterns) <> rparen ")"
 
 instance Pretty Literal where
     pretty = \case

@@ -21,7 +21,7 @@ import Data.Vector qualified as Vector
 
 import Control.Monad.Fix
 import Control.Monad.Writer.Strict (MonadWriter (tell), WriterT (runWriterT))
-import Data.These (These (This, That, These))
+import Data.These (These (That, These, This))
 import Vega.Difflist (Difflist)
 import Vega.Monad.Unique (MonadUnique (..))
 import Vega.Name (ident)
@@ -62,19 +62,14 @@ type MetaVar = MetaVarF EvalContext
 
 data Env = MkEnv
     { varTypes :: Map Name Type
-    , dataConstructors :: Map Name DataConstructorTypes
+    , dataConstructors :: Map Name Type
     , evalContext :: EvalContext
-    }
-
-data DataConstructorTypes = MkDataConstructorTypes
-    { parameterTypes :: Seq Type
-    , resultArguments :: Seq Type
     }
 
 evalContext :: Env -> EvalContext
 evalContext env = env.evalContext
 
-extendConstructor :: Name -> DataConstructorTypes -> Env -> Env
+extendConstructor :: Name -> Type -> Env -> Env
 extendConstructor name types env = env{dataConstructors = insert name types env.dataConstructors}
 
 extendVariable :: Name -> Type -> LazyM Eval Value -> Env -> Env
@@ -230,7 +225,7 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
 
         innerType <- skolemize type_
 
-        (envTrans, corePatterns, resultType) <- checkParameterPatterns env innerType params
+        (envTrans, _patternValues, corePatterns, resultType) <- checkParameterPatterns env innerType params
 
         let addLambdas core = do
                 foldrM
@@ -261,37 +256,27 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
         typeConValue <- liftEval $ lazyValueM $ TypeConstructorApp typeConstructorName []
         let envWithGADT = extendVariable typeConstructorName kindValue typeConValue env
 
-        (env, _constructors) <- forAccumL envWithGADT constructors \env (dataConstructorName, sourceType) -> do
+        (env, constructors) <- forAccumL envWithGADT constructors \env (dataConstructorName, sourceType) -> do
             coreType <- check env Type sourceType
             type_ <- liftEval $ eval env.evalContext coreType
             -- TODO: Somehow check that the core type actually ends in `name ...`
 
             value <- lazyValueM $ DataConstructorApp dataConstructorName []
 
-            let splitConstructorTypes parameterTypes type_ =
-                    followMetas type_ >>= \case
-                        Pi (Just _name) _argumentType _ -> undefined
-                        Pi Nothing argumentType (resultExpr, resultContext) -> do
-                            resultType <- liftEval $ skolemizeClosure Nothing resultExpr resultContext
-                            splitConstructorTypes (parameterTypes :|> argumentType) resultType
-                        Forall name kind result -> undefined
-                        TypeConstructorApp constructorName resultArguments
-                            | constructorName == typeConstructorName ->
-                                pure
-                                    $ MkDataConstructorTypes
-                                        { parameterTypes
-                                        , resultArguments
-                                        }
-                        type_ -> do
-                            fatalTypeError (InvalidConstructorReturnType loc dataConstructorName type_)
-
-            constructorTypes <- splitConstructorTypes [] type_
-
             let envWithConstructorVar = extendVariable dataConstructorName type_ value env
-            let envWithConstructor = extendConstructor dataConstructorName constructorTypes envWithConstructorVar
-            pure (envWithConstructor, undefined)
+            let envWithConstructor = extendConstructor dataConstructorName type_ envWithConstructorVar
 
-        pure (env, CDefineGADT)
+            argCount <- numberOfCurriedArguments type_
+            pure (envWithConstructor, (dataConstructorName, argCount))
+
+        pure (env, CDefineGADT typeConstructorName constructors)
+
+numberOfCurriedArguments :: Type -> Infer Int
+numberOfCurriedArguments type_ = followMetas type_ >>= \case
+    Pi mname _domain (codomainExpr, codomainContext) -> do
+        resultType <- liftEval $ skolemizeClosure mname codomainExpr codomainContext
+        (1 +) <$> numberOfCurriedArguments resultType
+    _ -> pure 0
 
 infer :: Env -> Expr Renamed -> Infer (Type, CoreExpr)
 infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
@@ -500,7 +485,7 @@ checkStatement env = \case
 
                 innerType <- skolemize ownType
 
-                (envTrans, corePatterns, resultType) <- checkParameterPatterns env innerType patterns
+                (envTrans, _patternValues, corePatterns, resultType) <- checkParameterPatterns env innerType patterns
 
                 pure (ownType, resultType, envTrans, viaList corePatterns)
             Nothing -> do
@@ -560,8 +545,16 @@ checkPattern env expectedType = \case
     ConstructorPat loc name subPatterns -> do
         case lookup name env.dataConstructors of
             Nothing -> error $ "unbound data constructor in type checker: " <> show name
-            Just type_ -> do
-                undefined
+            Just constructorType -> do
+                constructorType <- instantiate constructorType
+                (envTrans, subPatternValues, subPatterns, resultType) <- checkParameterPatterns env constructorType subPatterns
+
+                -- TODO: Compare the result type and get some equalities that way
+
+                value <- lazyM do
+                    values <- traverse forceM subPatternValues
+                    pure (DataConstructorApp name values)
+                pure (envTrans, value, CConstructorPat name (coerce $ viaList @_ @(Vector _) subPatterns))
     IntPat loc n -> do
         subsumes loc Int expectedType
         value <- lazyValueM (IntV n)
@@ -583,8 +576,13 @@ checkPattern env expectedType = \case
         subsumes loc type_ expectedType
         pure (env_trans, value, corePattern)
 
-checkParameterPatterns :: (Uncons t (Pattern Renamed)) => Env -> Type -> t -> Infer (Env -> Env, Seq (CorePattern (Fix CorePattern)), Type)
-checkParameterPatterns _env type_ Nil = pure (id, [], type_)
+checkParameterPatterns
+    :: (Uncons t (Pattern Renamed))
+    => Env
+    -> Type
+    -> t
+    -> Infer (Env -> Env, Seq (LazyM Eval Value), Seq (CorePattern (Fix CorePattern)), Type)
+checkParameterPatterns _env type_ Nil = pure (id, [], [], type_)
 checkParameterPatterns env type_ (pattern_ ::: restPatterns) = do
     (mTypeParamName, domain, codomainExpr, codomainContext) <- splitFunctionType (getLoc pattern_) type_
     (envTrans, patternValue, pattern_) <- checkPattern env domain pattern_
@@ -594,11 +592,11 @@ checkParameterPatterns env type_ (pattern_ ::: restPatterns) = do
             Just typeParamName -> define typeParamName patternValue codomainContext
     codomain <- liftEval $ eval evalContext codomainExpr
 
-    -- We need to apply the environment transformer to the environment for the remaining pattenrs here since to allow the
+    -- We need to apply the environment transformer to the environment for the remaining patterns here to allow the
     -- remaining patterns to depend on the fact that this one has been bound (which is also how lambdas behave).
     -- this is necessary to check definitions like `f n (xs : Vec n Int) = ...`.
-    (restTrans, restPatterns, resultType) <- checkParameterPatterns (envTrans env) codomain restPatterns
-    pure (restTrans . envTrans, pattern_ :<| restPatterns, resultType)
+    (restTrans, restValues, restPatterns, resultType) <- checkParameterPatterns (envTrans env) codomain restPatterns
+    pure (restTrans . envTrans, patternValue :<| restValues, pattern_ :<| restPatterns, resultType)
 
 splitFunctionType :: Loc -> Type -> Infer (Maybe Name, Type, CoreExpr, EvalContext)
 splitFunctionType loc type_ =
