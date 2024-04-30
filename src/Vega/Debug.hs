@@ -23,6 +23,7 @@ class ShowHeadConstructorGen f where
     showHeadConstructorGen :: f x -> Doc Ann
 
 instance ShowHeadConstructorGen V1 where
+    showHeadConstructorGen :: forall k (x :: k). V1 x -> Doc Ann
     showHeadConstructorGen = \case {}
 
 instance (ShowHeadConstructorGen f, ShowHeadConstructorGen g) => ShowHeadConstructorGen (f :+: g) where

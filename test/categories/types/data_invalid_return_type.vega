@@ -1,0 +1,4 @@
+data Nat : Type {
+    Z : Nat;
+    S : Nat -> Int;
+};

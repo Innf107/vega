@@ -72,6 +72,7 @@ compileDeclaration = \case
     CDefineVar name expr -> do
         exprCode <- compileExpr expr
         pure (renderName name <> " = " <> exprCode)
+    CDefineGADT -> pure ""
 
 compileExpr :: CoreExpr -> Compile Text
 compileExpr = \case

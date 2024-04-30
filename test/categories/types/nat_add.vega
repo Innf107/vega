@@ -1,0 +1,17 @@
+-- EXPECT: 4
+
+data Nat : Type {
+    Z : Nat;
+    S : Nat -> Nat;
+};
+
+
+add : Nat -> Nat -> Nat;
+add x y = case x {
+    Z -> y;
+    S n -> S (add n y);
+};
+ 
+
+main : Unit;
+main = debug(add (S(S Z)) (S (S Z)));

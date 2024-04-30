@@ -195,7 +195,7 @@ renderANSII tree = runST do
                 pure $ "\ESC[96m\STX" <> text <> "\ESC[0m\STX"
             Skolem name unique -> lift do
                 text <- disambiguate skolems name unique
-                pure $ "\ESC[93m\STX" <> text <> "\ESC[0m\STX"
+                pure $ "\ESC[38;5;159m\STX" <> text <> "\ESC[0m\STX"
             Number -> pure $ "\ESC[1m\ESC[93m\STX" <> text <> "\ESC[0m\STX"
             Emphasis -> pure $ "\ESC[1m\STX" <> text <> "\ESC[0m\STX"
             Error -> pure $ "\ESC[1m\ESC[31m\STX" <> text <> "\ESC[0m\STX"

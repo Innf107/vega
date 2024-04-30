@@ -60,6 +60,7 @@ lintDeclaration env (CDefineVar name expr) = do
     env <- pure $ defineVar name env
     lintExpr env expr
     pure env
+lintDeclaration env (CDefineGADT) = pure env
 
 lintExpr :: Env -> CoreExpr -> Lint ()
 lintExpr env = \case

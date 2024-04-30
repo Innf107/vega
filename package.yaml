@@ -29,6 +29,7 @@ dependencies:
 - transformers-base
 - optparse-generic
 - filepath
+- these
 # Needed to keep alex and happy... happy
 - array
 

@@ -21,14 +21,17 @@ import Data.Vector qualified as Vector
 
 import Control.Monad.Fix
 import Control.Monad.Writer.Strict (MonadWriter (tell), WriterT (runWriterT))
+import Data.These (These (This, That, These))
 import Vega.Difflist (Difflist)
 import Vega.Monad.Unique (MonadUnique (..))
+import Vega.Name (ident)
 import Vega.Name qualified as Name
 
 data TypeError
     = UnableToUnify Loc CoreExpr CoreExpr
     | OccursCheckViolation Loc MetaVar CoreExpr
     | Impredicative Loc Type Type
+    | InvalidConstructorReturnType Loc Name Type
     deriving (Generic)
 instance HasLoc TypeError
 
@@ -47,18 +50,32 @@ instance Pretty TypeError where
             <> pretty type1
             <> keyword " ~ "
             <> pretty type2
+    pretty (InvalidConstructorReturnType _ name type_) =
+        "Data constructor"
+            <+> ident name
+            <+> "does not return its enclosing type.\n"
+            <> "Invalid return type"
+            <+> pretty type_
 
 type Type = Value
 type MetaVar = MetaVarF EvalContext
 
 data Env = MkEnv
     { varTypes :: Map Name Type
-    , dataConstructors :: Map Name Type
+    , dataConstructors :: Map Name DataConstructorTypes
     , evalContext :: EvalContext
+    }
+
+data DataConstructorTypes = MkDataConstructorTypes
+    { parameterTypes :: Seq Type
+    , resultArguments :: Seq Type
     }
 
 evalContext :: Env -> EvalContext
 evalContext env = env.evalContext
+
+extendConstructor :: Name -> DataConstructorTypes -> Env -> Env
+extendConstructor name types env = env{dataConstructors = insert name types env.dataConstructors}
 
 extendVariable :: Name -> Type -> LazyM Eval Value -> Env -> Env
 extendVariable name type_ value env =
@@ -69,7 +86,7 @@ extendVariable name type_ value env =
 
 data InferState = MkInferState {}
 
-newtype Infer a = MkInfer (ReaderT (TraceAction IO) (WriterT (Difflist TypeError) (StateT InferState IO)) a)
+newtype Infer a = MkInfer (ReaderT (TraceAction IO) (ExceptT TypeError (WriterT (Difflist TypeError) (StateT InferState IO))) a)
     deriving newtype (Functor, Applicative, Monad, MonadFix, MonadTrace)
 
 instance MonadUnique Infer where
@@ -87,11 +104,19 @@ typeError error = MkInfer do
     tell [error]
     trace Types (errorDoc "TYPE ERROR")
 
+-- | Raise an irrecoverable type error that aborts the remaining execution
+fatalTypeError :: TypeError -> Infer a
+fatalTypeError error = MkInfer $ throwError error
+
 liftEval :: Eval a -> Infer a
 liftEval eval = MkInfer (liftIO (runEval eval))
 
-runInfer :: (?traceAction :: TraceAction IO) => Infer a -> IO (a, Difflist TypeError)
-runInfer (MkInfer exceptT) = evalStateT (runWriterT (runReaderT exceptT ?traceAction)) initialInferState
+runInfer :: (?traceAction :: TraceAction IO) => Infer a -> IO (These (Difflist TypeError) a)
+runInfer (MkInfer infer) =
+    flip evalStateT initialInferState (runWriterT (runExceptT (runReaderT infer ?traceAction))) >>= \case
+        (Left fatalError, nonFatalErrors) -> pure (This (nonFatalErrors <> [fatalError]))
+        (Right result, []) -> pure $ That result
+        (Right result, nonFatalErrors) -> pure $ These nonFatalErrors result
   where
     initialInferState = MkInferState{}
 
@@ -192,7 +217,7 @@ skolemize = \case
         skolemize skolemized
     type_ -> pure type_
 
-typecheck :: (?traceAction :: TraceAction IO) => Vector (Declaration Renamed) -> IO (Vector CoreDeclaration, Difflist TypeError)
+typecheck :: (?traceAction :: TraceAction IO) => Vector (Declaration Renamed) -> IO (These (Difflist TypeError) (Vector CoreDeclaration))
 typecheck declarations = runInfer do
     (_env, declarations) <- mapAccumLM checkDeclaration emptyEnv declarations
     pure declarations
@@ -230,20 +255,43 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
                 core <- addLambdas =<< check bodyEnv resultType body
                 pure (core, value)
             pure (extendVariable name type_ value env, CDefineVar name core)
-    DefineGADT loc name kind constructors -> do
+    DefineGADT loc typeConstructorName kind constructors -> do
         kindCore <- check env Type kind
         kindValue <- liftEval $ eval env.evalContext kindCore
-        typeConValue <- liftEval $ lazyValueM $ TypeConstructorApp name []
-        let envWithGADT = extendVariable name kindValue typeConValue env
+        typeConValue <- liftEval $ lazyValueM $ TypeConstructorApp typeConstructorName []
+        let envWithGADT = extendVariable typeConstructorName kindValue typeConValue env
 
-        constructors <- forAccumL envWithGADT constructors \env (name, sourceType) -> do
+        (env, _constructors) <- forAccumL envWithGADT constructors \env (dataConstructorName, sourceType) -> do
             coreType <- check env Type sourceType
             type_ <- liftEval $ eval env.evalContext coreType
-            -- TODO: Somehow check that the core type actually ends in `$name ...`
+            -- TODO: Somehow check that the core type actually ends in `name ...`
 
-            undefined
+            value <- lazyValueM $ DataConstructorApp dataConstructorName []
 
-        undefined
+            let splitConstructorTypes parameterTypes type_ =
+                    followMetas type_ >>= \case
+                        Pi (Just _name) _argumentType _ -> undefined
+                        Pi Nothing argumentType (resultExpr, resultContext) -> do
+                            resultType <- liftEval $ skolemizeClosure Nothing resultExpr resultContext
+                            splitConstructorTypes (parameterTypes :|> argumentType) resultType
+                        Forall name kind result -> undefined
+                        TypeConstructorApp constructorName resultArguments
+                            | constructorName == typeConstructorName ->
+                                pure
+                                    $ MkDataConstructorTypes
+                                        { parameterTypes
+                                        , resultArguments
+                                        }
+                        type_ -> do
+                            fatalTypeError (InvalidConstructorReturnType loc dataConstructorName type_)
+
+            constructorTypes <- splitConstructorTypes [] type_
+
+            let envWithConstructorVar = extendVariable dataConstructorName type_ value env
+            let envWithConstructor = extendConstructor dataConstructorName constructorTypes envWithConstructorVar
+            pure (envWithConstructor, undefined)
+
+        pure (env, CDefineGADT)
 
 infer :: Env -> Expr Renamed -> Infer (Type, CoreExpr)
 infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
@@ -509,7 +557,11 @@ checkPattern env expectedType = \case
         skolem <- freshSkolem name
         value <- lazyValueM (SkolemApp skolem [])
         pure (extendVariable name expectedType value, value, CVarPat name)
-    ConstructorPat _ _ _ -> undefined
+    ConstructorPat loc name subPatterns -> do
+        case lookup name env.dataConstructors of
+            Nothing -> error $ "unbound data constructor in type checker: " <> show name
+            Just type_ -> do
+                undefined
     IntPat loc n -> do
         subsumes loc Int expectedType
         value <- lazyValueM (IntV n)
@@ -660,6 +712,11 @@ unify loc type1 type2 = do
                     assertM (length arguments1 == length arguments2)
                     zipWithM_ (unify loc) (toList arguments1) (toList arguments2)
                 _ -> unableToUnify
+            DataConstructorApp name1 arguments1 -> case type2 of
+                DataConstructorApp name2 arguments2 | name1 == name2 -> do
+                    assertM (length arguments1 == length arguments2)
+                    zipWithM_ (unify loc) (toList arguments1) (toList arguments2)
+                _ -> unableToUnify
 
 -- See Note [Pattern Unification]
 patternUnification :: MetaVar -> Seq Type -> Type -> Infer ()
@@ -708,6 +765,7 @@ occursCheck meta type_ =
             ClosureV (PrimopClosure _primop arguments) ->
                 traverse_ go arguments
             TupleV arguments -> traverse_ go arguments
+            DataConstructorApp _name arguments -> traverse_ go arguments
             TypeConstructorApp _name arguments -> traverse_ go arguments
             Type -> pure ()
             Int -> pure ()
@@ -776,8 +834,12 @@ quoteFully type_ =
         TupleV arguments -> do
             quotedArguments <- traverse quoteFully arguments
             pure $ CTupleLiteral quotedArguments
-        TypeConstructorApp{} -> do
-            undefined
+        DataConstructorApp constructorName arguments -> do
+            quotedArguments <- traverse quoteFully arguments
+            pure $ foldl' CApp (CVar constructorName) quotedArguments
+        TypeConstructorApp constructorName arguments -> do
+            quotedArguments <- traverse quoteFully arguments
+            pure $ foldl' CApp (CVar constructorName) quotedArguments
         Type -> pure $ CLiteral TypeLit
         Int -> pure $ CLiteral IntTypeLit
         String -> pure $ CLiteral StringTypeLit

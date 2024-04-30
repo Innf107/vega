@@ -104,6 +104,7 @@ data Primop
 
 data CoreDeclarationF context
     = CDefineVar Name (CoreExprF context)
+    | CDefineGADT -- TODO: figure out what you actually need here. ideally core should just keep all data declarations as meta data shouldn't it?
 
 -- TODO: Maybe this shouldn't be a separate core type but just another TTG pass.
 -- Core cannot deviate that much from source syntax anyway since it needs to be shown in error messages
@@ -143,7 +144,8 @@ data ValueF context
     | Int
     | String
     | Tuple (Vector (ValueF context))
-    | TypeConstructorApp Name (Seq (ValueF context))
+    | TypeConstructorApp Name (Seq (ValueF context)) -- TODO: is this type/data constructor distinction even meaningful here?
+    | DataConstructorApp Name (Seq (ValueF context))
     | -- TODO: Add effects
       Pi (Maybe Name) (ValueF context) (CoreExprF context, context)
     | Forall Name (ValueF context) (CoreExprF context, context)
@@ -184,6 +186,8 @@ instance (EvalClosureForPrinting context) => Pretty (ValueF context) where
         Int -> constructorText "Int"
         String -> constructorText "String"
         Tuple [] -> keyword "Unit"
+        DataConstructorApp name [] -> constructor name
+        DataConstructorApp name args -> lparen "(" <> constructor name <+> sep (fmap pretty args) <> rparen ")"
         TypeConstructorApp name [] -> constructor name
         TypeConstructorApp name args -> lparen "(" <> constructor name <+> sep (fmap pretty args) <> rparen ")"
         Tuple values -> lparen "(" <> intercalateMap (keyword " ** ") pretty values <> rparen ")"
@@ -253,9 +257,11 @@ instance Pretty Skolem where
 instance (EvalClosureForPrinting context) => Pretty (CoreDeclarationF context) where
     pretty = \case
         CDefineVar name body -> ident name <+> keyword "=" <+> pretty body
+        CDefineGADT -> "<<DEFINE GADT>>"
 
 -- TODO: PRECEDEEEENCE
 instance (EvalClosureForPrinting context) => Pretty (CoreExprF context) where
+    pretty :: (EvalClosureForPrinting context) => CoreExprF context -> Doc Ann
     pretty = \case
         CVar name -> ident name
         CApp funExpr argExpr ->

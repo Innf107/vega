@@ -12,21 +12,26 @@ import Vega.Pretty
 
 data RenameError
     = UnboundVariable Loc Text
+    | UnboundDataConstructor Loc Text
     deriving (Generic)
 instance HasLoc RenameError
 
 instance Pretty RenameError where
     pretty (UnboundVariable _ varname) =
         "Unbound variable: " <> identText varname
+    pretty (UnboundDataConstructor _ constructorName) =
+        "Unbound data constructor: " <> constructorText constructorName
 
 data Scope = MkScope
     { variables :: Map Text Name
+    , dataConstructors :: Map Text Name
     }
 
 emptyScope :: Scope
 emptyScope =
     MkScope
         { variables = mempty
+        , dataConstructors = mempty
         }
 
 newtype Rename a = MkRename (ReaderT (IORef (Seq RenameError)) IO a)
@@ -64,6 +69,9 @@ addFreshVariable text scope = do
     name <- freshName text
     pure (name, addVariable text name scope)
 
+addDataConstructor :: Name -> Scope -> Scope
+addDataConstructor name scope = scope{dataConstructors = insert (Name.original name) name scope.dataConstructors}
+
 findVariable :: Text -> Scope -> Maybe Name
 findVariable text scope = lookup text scope.variables
 
@@ -85,8 +93,11 @@ renameDeclaration scope = \case
         kind <- renameExpr scope kind
         (name, scope) <- addFreshVariable name scope
 
-        let renameConstructor scope (name, type_) = do
-                (name, scopeWithConstructor) <- addFreshVariable name scope
+        let renameConstructor scopeWithConstructors (name, type_) = do
+                (name, scopeWithVariable) <- addFreshVariable name scopeWithConstructors
+                let scopeWithConstructor = addDataConstructor name scopeWithVariable
+                -- The constructors shouldn't have access to other constructors in their types so
+                -- we use the previous scope here
                 type_ <- renameExpr scope type_
                 pure (scopeWithConstructor, (name, type_))
 
@@ -182,9 +193,20 @@ renameStatement scope = \case
 renamePattern :: Scope -> Pattern Parsed -> Rename (Pattern Renamed, Scope -> Scope)
 renamePattern scope = \case
     VarPat loc text -> do
-        name <- freshName text
-        pure (VarPat loc name, addVariable text name)
-    ConstructorPat loc name subPatterns -> undefined loc name subPatterns
+        case lookup text scope.dataConstructors of
+            Just name -> pure (ConstructorPat loc name [], id)
+            Nothing -> do
+                name <- freshName text
+                pure (VarPat loc name, addVariable text name)
+    ConstructorPat loc name subPatterns ->
+        case lookup name scope.dataConstructors of
+            Just name -> do
+                (subPatterns, scopeTransformers) <- munzip <$> traverse (renamePattern scope) subPatterns
+                pure (ConstructorPat loc name subPatterns, compose scopeTransformers)
+            Nothing -> do
+                emitError (UnboundDataConstructor loc name)
+                (subPatterns, scopeTransformers) <- munzip <$> traverse (renamePattern scope) subPatterns
+                pure (ConstructorPat loc (dummyName name) subPatterns, compose scopeTransformers)
     IntPat loc value -> pure (IntPat loc value, id)
     StringPat loc value -> pure (StringPat loc value, id)
     TuplePat loc subpatterns -> do

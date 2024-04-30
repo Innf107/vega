@@ -12,6 +12,8 @@ import Vega.Pretty
 import Vega.Util (viaList)
 
 import Debug.Trace (trace)
+
+import Data.Vector qualified as Vector
 }
 
 %name parse main
@@ -60,9 +62,6 @@ string :: { Text }
 string : stringLoc { snd $1 }
 
 
--- TODO: This is technically a little inefficient since
--- left recursion is much faster for shift-reduce parsers
--- like happy
 manyList(p)
     :               { [] }
     | p manyList(p) { $1 : $2 }
@@ -85,12 +84,12 @@ main : sepTrailing(';', declaration) { $1 }
 declaration :: { Declaration Parsed }
 declaration
     : identLoc ':' type ';'
-      ident many(pattern) '=' expr
+      ident patterns '=' expr
         {% if snd $1 /= $5 then
             parseError (MismatchedDeclarationName { loc = merge $1 $8, signature = snd $1, definition = $5 })
            else
             pure $ DefineFunction (fst $1) (snd $1) $3 $6 $8 }
-    | 'data' ident ':' expr_leaf_no_block '{' sepTrailing(';', dataConstructor) '}'
+    | 'data' ident':' expr_leaf_no_block '{' sepTrailing(';', dataConstructor) '}'
         { DefineGADT(merge $1 $4) $2 $4 $6 }
 
 dataConstructor :: { (Text, SourceType Parsed) }
@@ -148,7 +147,7 @@ expr_leaf_no_block
     | '(' expr ')'                                { $2 }
     | '(' ')'                                     { TupleLiteral (merge $1 $2) [] }
     | '(' expr ',' sepTrailingList(',', expr) ')' { TupleLiteral (merge $1 $5) (fromList ($2 : $4)) }
-    | '\\' many1(pattern) '->' expr               { foldr (\pattern_ expr -> Lambda (merge $1 $4) pattern_ expr) $4 $2 }
+    | '\\' patterns1 '->' expr                    { foldr (\pattern_ expr -> Lambda (merge $1 $4) pattern_ expr) $4 $2 }
     | 'case' expr_leaf '{' 
         sepTrailing(';', caseBranch)
     '}'                                           { Case (merge $1 $5) $2 $4 }
@@ -167,30 +166,41 @@ literal : intLoc                   { (fst $1, IntLit (snd $1)) }
 
 statement :: { Statement Parsed }
 statement : expr                                { RunExpr (getLoc $1) $1 }
-          | 'let' pattern '=' expr              { Let (merge $1 $4) $2 $4 }
+          | 'let' patternLeaf '=' expr              { Let (merge $1 $4) $2 $4 }
           | 'let' ident ':' type ';' 
-            'let' ident many(pattern) '=' expr  {%
+            'let' ident patterns '=' expr  {%
                 if $2 == $7 then
                     pure $ LetFunction (merge $1 $10) $2 (Just $4) $8 $10
                 else
                     -- TODO: This should probably report a smaller location to avoid turning *everything* red in an LSP
                     parseError (MismatchedDeclarationName { loc = merge $1 $10, signature = $2, definition = $7 })
                 }
-          | 'let' ident many(pattern) '=' expr  { LetFunction (merge $1 $5) $2 Nothing $3 $5 }
+          | 'let' ident patterns '=' expr  { LetFunction (merge $1 $5) $2 Nothing $3 $5 }
 
 type : expr { $1 }
 
 caseBranch : pattern '->' expr { ($1, $3) }
 
 pattern :: { Pattern Parsed }
-pattern : identLoc                                                      { VarPat (fst $1) (snd $1) }
-        | intLoc                                                        { IntPat (fst $1) (snd $1) }
-        | stringLoc                                                     { StringPat (fst $1) (snd $1) }
-        | pattern '|' pattern                                           { OrPat (merge $1 $3) $1 $3 }
-        | '(' pattern ':' expr ')'                                      { TypePat (merge $1 $5) $2 $4 }
-        | '(' pattern ')'                                               { $2 }
-        | '(' pattern ',' pattern ')'                                   { TuplePat (merge $1 $5) [$2, $4] }
-        | '(' pattern ',' pattern ',' sepTrailingList(',', pattern) ')' { TuplePat (merge $1 $7) (fromList ($2 : $4 : $6)) }
+pattern : identLoc many1(patternLeaf) { ConstructorPat (merge (fst $1) (Vector.last $2)) (snd $1) $2 }
+        | pattern '|' patternLeaf     { OrPat (merge $1 $3) $1 $3 }
+        | patternLeaf                 { $1 }
+
+patternLeaf :: { Pattern Parsed }
+patternLeaf : identLoc                                                      { VarPat (fst $1) (snd $1) }
+            | intLoc                                                        { IntPat (fst $1) (snd $1) }
+            | stringLoc                                                     { StringPat (fst $1) (snd $1) }
+            | '(' pattern ':' expr ')'                                      { TypePat (merge $1 $5) $2 $4 }
+            | '(' pattern ')'                                               { $2 }
+            | '(' pattern ',' pattern ')'                                   { TuplePat (merge $1 $5) [$2, $4] }
+            | '(' pattern ',' pattern ',' sepTrailingList(',', pattern) ')' { TuplePat (merge $1 $7) (fromList ($2 : $4 : $6)) }
+
+patterns :: { Vector (Pattern Parsed) }
+patterns : many(patternLeaf) { $1 }
+
+patterns1 :: { Vector (Pattern Parsed) }
+patterns1 : many1(patternLeaf) { $1 }
+
 
 {
 binop :: HasLoc opLoc => Loc -> opLoc -> Expr Parsed -> Primop -> Expr Parsed -> Expr Parsed

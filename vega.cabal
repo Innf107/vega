@@ -96,6 +96,7 @@ library
     , optparse-generic
     , prettyprinter
     , relude
+    , these
     , transformers-base
     , vector
   default-language: GHC2021
@@ -143,6 +144,7 @@ executable vega
     , optparse-generic
     , prettyprinter
     , relude
+    , these
     , transformers-base
     , vector
     , vega
@@ -192,6 +194,7 @@ test-suite vega-test
     , optparse-generic
     , prettyprinter
     , relude
+    , these
     , transformers-base
     , vector
     , vega
