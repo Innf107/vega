@@ -273,6 +273,10 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
 
 numberOfCurriedArguments :: Type -> Infer Int
 numberOfCurriedArguments type_ = followMetas type_ >>= \case
+    Forall name _domain (codomainExpr, codomainContext) -> do
+        resultType <- liftEval $ skolemizeClosure (Just name) codomainExpr codomainContext
+        -- Forall's are erased... for now
+        numberOfCurriedArguments resultType
     Pi mname _domain (codomainExpr, codomainContext) -> do
         resultType <- liftEval $ skolemizeClosure mname codomainExpr codomainContext
         (1 +) <$> numberOfCurriedArguments resultType

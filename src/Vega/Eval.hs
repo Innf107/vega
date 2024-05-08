@@ -14,14 +14,14 @@ module Vega.Eval (
 import Vega.Prelude
 import Vega.Syntax
 
-
 import Vega.Primop
 
+import Vega.Debug (showHeadConstructor)
 import Vega.LazyM
 import Vega.Monad.Ref
 import Vega.Monad.Unique
+import Vega.Name qualified as Name
 import Vega.Pretty
-import qualified Vega.Name as Name
 
 newtype Eval a = MkEval (IO a) deriving newtype (Functor, Applicative, Monad, MonadRef)
 
@@ -48,12 +48,11 @@ instance ContextFromEmpty EvalContext where
     emptyContext = emptyEvalContext
 
 instance EvalClosureForPrinting EvalContext where
-  applyNullaryClosurePrint context expr = runEval $ eval context expr
-  applyClosureForPrinting context expr name = runEval do
-    let skolem = MkSkolem name (Name.unique name)
-    lazyValue <- lazyValueM (SkolemApp skolem [])
-    applyClosure (MkClosure name expr context) lazyValue
-    
+    applyNullaryClosurePrint context expr = runEval $ eval context expr
+    applyClosureForPrinting context expr name = runEval do
+        let skolem = MkSkolem name (Name.unique name)
+        lazyValue <- lazyValueM (SkolemApp skolem [])
+        applyClosure (MkClosure name expr context) lazyValue
 
 emptyEvalContext :: EvalContext
 emptyEvalContext =
@@ -81,7 +80,10 @@ eval context expr = case expr of
                 -- TODO: Do we really need to force the value here? :/
                 argValue <- forceM argValue
                 pure $ SkolemApp skolem (arguments :|> argValue)
-            _ -> error ("application of non-closure or variable during evaluation")
+            TypeConstructorApp name arguments -> do
+                argValue <- forceM argValue
+                pure $ TypeConstructorApp name (arguments :|> argValue)
+            value -> error ("application of non-closure, -constructor or -variable during evaluation: " <> prettyPlain (showHeadConstructor value))
     CLambda name body -> pure $ ClosureV (MkClosure name body context)
     CCase _expr _cases -> undefined
     CTupleLiteral arguments -> do
