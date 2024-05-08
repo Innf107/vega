@@ -1,1 +1,6 @@
-that's the wrong location dummy
+test/categories/types/data_invalid_return_type.vega:1:1: ERROR:
+Unable to unify types Int
+                  and Nat
+  ┃ 
+1 ┃ data Nat : Type {
+  ┃ ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔

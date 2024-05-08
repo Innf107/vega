@@ -1,4 +1,4 @@
--- EXPECT: 4
+-- EXPECT: 5
 
 data List : (Type -> Type) {
     Nil : forall a. List a;

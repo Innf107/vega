@@ -40,12 +40,27 @@ let doesFileExist(file) = try {
 let vega = "${!stack "path" "--dist-dir"}/build/vega/vega"
 
 let evalTest(file) = {
+    let luaFile = "${!dirname file}/${!basename "-s" ".vega" file}.lua"
+
+    let cleanup() = {
+        try {
+            let _ = !bash "-c" "rm ${luaFile} > /dev/null 2> /dev/null"
+        } with {
+            # it's fine if rm fails since the file might not have been created
+            CommandFailure(_) -> ()
+        }
+    }
+
     try {
-        let luaCode = !env vega "--lint-error" file
-        let result = luaCode | lua
+        let _ = !env vega "--lint-error" file
+        let result = !lua luaFile
+        cleanup()
         Success(result)
     } with {
-        CommandFailure(details) -> Failure(details.stdout)
+        CommandFailure(details) -> {
+            cleanup()
+            Failure(details.stdout)
+        }
     }
 }
 

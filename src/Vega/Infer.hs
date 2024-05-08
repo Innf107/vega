@@ -261,6 +261,18 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
             type_ <- liftEval $ eval env.evalContext coreType
             -- TODO: Somehow check that the core type actually ends in `name ...`
 
+            -- We need to check that the constructor actually returns the type we are defining.
+            -- To make this robust, we need to use unification though since someone might reasonably
+            -- return something that doesn't necessarily look like the type we expect at first glance.
+            definedReturnType <- curriedReturnType type_
+
+            typeConstructorArgumentCount <- numberOfCurriedArguments kindValue
+            expectedReturnType <-
+                TypeConstructorApp typeConstructorName
+                    . viaList
+                    <$> replicateM typeConstructorArgumentCount (fmap (\meta -> MetaApp meta []) freshAnonymousMeta)
+            subsumes loc definedReturnType expectedReturnType
+
             value <- lazyValueM $ DataConstructorApp dataConstructorName []
 
             let envWithConstructorVar = extendVariable dataConstructorName type_ value env
@@ -271,16 +283,28 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
 
         pure (env, CDefineGADT typeConstructorName constructors)
 
+curriedReturnType :: Type -> Infer Type
+curriedReturnType type_ =
+    followMetas type_ >>= \case
+        Forall name _domain (codomainExpr, codomainContext) -> do
+            resultType <- liftEval $ skolemizeClosure (Just name) codomainExpr codomainContext
+            curriedReturnType resultType
+        Pi mname _domain (codomainExpr, codomainContext) -> do
+            resultType <- liftEval $ skolemizeClosure mname codomainExpr codomainContext
+            curriedReturnType resultType
+        type_ -> pure type_
+
 numberOfCurriedArguments :: Type -> Infer Int
-numberOfCurriedArguments type_ = followMetas type_ >>= \case
-    Forall name _domain (codomainExpr, codomainContext) -> do
-        resultType <- liftEval $ skolemizeClosure (Just name) codomainExpr codomainContext
-        -- Forall's are erased... for now
-        numberOfCurriedArguments resultType
-    Pi mname _domain (codomainExpr, codomainContext) -> do
-        resultType <- liftEval $ skolemizeClosure mname codomainExpr codomainContext
-        (1 +) <$> numberOfCurriedArguments resultType
-    _ -> pure 0
+numberOfCurriedArguments type_ =
+    followMetas type_ >>= \case
+        Forall name _domain (codomainExpr, codomainContext) -> do
+            resultType <- liftEval $ skolemizeClosure (Just name) codomainExpr codomainContext
+            -- Forall's are erased... for now
+            numberOfCurriedArguments resultType
+        Pi mname _domain (codomainExpr, codomainContext) -> do
+            resultType <- liftEval $ skolemizeClosure mname codomainExpr codomainContext
+            (1 +) <$> numberOfCurriedArguments resultType
+        _ -> pure 0
 
 infer :: Env -> Expr Renamed -> Infer (Type, CoreExpr)
 infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
@@ -722,12 +746,13 @@ unify loc type1 type2 = do
 
 -- See Note [Pattern Unification]
 patternUnification :: MetaVar -> Seq Type -> Type -> Infer ()
-patternUnification metaVar arguments type2 = case type2 of
-    -- TODO: This is kind of slow. We should figure out something more efficient
-    -- TODO: Make sure we catch escaping skolems
-    SkolemApp skolem skolemArguments -> do
-        undefined
-    _ -> undefined
+patternUnification metaVar arguments type2 =
+    followMetas type2 >>= \case
+        -- TODO: This is kind of slow. We should figure out something more efficient
+        -- TODO: Make sure we catch escaping skolems
+        SkolemApp skolem skolemArguments -> do
+            undefined
+        _ -> undefined
 
 -- f : forall a. a -> a
 -- f x = (x 5) ~ (?a 5) ==> ?a = x (?)
