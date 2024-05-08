@@ -106,6 +106,9 @@ fatalTypeError error = MkInfer $ throwError error
 liftEval :: Eval a -> Infer a
 liftEval eval = MkInfer (liftIO (runEval eval))
 
+modifyContext :: (EvalContext -> EvalContext) -> Env -> Env
+modifyContext f env = env{evalContext = f env.evalContext}
+
 runInfer :: (?traceAction :: TraceAction IO) => Infer a -> IO (These (Difflist TypeError) a)
 runInfer (MkInfer infer) =
     flip evalStateT initialInferState (runWriterT (runExceptT (runReaderT infer ?traceAction))) >>= \case
@@ -259,7 +262,6 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
         (env, constructors) <- forAccumL envWithGADT constructors \env (dataConstructorName, sourceType) -> do
             coreType <- check env Type sourceType
             type_ <- liftEval $ eval env.evalContext coreType
-            -- TODO: Somehow check that the core type actually ends in `name ...`
 
             -- We need to check that the constructor actually returns the type we are defining.
             -- To make this robust, we need to use unification though since someone might reasonably
@@ -577,12 +579,13 @@ checkPattern env expectedType = \case
                 constructorType <- instantiate constructorType
                 (envTrans, subPatternValues, subPatterns, resultType) <- checkParameterPatterns env constructorType subPatterns
 
+                gadtEqualityEnvTrans <- modifyContext <$> givenEqual expectedType resultType
                 -- TODO: Compare the result type and get some equalities that way
 
                 value <- lazyM do
                     values <- traverse forceM subPatternValues
                     pure (DataConstructorApp name values)
-                pure (envTrans, value, CConstructorPat name (coerce $ viaList @_ @(Vector _) subPatterns))
+                pure (gadtEqualityEnvTrans . envTrans, value, CConstructorPat name (coerce $ viaList @_ @(Vector _) subPatterns))
     IntPat loc n -> do
         subsumes loc Int expectedType
         value <- lazyValueM (IntV n)
@@ -653,6 +656,118 @@ splitTupleType loc type_ expectedArgCount =
             subsumes loc type_ (TupleType argumentTypes)
             pure argumentTypes
 
+{- | Traverse two types together and call a function on sub type expressions
+(usually a recursive call to the calling function that handles the interesting cases before calling this).
+
+This will traverse pi types by alpha-normalizing them (i.e. skolemizing both with the same skolem).
+-}
+zipTypes
+    :: (Monoid m)
+    => (Type -> Type -> Infer m)
+    -- ^ recursive calls
+    -> (Type -> Type -> Infer m)
+    -- ^ called if the types differ
+    -> Type
+    -> Type
+    -> Infer m
+zipTypes recur onDifferent type1 type2 = do
+    type1 <- followMetas type1
+    type2 <- followMetas type2
+    let different = onDifferent type1 type2
+    case type1 of
+        IntV x -> case type2 of
+            IntV y | x == y -> pure mempty
+            _ -> different
+        StringV x -> case type2 of
+            StringV y | x == y -> pure mempty
+            _ -> different
+        Type -> case type2 of
+            Type -> pure mempty
+            _ -> different
+        Int -> case type2 of
+            Int -> pure mempty
+            _ -> different
+        String -> case type2 of
+            String -> pure mempty
+            _ -> different
+        Pi mname1 domain1 (codomainCore1, codomainContext1) -> case type2 of
+            Pi mname2 domain2 (codomainCore2, codomainContext2) -> do
+                defaultName <- freshName "a"
+                skolem <- freshSkolem (fromMaybe defaultName (mname1 <|> mname2))
+                skolemValue <- lazyValueM (SkolemApp skolem [])
+
+                codomain1 <- case mname1 of
+                    Nothing -> liftEval $ eval codomainContext1 codomainCore1
+                    Just name1 -> liftEval $ eval (define name1 skolemValue codomainContext1) codomainCore1
+                codomain2 <- case mname2 of
+                    Nothing -> liftEval $ eval codomainContext2 codomainCore2
+                    Just name2 -> liftEval $ eval (define name2 skolemValue codomainContext2) codomainCore2
+
+                (<>)
+                    <$> recur domain1 domain2
+                    <*> recur codomain1 codomain2
+            _ -> different
+        Forall name1 domain1 (codomainCore1, codomainContext1) -> case type2 of
+            Forall name2 domain2 (codomainCore2, codomainContext2) -> do
+                -- We have to pick some name so we arbitrarily pick name1 (not super happy about this tbh)
+                skolem <- freshSkolem name1
+                skolemValue <- lazyValueM (SkolemApp skolem [])
+
+                codomain1 <- liftEval $ eval (define name1 skolemValue codomainContext1) codomainCore1
+                codomain2 <- liftEval $ eval (define name2 skolemValue codomainContext2) codomainCore2
+
+                (<>)
+                    <$> recur domain1 domain2
+                    <*> recur codomain1 codomain2
+            _ -> different
+        MetaApp metaVar1 args1 -> case type2 of
+            MetaApp metaVar2 args2 | metaVar1 == metaVar2 -> do
+                foldMapM (uncurry recur) (Seq.zip args1 args2)
+            _ -> different
+        SkolemApp skolem1 args1 -> case type2 of
+            SkolemApp skolem2 args2 | skolem1 == skolem2 && length args1 == length args2 -> do
+                foldMapM (uncurry recur) (Seq.zip args1 args2)
+            _ -> different
+        ClosureV{} -> undefined
+        TupleV arguments1 -> case type2 of
+            TupleV arguments2 -> foldMapM (uncurry recur) (mzip arguments1 arguments2)
+            _ -> different
+        TupleType arguments1 -> case type2 of
+            TupleType arguments2 -> foldMapM (uncurry recur) (mzip arguments1 arguments2)
+            _ -> different
+        TypeConstructorApp name1 arguments1 -> case type2 of
+            TypeConstructorApp name2 arguments2 | name1 == name2 -> do
+                assertM (length arguments1 == length arguments2)
+                foldMapM (uncurry recur) (mzip arguments1 arguments2)
+            _ -> different
+        DataConstructorApp name1 arguments1 -> case type2 of
+            DataConstructorApp name2 arguments2 | name1 == name2 -> do
+                assertM (length arguments1 == length arguments2)
+                foldMapM (uncurry recur) (mzip arguments1 arguments2)
+            _ -> different
+
+givenEqual :: Type -> Type -> Infer (EvalContext -> EvalContext)
+givenEqual type1 type2 = do
+    type1 <- followMetas type1
+    type2 <- followMetas type2
+    trace Unify ("[G]" <+> pretty type1 <+> pretty type2)
+    case (type1, type2) of
+        -- TODO: I kind of hate that we need to remove the unique here but i guess it's fine?
+        -- We probably don't even need it anyway tbh
+        (SkolemApp (MkSkolem name _unique) [], type_) -> do
+            value <- liftEval $ lazyValueM type_
+            pure $ define name value
+        (type_, SkolemApp (MkSkolem name _unique) []) -> do
+            value <- liftEval $ lazyValueM type_
+            pure $ define name value
+        (SkolemApp _name1 _args1, _type2) -> do
+            -- TODO: No idea how to handle more interesting given equalities yet tbh
+            undefined
+        (_type1, SkolemApp _name2 _args2) -> undefined
+        -- We just ignore equalities on non-skolem types for now since we don't really
+        -- have a way of handling them.
+        _ -> appEndo <$> zipTypes (\ty1 ty2 -> coerce <$> givenEqual ty1 ty2) (\_ _ -> pure mempty) type1 type2
+
 subsumes :: Loc -> Type -> Type -> Infer ()
 subsumes loc subtype supertype = do
     subtype <- instantiate subtype
@@ -665,7 +780,7 @@ unify loc type1 type2 = do
     type2 <- followMetas type2
     trace Unify (pretty type1 <+> keyword "~" <+> pretty type2)
 
-    let unableToUnify = do
+    let unableToUnify type1 type2 = do
             type1 <- quoteFully type1
             type2 <- quoteFully type2
             typeError (UnableToUnify loc type1 type2)
@@ -690,59 +805,7 @@ unify loc type1 type2 = do
         (MetaApp metaVar1 arguments1, type2) -> patternUnification metaVar1 arguments1 type2
         -- TODO: Keep track of the change of direction here for the sake of error messages
         (type1, MetaApp metaVar2 arguments2) -> patternUnification metaVar2 arguments2 type1
-        _ -> case type1 of
-            IntV x -> case type2 of
-                IntV y | x == y -> pure ()
-                _ -> unableToUnify
-            StringV x -> case type2 of
-                StringV y | x == y -> pure ()
-                _ -> unableToUnify
-            Type -> case type2 of
-                Type -> pure ()
-                _ -> unableToUnify
-            Int -> case type2 of
-                Int -> pure ()
-                _ -> unableToUnify
-            String -> case type2 of
-                String -> pure ()
-                _ -> unableToUnify
-            Pi mname1 domain1 (codomainCore1, codomainContext1) -> case type2 of
-                Pi mname2 domain2 (codomainCore2, codomainContext2) -> do
-                    defaultName <- freshName "a"
-                    skolem <- freshSkolem (fromMaybe defaultName (mname1 <|> mname2))
-                    skolemValue <- lazyValueM (SkolemApp skolem [])
-
-                    codomain1 <- case mname1 of
-                        Nothing -> liftEval $ eval codomainContext1 codomainCore1
-                        Just name1 -> liftEval $ eval (define name1 skolemValue codomainContext1) codomainCore1
-                    codomain2 <- case mname2 of
-                        Nothing -> liftEval $ eval codomainContext2 codomainCore2
-                        Just name2 -> liftEval $ eval (define name2 skolemValue codomainContext2) codomainCore2
-
-                    unify loc domain1 domain2
-                    unify loc codomain1 codomain2
-                _ -> unableToUnify
-            SkolemApp skolem1 args1 -> case type2 of
-                SkolemApp skolem2 args2 | skolem1 == skolem2 && length args1 == length args2 -> do
-                    traverse_ (uncurry (unify loc)) (Seq.zip args1 args2)
-                _ -> unableToUnify
-            ClosureV{} -> undefined
-            TupleV arguments1 -> case type2 of
-                TupleV arguments2 -> Vector.zipWithM_ (unify loc) arguments1 arguments2
-                _ -> unableToUnify
-            TupleType arguments1 -> case type2 of
-                TupleType arguments2 -> Vector.zipWithM_ (unify loc) arguments1 arguments2
-                _ -> unableToUnify
-            TypeConstructorApp name1 arguments1 -> case type2 of
-                TypeConstructorApp name2 arguments2 | name1 == name2 -> do
-                    assertM (length arguments1 == length arguments2)
-                    zipWithM_ (unify loc) (toList arguments1) (toList arguments2)
-                _ -> unableToUnify
-            DataConstructorApp name1 arguments1 -> case type2 of
-                DataConstructorApp name2 arguments2 | name1 == name2 -> do
-                    assertM (length arguments1 == length arguments2)
-                    zipWithM_ (unify loc) (toList arguments1) (toList arguments2)
-                _ -> unableToUnify
+        _ -> zipTypes (unify loc) unableToUnify type1 type2
 
 -- See Note [Pattern Unification]
 patternUnification :: MetaVar -> Seq Type -> Type -> Infer ()
