@@ -83,6 +83,9 @@ eval context expr = case expr of
             TypeConstructorApp name arguments -> do
                 argValue <- forceM argValue
                 pure $ TypeConstructorApp name (arguments :|> argValue)
+            DataConstructorApp name arguments -> do
+                argValue <- forceM argValue
+                pure $ DataConstructorApp name (arguments :|> argValue)
             value -> error ("application of non-closure, -constructor or -variable during evaluation: " <> prettyPlain (showHeadConstructor value))
     CLambda name body -> pure $ ClosureV (MkClosure name body context)
     CCase _expr _cases -> undefined
@@ -111,7 +114,7 @@ eval context expr = case expr of
             Just value -> pure value
     CTupleType arguments -> do
         values <- traverse (eval context) arguments
-        pure (Tuple values)
+        pure (TupleType values)
     CQuote value -> pure value
 
 applyClosure :: Closure -> LazyM Eval Value -> Eval Value

@@ -144,7 +144,7 @@ data ValueF context
       Type
     | Int
     | String
-    | Tuple (Vector (ValueF context))
+    | TupleType (Vector (ValueF context))
     | TypeConstructorApp Name (Seq (ValueF context)) -- TODO: is this type/data constructor distinction even meaningful here?
     | DataConstructorApp Name (Seq (ValueF context))
     | -- TODO: Add effects
@@ -186,12 +186,12 @@ instance (EvalClosureForPrinting context) => Pretty (ValueF context) where
         Type -> constructorText "Type"
         Int -> constructorText "Int"
         String -> constructorText "String"
-        Tuple [] -> keyword "Unit"
+        TupleType [] -> keyword "Unit"
         DataConstructorApp name [] -> constructor name
         DataConstructorApp name args -> lparen "(" <> constructor name <+> sep (fmap pretty args) <> rparen ")"
         TypeConstructorApp name [] -> constructor name
         TypeConstructorApp name args -> lparen "(" <> constructor name <+> sep (fmap pretty args) <> rparen ")"
-        Tuple values -> lparen "(" <> intercalateMap (keyword " ** ") pretty values <> rparen ")"
+        TupleType values -> lparen "(" <> intercalateMap (keyword " ** ") pretty values <> rparen ")"
         Pi Nothing domain (core, context) -> do
             let codomain = unsafePerformIO (applyNullaryClosurePrint context core)
             lparen "(" <> pretty domain <+> keyword "->" <+> pretty codomain <> rparen ")"

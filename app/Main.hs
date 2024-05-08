@@ -15,6 +15,7 @@ import Options.Generic
 import System.IO (hIsTerminalDevice)
 
 import Data.Text.IO qualified as Text
+import System.FilePath (dropExtension, (</>), replaceExtension)
 
 data Flags = Flags {trace :: [Text], includeUnique :: Bool, skipCoreLint :: Bool, lintError :: Bool}
     deriving (Show, Generic)
@@ -87,15 +88,15 @@ main = do
             when (flags.lintError && (not (null warnings)))
                 $ exitFailure
 
-            case coreOrErrors of
+            luaCode <- case coreOrErrors of
                 Left errors -> do
                     for_ errors \error -> do
                         doc <- prettyErrorLoc (getLoc error) (pretty error)
                         putTextLn (renderStdout doc)
                     exitFailure
-                Right core -> do
-                    luaCode <- Lua.compile core
-                    putTextLn luaCode
+                Right core -> Lua.compile core
+            writeFileLBS (replaceExtension file "lua") (encodeUtf8 luaCode)
+
 
 prettyErrorLoc :: (MonadIO io) => Loc -> Doc Ann -> io (Doc Ann)
 prettyErrorLoc loc doc = do

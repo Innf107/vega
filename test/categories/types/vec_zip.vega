@@ -1,0 +1,20 @@
+-- EXPECT: 5
+
+data Nat : Type {
+    Z : Nat;
+    S : Nat -> Nat;
+};
+
+data Vec : (Nat -> Type -> Type) {
+    Nil : forall a. Vec Z a;
+    Cons : forall (n : Nat) a. a -> Vec n a -> Vec (S n) a;
+};
+
+zip : forall (n : Nat) a b. Vec n a -> Vec n b -> Vec n (a ** b);
+zip vec1 vec2 = case (vec1, vec2) {
+    (Nil, Nil) -> Nil;
+    (Cons x xs, Cons y ys) -> Cons (x, y) (zip xs ys);
+};
+
+main : Unit;
+main = debug(5);

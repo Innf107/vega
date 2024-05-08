@@ -109,16 +109,16 @@ expr_ascription : expr_op_tuple ':' expr     { Ascription (merge $1 $3) $1 $3 }
                 | expr_op_tuple              { $1 }
 
 expr_op_tuple :: { Expr Parsed }
-expr_op_tuple : tuple_arguments { 
+expr_op_tuple : tuple_type_arguments { 
     case $1 of
-        (first :<| (_ :|> last)) -> TupleLiteral (merge first last) (viaList $1)
+        (first :<| (_ :|> last)) -> ETupleType (merge first last) (viaList $1)
         [first] -> first
         [] -> error "expr_op_tuple parsed an empty list"
     }
 
-tuple_arguments :: { Seq (Expr Parsed) }
-tuple_arguments : expr_op_add '**' tuple_arguments  { $1 :<| $3 }
-                | expr_op_add                       { [$1] }
+tuple_type_arguments :: { Seq (Expr Parsed) }
+tuple_type_arguments : expr_op_add '**' tuple_type_arguments { $1 :<| $3 }
+                     | expr_op_add                           { [$1] }
 
 expr_op_add :: { Expr Parsed }
 expr_op_add : expr_op_add '+' expr_op_mul        { binop (merge $1 $3) $2 $1 Add $3 }

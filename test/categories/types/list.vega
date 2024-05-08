@@ -1,8 +1,14 @@
--- EXPECT: 3
+-- EXPECT: 4
 
 data List : (Type -> Type) {
     Nil : forall a. List a;
     Cons : forall a. a -> List a -> List a;
+};
+
+map : forall a b. (a -> b) -> List a -> List b;
+map f list = case list {
+    Nil -> Nil;
+    Cons x xs -> Cons (f x) (map f xs);
 };
 
 sum : List Int -> Int;
@@ -12,4 +18,4 @@ sum list = case list {
 };
 
 main : Unit;
-main = debug(sum(Cons 1 (Cons 2 Nil)));
+main = debug(sum(map (\x -> x + 1) (Cons 1 (Cons 2 Nil))));

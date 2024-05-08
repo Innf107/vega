@@ -327,7 +327,7 @@ infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
             pure (resultType, CLet scrutineeVar scrutineeCore coreCases)
         TupleLiteral _loc arguments -> do
             (argumentTypes, argumentCores) <- munzip <$> traverse (infer env) arguments
-            pure (Tuple argumentTypes, CTupleLiteral argumentCores)
+            pure (TupleType argumentTypes, CTupleLiteral argumentCores)
         Literal _loc literal -> pure (type_, CLiteral literal)
           where
             type_ = case literal of
@@ -336,7 +336,7 @@ infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
                 StringTypeLit -> Type
                 IntLit _ -> Int
                 StringLit _ -> String
-        Sequence _loc [] -> pure (Tuple [], CTupleLiteral [])
+        Sequence _loc [] -> pure (TupleType [], CTupleLiteral [])
         Sequence _loc (Vector.unsnoc -> Just (statements, RunExpr _ expr)) -> do
             (env, coreTransformers) <- mapAccumLM checkStatement env statements
             (finalType, finalCore) <- infer env expr
@@ -345,7 +345,7 @@ infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
         Sequence _loc statements -> do
             (_env, coreTransformers) <- mapAccumLM checkStatement env statements
             core <- composeM coreTransformers (CTupleLiteral [])
-            pure (Tuple [], core)
+            pure (TupleType [], core)
         Ascription _loc expr typeExpr -> do
             typeCore <- check env Type typeExpr
             type_ <- liftEval $ eval (evalContext env) typeCore
@@ -454,7 +454,7 @@ checkStatement env = \case
     RunExpr _ expr -> do
         -- TODO: Keep some context to mention in error messages that this was expected to return ()
         -- because it is run as a statement
-        coreExpr <- check env (Tuple []) expr
+        coreExpr <- check env (TupleType []) expr
         coreName <- freshName "_"
         pure (env, \coreCont -> pure $ CLet coreName coreExpr coreCont)
     -- we include a special case for variable patterns that are meant to be transparent
@@ -531,7 +531,7 @@ inferPattern env = \case
     StringPat _loc value -> pure (String, id, CStringPat value)
     TuplePat _loc subpatterns -> do
         (subTypes, subEnvTransformers, subCorePatterns) <- Vector.unzip3 <$> traverse (inferPattern env) subpatterns
-        pure (Tuple subTypes, compose subEnvTransformers, CTuplePat (coerce subCorePatterns))
+        pure (TupleType subTypes, compose subEnvTransformers, CTuplePat (coerce subCorePatterns))
     OrPat{} -> undefined
     TypePat loc pattern_ type_ -> do
         typeCore <- check env Type type_
@@ -621,12 +621,12 @@ splitFunctionType loc type_ =
 splitTupleType :: Loc -> Type -> Int -> Infer (Vector Type)
 splitTupleType loc type_ expectedArgCount =
     followMetas type_ >>= \case
-        Tuple arguments
+        TupleType arguments
             | length arguments == expectedArgCount -> pure arguments
             | otherwise -> undefined
         type_ -> do
             argumentTypes <- Vector.replicateM expectedArgCount (fmap (\x -> MetaApp x []) freshAnonymousMeta)
-            subsumes loc type_ (Tuple argumentTypes)
+            subsumes loc type_ (TupleType argumentTypes)
             pure argumentTypes
 
 subsumes :: Loc -> Type -> Type -> Infer ()
@@ -706,8 +706,8 @@ unify loc type1 type2 = do
             TupleV arguments1 -> case type2 of
                 TupleV arguments2 -> Vector.zipWithM_ (unify loc) arguments1 arguments2
                 _ -> unableToUnify
-            Tuple arguments1 -> case type2 of
-                Tuple arguments2 -> Vector.zipWithM_ (unify loc) arguments1 arguments2
+            TupleType arguments1 -> case type2 of
+                TupleType arguments2 -> Vector.zipWithM_ (unify loc) arguments1 arguments2
                 _ -> unableToUnify
             TypeConstructorApp name1 arguments1 -> case type2 of
                 TypeConstructorApp name2 arguments2 | name1 == name2 -> do
@@ -772,7 +772,7 @@ occursCheck meta type_ =
             Type -> pure ()
             Int -> pure ()
             String -> pure ()
-            Tuple arguments -> traverse_ go arguments
+            TupleType arguments -> traverse_ go arguments
             Pi name domain (codomainCore, codomainContext) -> do
                 go domain
                 -- TODO: Rather than recomputing the codomain applied at a skolem at every occurs check,
@@ -845,7 +845,7 @@ quoteFully type_ =
         Type -> pure $ CLiteral TypeLit
         Int -> pure $ CLiteral IntTypeLit
         String -> pure $ CLiteral StringTypeLit
-        Tuple arguments -> do
+        TupleType arguments -> do
             quotedArguments <- traverse quoteFully arguments
             pure $ CTupleType quotedArguments
         Pi mname domain (codomainExpr, codomainEnv) -> do
