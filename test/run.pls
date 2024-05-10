@@ -1,6 +1,7 @@
 #!/usr/bin/env polaris
 options {
     "-s" "--sync" as sync: "Run tests synchronously"
+    "--announce" as announce: "Announce the test that is about to be run. Useful for debugging infinite loops"
 }
 
 # TODO: I really need a usable package system in Polaris
@@ -40,6 +41,10 @@ let doesFileExist(file) = try {
 let vega = "${!stack "path" "--dist-dir"}/build/vega/vega"
 
 let evalTest(file) = {
+    if announce then {
+        print("Next up: ${file}")
+    } else {}
+
     let luaFile = "${!dirname file}/${!basename "-s" ".vega" file}.lua"
 
     let cleanup() = {

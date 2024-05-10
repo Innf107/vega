@@ -3,7 +3,21 @@ module Vega.Infer (typecheck, TypeError (..)) where
 import Vega.Prelude
 import Vega.Syntax
 
-import Vega.Eval (CoreDeclaration, CoreExpr, Eval, EvalContext, Value, applyClosure, define, emptyEvalContext, eval, runEval)
+import Vega.Eval (
+    CoreDeclaration,
+    CoreExpr,
+    Eval,
+    EvalContext,
+    HasContext (getContext),
+    Value,
+    applyClosure,
+    define,
+    defineSkolem,
+    emptyEvalContext,
+    eval,
+    runEval,
+ )
+import Vega.Eval qualified as Eval
 import Vega.Primop
 
 import Vega.Debug
@@ -66,8 +80,8 @@ data Env = MkEnv
     , evalContext :: EvalContext
     }
 
-evalContext :: Env -> EvalContext
-evalContext env = env.evalContext
+instance HasContext Env where
+    getContext env = env.evalContext
 
 extendConstructor :: Name -> Type -> Env -> Env
 extendConstructor name types env = env{dataConstructors = insert name types env.dataConstructors}
@@ -137,47 +151,48 @@ setMetaVar :: MetaVar -> Type -> Infer ()
 setMetaVar (MkMeta _ _ ref) type_ =
     MkInfer (liftIO (writeIORef ref (Just type_)))
 
-followMetas :: Type -> Infer Type
-followMetas type_ = case type_ of
-    MetaApp meta arguments ->
-        readMetaVar meta >>= \case
-            Nothing -> pure type_
-            Just replacement -> do
-                replacement <- followMetas replacement
+followMetas :: (HasContext context) => context -> Type -> Infer Type
+followMetas context type_ = do
+    liftEval (Eval.followSkolems context type_) >>= \case
+        MetaApp meta arguments -> do
+            readMetaVar meta >>= \case
+                Nothing -> pure type_
+                Just replacement -> do
+                    replacement <- followMetas context replacement
 
-                -- We do path compression.
-                -- If a meta variable points to another substituted meta variable,
-                -- we skip the indirection and bend the first one to point to the target directly.
-                -- This means that further followMetas calls will only need to traverse one level of indirection
-                -- rather than re-traversing the entire chain.
-                -- Plus, this is extremely easy and fast to do so it's not like we're losing anything by doing path compression.
-                setMetaVar meta replacement
+                    -- We do path compression.
+                    -- If a meta variable points to another substituted meta variable,
+                    -- we skip the indirection and bend the first one to point to the target directly.
+                    -- This means that further followMetas calls will only need to traverse one level of indirection
+                    -- rather than re-traversing the entire chain.
+                    -- Plus, this is extremely easy and fast to do so it's not like we're losing anything by doing path compression.
+                    setMetaVar meta replacement
 
-                liftEval $ applyReplacement replacement arguments
-              where
-                applyReplacement replacement arguments = case replacement of
-                    MetaApp meta replacedArguments ->
-                        pure $ MetaApp meta (replacedArguments <> arguments)
-                    SkolemApp skolem replacedArguments ->
-                        pure $ SkolemApp skolem (replacedArguments <> arguments)
-                    ClosureV closure ->
-                        case arguments of
-                            Empty -> pure (ClosureV closure)
-                            (argument :<| rest) -> do
-                                argument <- lazyValueM argument
-                                applied <- applyClosure closure argument
-                                applyReplacement applied rest
-                    type_ -> case arguments of
-                        Empty -> pure type_
-                        arguments ->
-                            error
-                                $ "Meta variable substituted with non-application or closure type: "
-                                <> prettyPlain
-                                    ( pretty type_
-                                        <> "\n   arguments: "
-                                        <> sep (fmap pretty arguments)
-                                    )
-    type_ -> pure type_
+                    liftEval $ applyReplacement replacement arguments
+                  where
+                    applyReplacement replacement arguments = case replacement of
+                        MetaApp meta replacedArguments ->
+                            pure $ MetaApp meta (replacedArguments <> arguments)
+                        SkolemApp skolem replacedArguments ->
+                            pure $ SkolemApp skolem (replacedArguments <> arguments)
+                        ClosureV closure ->
+                            case arguments of
+                                Empty -> pure (ClosureV closure)
+                                (argument :<| rest) -> do
+                                    argument <- lazyValueM argument
+                                    applied <- applyClosure closure argument
+                                    applyReplacement applied rest
+                        type_ -> case arguments of
+                            Empty -> pure type_
+                            arguments ->
+                                error
+                                    $ "Meta variable substituted with non-application or closure type: "
+                                    <> prettyPlain
+                                        ( pretty type_
+                                            <> "\n   arguments: "
+                                            <> sep (fmap pretty arguments)
+                                        )
+        type_ -> pure type_
 
 freshSkolem :: (MonadUnique m) => Name -> m Skolem
 freshSkolem name = do
@@ -224,7 +239,7 @@ checkDeclaration :: Env -> Declaration Renamed -> Infer (Env, CoreDeclaration)
 checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadConstructor decl) $ case decl of
     DefineFunction _loc name typeExpr params body -> do
         typeCore <- check env Type typeExpr
-        type_ <- liftEval $ eval (evalContext env) typeCore
+        type_ <- liftEval $ eval (getContext env) typeCore
 
         innerType <- skolemize type_
 
@@ -246,7 +261,7 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
             (core, value) <- do
                 let envWithParams = envTrans env
 
-                value <- lazyM (eval (evalContext env) core)
+                value <- lazyM (eval (getContext env) core)
                 -- function definitions are recursive
                 let bodyEnv = extendVariable name type_ value envWithParams
 
@@ -266,46 +281,46 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
             -- We need to check that the constructor actually returns the type we are defining.
             -- To make this robust, we need to use unification though since someone might reasonably
             -- return something that doesn't necessarily look like the type we expect at first glance.
-            definedReturnType <- curriedReturnType type_
+            definedReturnType <- curriedReturnType env type_
 
-            typeConstructorArgumentCount <- numberOfCurriedArguments kindValue
+            typeConstructorArgumentCount <- numberOfCurriedArguments env kindValue
             expectedReturnType <-
                 TypeConstructorApp typeConstructorName
                     . viaList
                     <$> replicateM typeConstructorArgumentCount (fmap (\meta -> MetaApp meta []) freshAnonymousMeta)
-            subsumes loc definedReturnType expectedReturnType
+            subsumes env loc definedReturnType expectedReturnType
 
             value <- lazyValueM $ DataConstructorApp dataConstructorName []
 
             let envWithConstructorVar = extendVariable dataConstructorName type_ value env
             let envWithConstructor = extendConstructor dataConstructorName type_ envWithConstructorVar
 
-            argCount <- numberOfCurriedArguments type_
+            argCount <- numberOfCurriedArguments env type_
             pure (envWithConstructor, (dataConstructorName, argCount))
 
         pure (env, CDefineGADT typeConstructorName constructors)
 
-curriedReturnType :: Type -> Infer Type
-curriedReturnType type_ =
-    followMetas type_ >>= \case
+curriedReturnType :: HasContext context => context -> Type -> Infer Type
+curriedReturnType context type_ =
+    followMetas context type_ >>= \case
         Forall name _domain (codomainExpr, codomainContext) -> do
             resultType <- liftEval $ skolemizeClosure (Just name) codomainExpr codomainContext
-            curriedReturnType resultType
+            curriedReturnType context resultType
         Pi mname _domain (codomainExpr, codomainContext) -> do
             resultType <- liftEval $ skolemizeClosure mname codomainExpr codomainContext
-            curriedReturnType resultType
+            curriedReturnType context resultType
         type_ -> pure type_
 
-numberOfCurriedArguments :: Type -> Infer Int
-numberOfCurriedArguments type_ =
-    followMetas type_ >>= \case
+numberOfCurriedArguments :: HasContext context => context -> Type -> Infer Int
+numberOfCurriedArguments context type_ =
+    followMetas context type_ >>= \case
         Forall name _domain (codomainExpr, codomainContext) -> do
             resultType <- liftEval $ skolemizeClosure (Just name) codomainExpr codomainContext
             -- Forall's are erased... for now
-            numberOfCurriedArguments resultType
+            numberOfCurriedArguments context resultType
         Pi mname _domain (codomainExpr, codomainContext) -> do
             resultType <- liftEval $ skolemizeClosure mname codomainExpr codomainContext
-            (1 +) <$> numberOfCurriedArguments resultType
+            (1 +) <$> numberOfCurriedArguments context resultType
         _ -> pure 0
 
 infer :: Env -> Expr Renamed -> Infer (Type, CoreExpr)
@@ -316,10 +331,10 @@ infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
             pure (type_, CVar name)
         App loc function argument -> do
             (functionType, functionCore) <- infer env function
-            (parameterName, parameterType, resultClosureExpr, resultClosureContext) <- splitFunctionType loc functionType
+            (parameterName, parameterType, resultClosureExpr, resultClosureContext) <- splitFunctionType env loc functionType
 
             argumentCore <- check env parameterType argument
-            argumentValue <- lazyM $ eval (evalContext env) argumentCore
+            argumentValue <- lazyM $ eval (getContext env) argumentCore
 
             let updatedContext = case parameterName of
                     Nothing -> resultClosureContext
@@ -337,7 +352,7 @@ infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
 
             body <- Pattern.lowerCase [(bodyPattern, bodyCore)] coreName
 
-            pure (Pi Nothing varType (CQuote resultType, evalContext env), CLambda coreName body)
+            pure (Pi Nothing varType (CQuote resultType, getContext env), CLambda coreName body)
         Case _loc scrutinee cases -> do
             (scrutineeType, scrutineeCore) <- infer env scrutinee
 
@@ -374,13 +389,13 @@ infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
             pure (TupleType [], core)
         Ascription _loc expr typeExpr -> do
             typeCore <- check env Type typeExpr
-            type_ <- liftEval $ eval (evalContext env) typeCore
+            type_ <- liftEval $ eval (getContext env) typeCore
 
             coreExpr <- check env type_ expr
             pure (type_, coreExpr)
         EPi _loc maybeName domain codomain -> do
             domainCore <- check env Type domain
-            domainValue <- liftEval $ eval (evalContext env) domainCore
+            domainValue <- liftEval $ eval (getContext env) domainCore
 
             codomainEnv <- case maybeName of
                 Nothing -> pure env
@@ -395,7 +410,7 @@ infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
             pure (Type, CPi maybeName domainCore codomainCore)
         EForall _loc name domain codomain -> do
             domainCore <- check env Type domain
-            domainValue <- liftEval $ eval (evalContext env) domainCore
+            domainValue <- liftEval $ eval (getContext env) domainCore
 
             skolem <- freshSkolem name
 
@@ -421,13 +436,13 @@ check env rawExpectedType expr = withTrace
         expectedType <- skolemize rawExpectedType
         let deferToInference = do
                 (actualType, core) <- infer env expr
-                subsumes (getLoc expr) actualType expectedType
+                subsumes env (getLoc expr) actualType expectedType
                 pure core
         case expr of
             Var{} -> deferToInference
             App{} -> deferToInference
             Lambda loc pattern_ body -> do
-                (parameterName, parameterType, resultClosureExpr, resultClosureContext) <- splitFunctionType loc expectedType
+                (parameterName, parameterType, resultClosureExpr, resultClosureContext) <- splitFunctionType env loc expectedType
 
                 (envTrans, parameterValue, corePattern) <- checkPattern env parameterType pattern_
 
@@ -455,7 +470,7 @@ check env rawExpectedType expr = withTrace
                     pure (corePattern, coreBody)
                 CLet scrutineeVar scrutineeCore <$> Pattern.lowerCase newCases scrutineeVar
             TupleLiteral loc arguments -> do
-                argumentTypes <- splitTupleType loc expectedType (length arguments)
+                argumentTypes <- splitTupleType env loc expectedType (length arguments)
 
                 argumentCore <- Vector.zipWithM (check env) argumentTypes arguments
 
@@ -490,7 +505,7 @@ checkStatement env = \case
             (bodyCore, value, updatedEnv) <- do
                 (type_, bodyCore) <- infer env body
                 let updatedEnv = extendVariable varName type_ value env
-                value <- lazyM (eval (evalContext updatedEnv) bodyCore)
+                value <- lazyM (eval (getContext updatedEnv) bodyCore)
                 pure (bodyCore, value, updatedEnv)
 
             pure (updatedEnv, pure . CLet varName bodyCore)
@@ -511,7 +526,7 @@ checkStatement env = \case
         (ownType, resultType, envTransformer, corePatterns) <- case mtype of
             Just type_ -> do
                 core <- check env Type type_
-                ownType <- liftEval (eval (evalContext env) core)
+                ownType <- liftEval (eval (getContext env) core)
 
                 innerType <- skolemize ownType
 
@@ -536,7 +551,7 @@ checkStatement env = \case
         let updatedEnv = envTransformer env
         mdo
             (core, value) <- do
-                value <- lazyM (eval (evalContext env) core)
+                value <- lazyM (eval (getContext env) core)
                 -- function definitions are recursive
                 let bodyEnv = extendVariable name ownType value updatedEnv
 
@@ -579,7 +594,7 @@ checkPattern env expectedType = \case
                 constructorType <- instantiate constructorType
                 (envTrans, subPatternValues, subPatterns, resultType) <- checkParameterPatterns env constructorType subPatterns
 
-                gadtEqualityEnvTrans <- modifyContext <$> givenEqual expectedType resultType
+                gadtEqualityEnvTrans <- modifyContext <$> givenEqual env expectedType resultType
                 -- TODO: Compare the result type and get some equalities that way
 
                 value <- lazyM do
@@ -587,15 +602,15 @@ checkPattern env expectedType = \case
                     pure (DataConstructorApp name values)
                 pure (gadtEqualityEnvTrans . envTrans, value, CConstructorPat name (coerce $ viaList @_ @(Vector _) subPatterns))
     IntPat loc n -> do
-        subsumes loc Int expectedType
+        subsumes env loc Int expectedType
         value <- lazyValueM (IntV n)
         pure (id, value, CIntPat n)
     StringPat loc literal -> do
-        subsumes loc String expectedType
+        subsumes env loc String expectedType
         value <- lazyValueM (StringV literal)
         pure (id, value, CStringPat literal)
     TuplePat loc subPatterns -> do
-        argumentTypes <- splitTupleType loc expectedType (length subPatterns)
+        argumentTypes <- splitTupleType env loc expectedType (length subPatterns)
         (subEnvTransformers, subValues, subPatterns) <- Vector.unzip3 <$> Vector.zipWithM (checkPattern env) argumentTypes subPatterns
         value <- lazyM (TupleV <$> traverse forceM subValues)
         pure (compose subEnvTransformers, value, CTuplePat (coerce subPatterns))
@@ -604,7 +619,7 @@ checkPattern env expectedType = \case
         typeCore <- check env Type type_
         type_ <- liftEval $ eval env.evalContext typeCore
         (env_trans, value, corePattern) <- checkPattern env type_ pattern_
-        subsumes loc type_ expectedType
+        subsumes env loc type_ expectedType
         pure (env_trans, value, corePattern)
 
 checkParameterPatterns
@@ -615,7 +630,7 @@ checkParameterPatterns
     -> Infer (Env -> Env, Seq (LazyM Eval Value), Seq (CorePattern (Fix CorePattern)), Type)
 checkParameterPatterns _env type_ Nil = pure (id, [], [], type_)
 checkParameterPatterns env type_ (pattern_ ::: restPatterns) = do
-    (mTypeParamName, domain, codomainExpr, codomainContext) <- splitFunctionType (getLoc pattern_) type_
+    (mTypeParamName, domain, codomainExpr, codomainContext) <- splitFunctionType env (getLoc pattern_) type_
     (envTrans, patternValue, pattern_) <- checkPattern env domain pattern_
 
     let evalContext = case mTypeParamName of
@@ -629,9 +644,14 @@ checkParameterPatterns env type_ (pattern_ ::: restPatterns) = do
     (restTrans, restValues, restPatterns, resultType) <- checkParameterPatterns (envTrans env) codomain restPatterns
     pure (restTrans . envTrans, patternValue :<| restValues, pattern_ :<| restPatterns, resultType)
 
-splitFunctionType :: Loc -> Type -> Infer (Maybe Name, Type, CoreExpr, EvalContext)
-splitFunctionType loc type_ =
-    followMetas type_ >>= \case
+splitFunctionType
+    :: (HasContext context)
+    => context
+    -> Loc
+    -> Type
+    -> Infer (Maybe Name, Type, CoreExpr, EvalContext)
+splitFunctionType context loc type_ =
+    followMetas context type_ >>= \case
         Pi name parameterType (resultClosureExpr, resultClosureContext) ->
             pure (name, parameterType, resultClosureExpr, resultClosureContext)
         type_ -> do
@@ -642,18 +662,18 @@ splitFunctionType loc type_ =
 
             let paramType = MetaApp paramMeta []
 
-            subsumes loc type_ (Pi Nothing paramType (resultClosureExpr, resultClosureContext))
+            subsumes context loc type_ (Pi Nothing paramType (resultClosureExpr, resultClosureContext))
             pure (Nothing, paramType, resultClosureExpr, resultClosureContext)
 
-splitTupleType :: Loc -> Type -> Int -> Infer (Vector Type)
-splitTupleType loc type_ expectedArgCount =
-    followMetas type_ >>= \case
+splitTupleType :: (HasContext context) => context -> Loc -> Type -> Int -> Infer (Vector Type)
+splitTupleType context loc type_ expectedArgCount =
+    followMetas context type_ >>= \case
         TupleType arguments
             | length arguments == expectedArgCount -> pure arguments
             | otherwise -> undefined
         type_ -> do
             argumentTypes <- Vector.replicateM expectedArgCount (fmap (\x -> MetaApp x []) freshAnonymousMeta)
-            subsumes loc type_ (TupleType argumentTypes)
+            subsumes context loc type_ (TupleType argumentTypes)
             pure argumentTypes
 
 {- | Traverse two types together and call a function on sub type expressions
@@ -662,17 +682,18 @@ splitTupleType loc type_ expectedArgCount =
 This will traverse pi types by alpha-normalizing them (i.e. skolemizing both with the same skolem).
 -}
 zipTypes
-    :: (Monoid m)
-    => (Type -> Type -> Infer m)
+    :: (Monoid m, HasContext context)
+    => context
+    -> (Type -> Type -> Infer m)
     -- ^ recursive calls
     -> (Type -> Type -> Infer m)
     -- ^ called if the types differ
     -> Type
     -> Type
     -> Infer m
-zipTypes recur onDifferent type1 type2 = do
-    type1 <- followMetas type1
-    type2 <- followMetas type2
+zipTypes context recur onDifferent type1 type2 = do
+    type1 <- followMetas context type1
+    type2 <- followMetas context type2
     let different = onDifferent type1 type2
     case type1 of
         IntV x -> case type2 of
@@ -746,43 +767,43 @@ zipTypes recur onDifferent type1 type2 = do
                 foldMapM (uncurry recur) (mzip arguments1 arguments2)
             _ -> different
 
-givenEqual :: Type -> Type -> Infer (EvalContext -> EvalContext)
-givenEqual type1 type2 = do
-    type1 <- followMetas type1
-    type2 <- followMetas type2
+givenEqual :: (HasContext context) => context -> Type -> Type -> Infer (EvalContext -> EvalContext)
+givenEqual context type1 type2 = do
+    type1 <- followMetas context type1
+    type2 <- followMetas context type2
     trace Unify ("[G]" <+> pretty type1 <+> pretty type2)
+
+    let recurEndo ty1 ty2 = Endo <$> givenEqual context ty1 ty2
     case (type1, type2) of
-        -- TODO: I kind of hate that we need to remove the unique here but i guess it's fine?
-        -- We probably don't even need it anyway tbh
-        (SkolemApp (MkSkolem name _unique) [], type_) -> do
-            value <- liftEval $ lazyValueM type_
-            pure $ define name value
-        (type_, SkolemApp (MkSkolem name _unique) []) -> do
-            value <- liftEval $ lazyValueM type_
-            pure $ define name value
+        (SkolemApp skolem1 args1, SkolemApp skolem2 args2) | skolem1 == skolem2 -> do
+            appEndo <$> foldMapM (uncurry recurEndo) (mzip args1 args2)
+        (SkolemApp skolem [], type_) -> do
+            pure $ defineSkolem skolem type_
+        (type_, SkolemApp skolem []) -> do
+            pure $ defineSkolem skolem type_
         (SkolemApp _name1 _args1, _type2) -> do
             -- TODO: No idea how to handle more interesting given equalities yet tbh
             undefined
         (_type1, SkolemApp _name2 _args2) -> undefined
         -- We just ignore equalities on non-skolem types for now since we don't really
         -- have a way of handling them.
-        _ -> appEndo <$> zipTypes (\ty1 ty2 -> coerce <$> givenEqual ty1 ty2) (\_ _ -> pure mempty) type1 type2
+        _ -> appEndo <$> zipTypes context recurEndo (\_ _ -> pure mempty) type1 type2
 
-subsumes :: Loc -> Type -> Type -> Infer ()
-subsumes loc subtype supertype = do
+subsumes :: (HasContext context) => context -> Loc -> Type -> Type -> Infer ()
+subsumes context loc subtype supertype = do
     subtype <- instantiate subtype
     supertype <- skolemize supertype
-    unify loc subtype supertype
+    unify context loc subtype supertype
 
-unify :: Loc -> Type -> Type -> Infer ()
-unify loc type1 type2 = do
-    type1 <- followMetas type1
-    type2 <- followMetas type2
+unify :: (HasContext context) => context -> Loc -> Type -> Type -> Infer ()
+unify context loc type1 type2 = do
+    type1 <- followMetas context type1
+    type2 <- followMetas context type2
     trace Unify (pretty type1 <+> keyword "~" <+> pretty type2)
 
     let unableToUnify type1 type2 = do
-            type1 <- quoteFully type1
-            type2 <- quoteFully type2
+            type1 <- quoteFully context type1
+            type2 <- quoteFully context type2
             typeError (UnableToUnify loc type1 type2)
 
     case (type1, type2) of
@@ -793,24 +814,26 @@ unify loc type1 type2 = do
             codomain1 <- liftEval $ eval (define name1 skolemValue codomainContext1) codomainCore1
             codomain2 <- liftEval $ eval (define name2 skolemValue codomainContext2) codomainCore2
 
-            unify loc domain1 domain2
-            unify loc codomain1 codomain2
+            unify context loc domain1 domain2
+            unify context loc codomain1 codomain2
         -- TODO: produce a more helpful error message
         -- TODO: this might not actually be an impredicative instantiation in all cases
         (Forall{}, _) -> typeError (Impredicative loc type1 type2)
         (_, Forall{}) -> typeError (Impredicative loc type1 type2)
-        (MetaApp metaVar1 [], type2) -> bind loc metaVar1 type2
-        (type1, MetaApp metaVar2 []) -> bind loc metaVar2 type1
+        (MetaApp metaVar1 args1, MetaApp metaVar2 args2)
+            | metaVar1 == metaVar2 -> traverse_ (uncurry (unify context loc)) (mzip args1 args2)
+        (MetaApp metaVar1 [], type2) -> bind context loc metaVar1 type2
+        (type1, MetaApp metaVar2 []) -> bind context loc metaVar2 type1
         -- See Note [Pattern Unification]
-        (MetaApp metaVar1 arguments1, type2) -> patternUnification metaVar1 arguments1 type2
+        (MetaApp metaVar1 arguments1, type2) -> patternUnification context metaVar1 arguments1 type2
         -- TODO: Keep track of the change of direction here for the sake of error messages
-        (type1, MetaApp metaVar2 arguments2) -> patternUnification metaVar2 arguments2 type1
-        _ -> zipTypes (unify loc) unableToUnify type1 type2
+        (type1, MetaApp metaVar2 arguments2) -> patternUnification context metaVar2 arguments2 type1
+        _ -> zipTypes context (unify context loc) unableToUnify type1 type2
 
 -- See Note [Pattern Unification]
-patternUnification :: MetaVar -> Seq Type -> Type -> Infer ()
-patternUnification metaVar arguments type2 =
-    followMetas type2 >>= \case
+patternUnification :: (HasContext context) => context -> MetaVar -> Seq Type -> Type -> Infer ()
+patternUnification env metaVar arguments type2 =
+    followMetas env type2 >>= \case
         -- TODO: This is kind of slow. We should figure out something more efficient
         -- TODO: Make sure we catch escaping skolems
         SkolemApp skolem skolemArguments -> do
@@ -838,15 +861,15 @@ patternUnification metaVar arguments type2 =
 -}
 
 -- TODO: This also needs to update levels.
-occursCheck :: MetaVar -> Type -> Infer Bool
-occursCheck meta type_ =
+occursCheck :: (HasContext context) => context -> MetaVar -> Type -> Infer Bool
+occursCheck context meta type_ =
     runExceptT (go type_) >>= \case
         Left () -> pure True
         Right () -> pure False
   where
     go :: Type -> ExceptT () Infer ()
     go type_ = do
-        lift (followMetas type_) >>= \case
+        lift (followMetas context type_) >>= \case
             IntV _ -> pure ()
             StringV _ -> pure ()
             ClosureV (MkClosure name body context) -> do
@@ -888,19 +911,19 @@ skolemizeClosure mname codomainCore codomainContext = do
             pure (define name skolemValue codomainContext)
     eval codomainContext codomainCore
 
-bind :: Loc -> MetaVar -> Type -> Infer ()
-bind loc metaVar type_ =
+bind :: (HasContext context) => context -> Loc -> MetaVar -> Type -> Infer ()
+bind context loc metaVar type_ = do
     readMetaVar metaVar >>= \case
         Just substituted -> do
-            unify loc substituted type_
+            unify context loc substituted type_
         Nothing -> do
             trace Subst (pretty (MetaApp metaVar []) <+> keyword ":=" <+> pretty type_)
-            followMetas type_ >>= \case
+            followMetas context type_ >>= \case
                 MetaApp metaVar2 [] | metaVar == metaVar2 -> pure ()
                 type_ -> do
-                    occursCheck metaVar type_ >>= \case
+                    occursCheck context metaVar type_ >>= \case
                         True -> do
-                            type_ <- quoteFully type_
+                            type_ <- quoteFully context type_
                             typeError (OccursCheckViolation loc metaVar type_)
                         False -> setMetaVar metaVar type_
 
@@ -910,49 +933,49 @@ bind loc metaVar type_ =
 {- | Fully quote a type, e.g. for error messages.
 Note that this also follows lazy `Quote`s inside CoreExprs
 -}
-quoteFully :: Type -> Infer CoreExpr
-quoteFully type_ =
-    followMetas type_ >>= \case
+quoteFully :: (HasContext context) => context -> Type -> Infer CoreExpr
+quoteFully context type_ =
+    followMetas context type_ >>= \case
         IntV n -> pure $ CLiteral (IntLit n)
         StringV text -> pure $ CLiteral (StringLit text)
         ClosureV (MkClosure name body context) -> do
             value <- liftEval $ skolemizeClosure (Just name) body context
-            quoteFully value
+            quoteFully context value
         ClosureV (PrimopClosure primop arguments) -> do
-            quotedArguments <- traverse quoteFully arguments
+            quotedArguments <- traverse (quoteFully context) arguments
             pure $ foldl' CApp (CPrimop primop) quotedArguments
         TupleV arguments -> do
-            quotedArguments <- traverse quoteFully arguments
+            quotedArguments <- traverse (quoteFully context) arguments
             pure $ CTupleLiteral quotedArguments
         DataConstructorApp constructorName arguments -> do
-            quotedArguments <- traverse quoteFully arguments
+            quotedArguments <- traverse (quoteFully context) arguments
             pure $ foldl' CApp (CVar constructorName) quotedArguments
         TypeConstructorApp constructorName arguments -> do
-            quotedArguments <- traverse quoteFully arguments
+            quotedArguments <- traverse (quoteFully context) arguments
             pure $ foldl' CApp (CVar constructorName) quotedArguments
         Type -> pure $ CLiteral TypeLit
         Int -> pure $ CLiteral IntTypeLit
         String -> pure $ CLiteral StringTypeLit
         TupleType arguments -> do
-            quotedArguments <- traverse quoteFully arguments
+            quotedArguments <- traverse (quoteFully context) arguments
             pure $ CTupleType quotedArguments
         Pi mname domain (codomainExpr, codomainEnv) -> do
-            quotedDomain <- quoteFully domain
+            quotedDomain <- quoteFully context domain
             codomain <- liftEval $ skolemizeClosure mname codomainExpr codomainEnv
-            quotedCodomain <- quoteFully codomain
+            quotedCodomain <- quoteFully context codomain
             pure $ CPi mname quotedDomain quotedCodomain
         Forall name domain (codomainExpr, codomainEnv) -> do
-            quotedDomain <- quoteFully domain
+            quotedDomain <- quoteFully context domain
             codomain <- liftEval $ skolemizeClosure (Just name) codomainExpr codomainEnv
-            quotedCodomain <- quoteFully codomain
+            quotedCodomain <- quoteFully context codomain
             pure $ CForall name quotedDomain quotedCodomain
         SkolemApp (MkSkolem skolemName skolemUnique) arguments -> do
-            quotedArguments <- traverse quoteFully arguments
+            quotedArguments <- traverse (quoteFully context) arguments
             -- We use the skolem unique as the variable unique here.
             -- This technically loses provenance of the skolem but we don't use that anywhere
             -- so it should be fine.
             -- Since Uniques are globally unique, this will not
             pure $ foldl' CApp (CVar (Name.makeDirectlyUnchecked (Name.original skolemName) skolemUnique)) quotedArguments
         MetaApp metaVar arguments -> do
-            quotedArguments <- traverse quoteFully arguments
+            quotedArguments <- traverse (quoteFully context) arguments
             pure $ foldl' CApp (CMeta metaVar) quotedArguments

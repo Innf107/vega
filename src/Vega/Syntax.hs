@@ -165,6 +165,9 @@ data Skolem = MkSkolem Name Unique
 -- are performed on the unique.
 instance Eq Skolem where
     (MkSkolem _ unique1) == (MkSkolem _ unique2) = unique1 == unique2
+instance Ord Skolem where
+    (MkSkolem _ unique1) `compare` (MkSkolem _ unique2) = unique1 `compare` unique2
+
 
 data MetaVarF context = MkMeta Name Unique (IORef (Maybe (ValueF context)))
 

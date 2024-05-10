@@ -2,8 +2,11 @@ module Vega.Eval (
     Eval,
     runEval,
     EvalContext,
+    HasContext (..),
     emptyEvalContext,
     define,
+    defineSkolem,
+    followSkolems,
     Value,
     CoreDeclaration,
     CoreExpr,
@@ -42,7 +45,14 @@ type Closure = ClosureF EvalContext
 
 data EvalContext = MkEvalContext
     { varValues :: Map Name (LazyM Eval Value)
+    , skolemBindings :: Map Skolem Value
     }
+
+class HasContext context where
+    getContext :: context -> EvalContext
+
+instance HasContext EvalContext where
+    getContext = id
 
 instance ContextFromEmpty EvalContext where
     emptyContext = emptyEvalContext
@@ -58,10 +68,43 @@ emptyEvalContext :: EvalContext
 emptyEvalContext =
     MkEvalContext
         { varValues = mempty
+        , skolemBindings = mempty
         }
 
 define :: Name -> LazyM Eval Value -> EvalContext -> EvalContext
 define name value context = context{varValues = insert name value context.varValues}
+
+defineSkolem :: Skolem -> Value -> EvalContext -> EvalContext
+defineSkolem skolem value context = context{skolemBindings = insert skolem value context.skolemBindings}
+
+followSkolems :: (HasContext context) => context -> Value -> Eval Value
+followSkolems (getContext -> context) = \case
+    SkolemApp skolem []
+        | Just value <- lookup skolem context.skolemBindings ->
+            followSkolems context value
+    SkolemApp skolem args
+        | Just funValue <- lookup skolem context.skolemBindings -> do
+            let applyOne funValue argValue = do
+                    lazyArgValue <- lazyValueM argValue
+                    evalApplication context funValue lazyArgValue
+            foldlM applyOne funValue args
+    value -> pure value
+
+evalApplication :: EvalContext -> Value -> LazyM Eval Value -> Eval Value
+evalApplication context funValue argValue = case funValue of
+    ClosureV closure ->
+        applyClosure closure argValue
+    SkolemApp skolem arguments -> do
+        -- TODO: Do we really need to force the value here? :/
+        argValue <- forceM argValue
+        pure $ SkolemApp skolem (arguments :|> argValue)
+    TypeConstructorApp name arguments -> do
+        argValue <- forceM argValue
+        pure $ TypeConstructorApp name (arguments :|> argValue)
+    DataConstructorApp name arguments -> do
+        argValue <- forceM argValue
+        pure $ DataConstructorApp name (arguments :|> argValue)
+    value -> error ("application of non-closure, -constructor or -variable during evaluation: " <> prettyPlain (showHeadConstructor value))
 
 -- TODO: This needs to implement effect handlers. Not sure how to combine that with
 -- partial evaluation
@@ -73,20 +116,7 @@ eval context expr = case expr of
     CApp funExpr argExpr -> do
         funValue <- eval context funExpr
         argValue <- lazyM (eval context argExpr)
-        case funValue of
-            ClosureV closure ->
-                applyClosure closure argValue
-            SkolemApp skolem arguments -> do
-                -- TODO: Do we really need to force the value here? :/
-                argValue <- forceM argValue
-                pure $ SkolemApp skolem (arguments :|> argValue)
-            TypeConstructorApp name arguments -> do
-                argValue <- forceM argValue
-                pure $ TypeConstructorApp name (arguments :|> argValue)
-            DataConstructorApp name arguments -> do
-                argValue <- forceM argValue
-                pure $ DataConstructorApp name (arguments :|> argValue)
-            value -> error ("application of non-closure, -constructor or -variable during evaluation: " <> prettyPlain (showHeadConstructor value))
+        evalApplication context funValue argValue
     CLambda name body -> pure $ ClosureV (MkClosure name body context)
     CCase _expr _cases -> undefined
     CTupleLiteral arguments -> do
