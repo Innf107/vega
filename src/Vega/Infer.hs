@@ -33,6 +33,7 @@ import Data.Foldable (foldrM)
 import Data.Sequence qualified as Seq
 import Data.Vector qualified as Vector
 
+import Control.Monad.Base (MonadBase (liftBase))
 import Control.Monad.Fix
 import Control.Monad.Writer.Strict (MonadWriter (tell), WriterT (runWriterT))
 import Data.These (These (That, These, This))
@@ -98,6 +99,10 @@ data InferState = MkInferState {}
 newtype Infer a = MkInfer (ReaderT (TraceAction IO) (ExceptT TypeError (WriterT (Difflist TypeError) (StateT InferState IO))) a)
     deriving newtype (Functor, Applicative, Monad, MonadFix, MonadTrace)
 
+-- Not super happy about this tbh
+instance MonadBase Infer Infer where
+    liftBase = id
+
 instance MonadUnique Infer where
     freshName text = MkInfer (liftIO (freshName text))
     newUnique = MkInfer (liftIO newUnique)
@@ -154,7 +159,7 @@ setMetaVar (MkMeta _ _ ref) type_ =
 followMetas :: (HasContext context) => context -> Type -> Infer Type
 followMetas context type_ = do
     liftEval (Eval.followSkolems context type_) >>= \case
-        MetaApp meta arguments -> do
+        type_@(MetaApp meta arguments) -> do
             readMetaVar meta >>= \case
                 Nothing -> pure type_
                 Just replacement -> do
@@ -300,7 +305,7 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
 
         pure (env, CDefineGADT typeConstructorName constructors)
 
-curriedReturnType :: HasContext context => context -> Type -> Infer Type
+curriedReturnType :: (HasContext context) => context -> Type -> Infer Type
 curriedReturnType context type_ =
     followMetas context type_ >>= \case
         Forall name _domain (codomainExpr, codomainContext) -> do
@@ -311,7 +316,7 @@ curriedReturnType context type_ =
             curriedReturnType context resultType
         type_ -> pure type_
 
-numberOfCurriedArguments :: HasContext context => context -> Type -> Infer Int
+numberOfCurriedArguments :: (HasContext context) => context -> Type -> Infer Int
 numberOfCurriedArguments context type_ =
     followMetas context type_ >>= \case
         Forall name _domain (codomainExpr, codomainContext) -> do
@@ -682,18 +687,19 @@ splitTupleType context loc type_ expectedArgCount =
 This will traverse pi types by alpha-normalizing them (i.e. skolemizing both with the same skolem).
 -}
 zipTypes
-    :: (Monoid m, HasContext context)
+    :: forall m context infer
+     . (Monoid m, HasContext context, MonadBase Infer infer)
     => context
-    -> (Type -> Type -> Infer m)
+    -> (Type -> Type -> infer m)
     -- ^ recursive calls
-    -> (Type -> Type -> Infer m)
+    -> (Type -> Type -> infer m)
     -- ^ called if the types differ
     -> Type
     -> Type
-    -> Infer m
+    -> infer m
 zipTypes context recur onDifferent type1 type2 = do
-    type1 <- followMetas context type1
-    type2 <- followMetas context type2
+    type1 <- liftBase $ followMetas context type1
+    type2 <- liftBase $ followMetas context type2
     let different = onDifferent type1 type2
     case type1 of
         IntV x -> case type2 of
@@ -713,16 +719,16 @@ zipTypes context recur onDifferent type1 type2 = do
             _ -> different
         Pi mname1 domain1 (codomainCore1, codomainContext1) -> case type2 of
             Pi mname2 domain2 (codomainCore2, codomainContext2) -> do
-                defaultName <- freshName "a"
-                skolem <- freshSkolem (fromMaybe defaultName (mname1 <|> mname2))
-                skolemValue <- lazyValueM (SkolemApp skolem [])
+                defaultName <- liftBase $ freshName "a"
+                skolem <- liftBase $ freshSkolem (fromMaybe defaultName (mname1 <|> mname2))
+                skolemValue <- liftBase $ lazyValueM (SkolemApp skolem [])
 
                 codomain1 <- case mname1 of
-                    Nothing -> liftEval $ eval codomainContext1 codomainCore1
-                    Just name1 -> liftEval $ eval (define name1 skolemValue codomainContext1) codomainCore1
+                    Nothing -> liftBase $ liftEval $ eval codomainContext1 codomainCore1
+                    Just name1 -> liftBase $ liftEval $ eval (define name1 skolemValue codomainContext1) codomainCore1
                 codomain2 <- case mname2 of
-                    Nothing -> liftEval $ eval codomainContext2 codomainCore2
-                    Just name2 -> liftEval $ eval (define name2 skolemValue codomainContext2) codomainCore2
+                    Nothing -> liftBase $ liftEval $ eval codomainContext2 codomainCore2
+                    Just name2 -> liftBase $ liftEval $ eval (define name2 skolemValue codomainContext2) codomainCore2
 
                 (<>)
                     <$> recur domain1 domain2
@@ -731,11 +737,11 @@ zipTypes context recur onDifferent type1 type2 = do
         Forall name1 domain1 (codomainCore1, codomainContext1) -> case type2 of
             Forall name2 domain2 (codomainCore2, codomainContext2) -> do
                 -- We have to pick some name so we arbitrarily pick name1 (not super happy about this tbh)
-                skolem <- freshSkolem name1
-                skolemValue <- lazyValueM (SkolemApp skolem [])
+                skolem <- liftBase $ freshSkolem name1
+                skolemValue <- liftBase $ lazyValueM (SkolemApp skolem [])
 
-                codomain1 <- liftEval $ eval (define name1 skolemValue codomainContext1) codomainCore1
-                codomain2 <- liftEval $ eval (define name2 skolemValue codomainContext2) codomainCore2
+                codomain1 <- liftBase $ liftEval $ eval (define name1 skolemValue codomainContext1) codomainCore1
+                codomain2 <- liftBase $ liftEval $ eval (define name2 skolemValue codomainContext2) codomainCore2
 
                 (<>)
                     <$> recur domain1 domain2
@@ -768,15 +774,22 @@ zipTypes context recur onDifferent type1 type2 = do
             _ -> different
 
 givenEqual :: (HasContext context) => context -> Type -> Type -> Infer (EvalContext -> EvalContext)
-givenEqual context type1 type2 = do
+givenEqual (getContext -> context) type1 type2 = do
     type1 <- followMetas context type1
     type2 <- followMetas context type2
     trace Unify ("[G]" <+> pretty type1 <+> pretty type2)
 
-    let recurEndo ty1 ty2 = Endo <$> givenEqual context ty1 ty2
+    let recurAll context args1 args2 = fmap appEndo
+            $ flip evalStateT context
+            $ flip foldMapM (mzip args1 args2) \(arg1, arg2) -> do
+                context <- get
+                contextTrans <- lift $ givenEqual context arg1 arg2
+                put (contextTrans context)
+                pure (Endo contextTrans)
+
     case (type1, type2) of
         (SkolemApp skolem1 args1, SkolemApp skolem2 args2) | skolem1 == skolem2 -> do
-            appEndo <$> foldMapM (uncurry recurEndo) (mzip args1 args2)
+            recurAll context args1 args2
         (SkolemApp skolem [], type_) -> do
             pure $ defineSkolem skolem type_
         (type_, SkolemApp skolem []) -> do
@@ -787,7 +800,20 @@ givenEqual context type1 type2 = do
         (_type1, SkolemApp _name2 _args2) -> undefined
         -- We just ignore equalities on non-skolem types for now since we don't really
         -- have a way of handling them.
-        _ -> appEndo <$> zipTypes context recurEndo (\_ _ -> pure mempty) type1 type2
+        _ ->
+            fmap appEndo
+                $ flip evalStateT context
+                $ zipTypes
+                    context
+                    ( \type1 type2 -> do
+                        context <- get
+                        contextTrans <- lift (givenEqual context type1 type2)
+                        put (contextTrans context)
+                        pure (Endo contextTrans)
+                    )
+                    (\_ _ -> pure mempty)
+                    type1
+                    type2
 
 subsumes :: (HasContext context) => context -> Loc -> Type -> Type -> Infer ()
 subsumes context loc subtype supertype = do
