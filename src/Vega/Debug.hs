@@ -1,6 +1,7 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 
 module Vega.Debug (
+    todo,
     showHeadConstructor,
     HeadConstructorArg (..),
     defaultHeadConstructorArg,
@@ -13,6 +14,10 @@ import Vega.Pretty
 
 import GHC.Generics
 import GHC.TypeLits (KnownSymbol, symbolVal)
+
+{-# WARNING todo "todo remains in code" #-}
+todo :: a -> a
+todo x = x
 
 -- | Pretty-print the first constructor of a data type that implements 'Generic' for debugging purposes.
 -- This will include every argument that implements 'HeadConstructorArg' and display everything else as @_@.

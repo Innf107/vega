@@ -15,7 +15,7 @@ import Options.Generic
 import System.IO (hIsTerminalDevice)
 
 import Data.Text.IO qualified as Text
-import System.FilePath (dropExtension, (</>), replaceExtension)
+import System.FilePath (replaceExtension)
 
 data Flags = Flags {trace :: [Text], includeUnique :: Bool, skipCoreLint :: Bool, lintError :: Bool}
     deriving (Show, Generic)
@@ -38,7 +38,7 @@ instance ParseRecord ArgumentsAndFlags where
             <*> parseRecordWithModifiers lispCaseModifiers
 
 parseTraceConfig :: IO () -> [Text] -> IO TraceConfig
-parseTraceConfig help = go (MkTraceConfig{types = False, unify = False, subst = False, patterns = False})
+parseTraceConfig help = go (MkTraceConfig{types = False, unify = False, subst = False, patterns = False, eval = False})
   where
     go config = \case
         [] -> pure config
@@ -46,6 +46,7 @@ parseTraceConfig help = go (MkTraceConfig{types = False, unify = False, subst = 
         "unify" : rest -> go (config{unify = True}) rest
         "subst" : rest -> go (config{subst = True}) rest
         "patterns" : rest -> go (config{patterns = True}) rest
+        "eval" : rest -> go (config{eval = True}) rest
         category : _ -> do
             putTextLn ("Invalid trace category: '" <> category <> "'. Valid categories include: " <> intercalate ", " (getRecordFields @TraceConfig) <> "\n")
             help

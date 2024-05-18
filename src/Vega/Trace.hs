@@ -5,6 +5,7 @@ module Vega.Trace (
     Category (..),
     TraceAction (..),
     traceStderrAction,
+    ignoredTraceAction,
     TraceConfig (..),
 ) where
 
@@ -15,6 +16,7 @@ import Vega.Pretty
 import Control.Monad.Base (MonadBase, liftBase)
 import Data.Text.IO (hPutStrLn)
 
+import Data.List (maximum)
 import Data.Text qualified as Text
 
 data TraceAction m = MkTraceAction
@@ -27,7 +29,8 @@ data Category
     | Unify
     | Subst
     | Patterns
-    deriving (Show)
+    | Eval
+    deriving (Show, Enum, Bounded)
 
 class MonadTrace m where
     trace :: Category -> Doc Ann -> m ()
@@ -46,6 +49,7 @@ data TraceConfig = MkTraceConfig
     , unify :: Bool
     , subst :: Bool
     , patterns :: Bool
+    , eval :: Bool
     }
     deriving (Generic)
 
@@ -55,8 +59,21 @@ traceEnabled category config = case category of
     Unify -> config.unify
     Subst -> config.subst
     Patterns -> config.patterns
+    Eval -> config.eval
+
+categoryWidth :: TraceConfig -> Int
+categoryWidth config =
+    maximum
+        $ map (length @[] . show)
+        $ filter (`traceEnabled` config)
+        $ enumFrom (minBound @Category)
 
 traceStderrAction :: (Doc Ann -> Text) -> TraceConfig -> TraceAction IO
-traceStderrAction render config = MkTraceAction 0 \depth category doc ->
-    when (traceEnabled category config) do
-        hPutStrLn stderr ("[" <> show category <> "]: " <> Text.replicate depth "│ " <> render doc)
+traceStderrAction render config = do
+    let width = categoryWidth config
+    MkTraceAction 0 \depth category doc ->
+        when (traceEnabled category config) do
+            hPutStrLn stderr ("[" <> Text.justifyLeft (width + 4) ' ' (show category <> "]: ") <> Text.replicate depth "│ " <> render doc)
+
+ignoredTraceAction :: (Applicative f) => TraceAction f
+ignoredTraceAction = MkTraceAction 0 \_ _ _ -> pure ()

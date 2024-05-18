@@ -1,0 +1,32 @@
+-- EXPECT: 5
+
+data Nat : Type {
+    Z : Nat;
+    S : Nat -> Nat;
+};
+
+data Vec : (Nat -> Type -> Type) {
+    Nil : forall a. Vec Z a;
+    Cons : forall (n : Nat) a. a -> Vec n a -> Vec (S n) a;
+};
+
+add : Nat -> Nat -> Nat;
+add n m = case n {
+    Z -> m;
+    S pred -> S (add pred m);
+};
+
+append : forall (n : Nat) (m : Nat) a. Vec n a -> Vec m a -> Vec (add n m) a;
+append vec1 vec2 = case vec1 {
+    Nil -> vec2;
+    Cons x xs -> Cons x (append xs vec2);
+};
+
+sum : forall (n : Nat). Vec n Int -> Int;
+sum vec = case vec {
+    Nil -> 0;
+    Cons x xs -> x + sum xs;
+};
+
+main : Unit;
+main = debug(sum(append (Cons 1 Nil) (Cons 2 (Cons 2 Nil))));

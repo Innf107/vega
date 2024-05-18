@@ -64,6 +64,7 @@ data Ann
     | Constructor Text Unique
     | Skolem Text Unique
     | Number
+    | Literal
     | Emphasis
     | Error
     | Warning
@@ -137,7 +138,7 @@ meta :: Unique -> Text -> Doc Ann
 meta unique name = PP.annotate (Meta name unique) (PP.pretty name)
 
 literal :: Text -> Doc Ann
-literal = PP.pretty
+literal = PP.annotate Literal . PP.pretty
 
 class Pretty a where
     pretty :: a -> Doc Ann
@@ -158,6 +159,7 @@ renderPlain tree = runST do
             Constructor name unique -> disambiguate constructors name unique
             Skolem name unique -> disambiguate skolems name unique
             Number -> pure text
+            Literal -> pure text
             Emphasis -> pure text
             Error -> pure text
             Warning -> pure text
@@ -197,6 +199,7 @@ renderANSII tree = runST do
                 text <- disambiguate skolems name unique
                 pure $ "\ESC[38;5;159m\STX" <> text <> "\ESC[0m\STX"
             Number -> pure $ "\ESC[1m\ESC[93m\STX" <> text <> "\ESC[0m\STX"
+            Literal -> pure $ "\ESC[32m\STX" <> text <> "\ESC[0m\STX"
             Emphasis -> pure $ "\ESC[1m\STX" <> text <> "\ESC[0m\STX"
             Error -> pure $ "\ESC[1m\ESC[31m\STX" <> text <> "\ESC[0m\STX"
             Warning -> pure $ "\ESC[1m\ESC[93m\STX" <> text <> "\ESC[0m\STX"
@@ -257,6 +260,7 @@ instance (PrettyGenUntagged f, PrettyGenUntagged g) => PrettyGenUntagged (f :+: 
         R1 y -> prettyGenUntagged y
 
 instance (Pretty c) => PrettyGenUntagged (K1 i c) where
+    prettyGenUntagged :: forall k c i (x :: k). Pretty c => K1 i c x -> Doc Ann
     prettyGenUntagged (K1 x) = pretty x
 
 instance (PrettyGenUntagged f) => PrettyGenUntagged (M1 i t f) where

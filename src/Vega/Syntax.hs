@@ -18,6 +18,7 @@ module Vega.Syntax (
     EvalClosureForPrinting (..),
     -- Values
     ValueF (..),
+    StuckValue (..),
     ClosureF (..),
     Skolem (..),
     MetaVarF (..),
@@ -126,6 +127,7 @@ data CoreExprF context
     | CMeta (MetaVarF context)
     | CTupleType (Vector (CoreExprF context))
     | CQuote (ValueF context)
+    deriving (Generic)
 
 data CorePattern subPattern
     = CVarPat Name
@@ -134,6 +136,7 @@ data CorePattern subPattern
     | CStringPat Text
     | CTuplePat (Vector subPattern)
     | CConstructorPat Name (Vector subPattern)
+    deriving (Generic)
 
 data ValueF context
     = IntV Integer
@@ -150,10 +153,13 @@ data ValueF context
     | -- TODO: Add effects
       Pi (Maybe Name) (ValueF context) (CoreExprF context, context)
     | Forall Name (ValueF context) (CoreExprF context, context)
-    | -- Stuck expressions
-      SkolemApp Skolem (Seq (ValueF context))
-    | MetaApp (MetaVarF context) (Seq (ValueF context))
+    | StuckValue (StuckValue context)
     deriving (Generic)
+
+data StuckValue context
+    = SkolemApp Skolem (Seq (ValueF context))
+    | MetaApp (MetaVarF context) (Seq (ValueF context))
+    | StuckCase (StuckValue context) context (Vector (CorePattern Name, CoreExprF context))
 
 data ClosureF context
     = MkClosure Name (CoreExprF context) context
@@ -167,7 +173,6 @@ instance Eq Skolem where
     (MkSkolem _ unique1) == (MkSkolem _ unique2) = unique1 == unique2
 instance Ord Skolem where
     (MkSkolem _ unique1) `compare` (MkSkolem _ unique2) = unique1 `compare` unique2
-
 
 data MetaVarF context = MkMeta Name Unique (IORef (Maybe (ValueF context)))
 
@@ -213,12 +218,15 @@ instance (EvalClosureForPrinting context) => Pretty (ValueF context) where
                 <> keyword "."
                 <+> pretty codomain
                 <> rparen ")"
-        SkolemApp skolem [] ->
+        StuckValue (SkolemApp skolem []) ->
             pretty skolem
-        SkolemApp skolem arguments ->
+        StuckValue (SkolemApp skolem arguments) ->
             lparen "(" <> pretty skolem <+> sep (map pretty (toList arguments)) <> rparen ")"
-        MetaApp meta arguments ->
+        StuckValue (MetaApp meta arguments) ->
             prettyMetaApp meta arguments
+        StuckValue (StuckCase stuck closureContext cases) ->
+            -- TODO
+            lparen "(" <> keyword "case" <+> pretty (StuckValue stuck) <+> "{TODO}" <> rparen ")"
 
 class EvalClosureForPrinting context where
     applyNullaryClosurePrint :: context -> CoreExprF context -> IO (ValueF context)
@@ -243,11 +251,11 @@ prettyMetaApp (MkMeta name unique ref) arguments = unsafePerformIO do
 {-# NOINLINE prettyMetaApp #-}
 
 prettyApp :: (EvalClosureForPrinting context) => ValueF context -> Seq (ValueF context) -> Doc Ann
-prettyApp (MetaApp meta arguments) additionalArguments =
+prettyApp (StuckValue (MetaApp meta arguments)) additionalArguments =
     prettyMetaApp meta (arguments <> additionalArguments)
-prettyApp (SkolemApp skolem []) [] =
+prettyApp (StuckValue (SkolemApp skolem [])) [] =
     pretty skolem
-prettyApp (SkolemApp skolem arguments) additionalArguments =
+prettyApp (StuckValue (SkolemApp skolem arguments)) additionalArguments =
     lparen "(" <> pretty skolem <+> sep (map pretty (toList (arguments <> additionalArguments))) <> rparen ")"
 prettyApp type_ arguments =
     case arguments of
