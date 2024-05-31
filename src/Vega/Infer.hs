@@ -10,7 +10,6 @@ import Vega.Eval (
     EvalContext,
     HasContext (getContext),
     Value,
-    applyClosure,
     define,
     defineSkolem,
     emptyEvalContext,
@@ -58,7 +57,7 @@ instance Pretty TypeError where
             <> "                  and "
             <> pretty type2
     pretty (OccursCheckViolation _ metavar type_) =
-        "Unable to construct an infinite type satisfying\n    " <> pretty (StuckValue (MetaApp metavar [])) <> keyword " ~ " <> pretty type_
+        "Unable to construct an infinite type satisfying\n    " <> pretty (StuckMeta metavar []) <> keyword " ~ " <> pretty type_
     pretty (Impredicative _ type1 type2) =
         "Impredicative instantiation attempted\n"
             <> "    "
@@ -160,47 +159,7 @@ setMetaVar (MkMeta _ _ ref) type_ =
     MkInfer (liftIO (writeIORef ref (Just type_)))
 
 followMetas :: (HasContext context) => context -> Type -> Infer Type
-followMetas context type_ = do
-    liftEval (Eval.followSkolems context type_) >>= \case
-        type_@(StuckValue (MetaApp meta arguments)) -> do
-            readMetaVar meta >>= \case
-                Nothing -> pure type_
-                Just replacement -> do
-                    replacement <- followMetas context replacement
-
-                    -- We do path compression.
-                    -- If a meta variable points to another substituted meta variable,
-                    -- we skip the indirection and bend the first one to point to the target directly.
-                    -- This means that further followMetas calls will only need to traverse one level of indirection
-                    -- rather than re-traversing the entire chain.
-                    -- Plus, this is extremely easy and fast to do so it's not like we're losing anything by doing path compression.
-                    setMetaVar meta replacement
-
-                    liftEval $ applyReplacement replacement arguments
-                  where
-                    applyReplacement replacement arguments = case replacement of
-                        StuckValue (MetaApp meta replacedArguments) ->
-                            pure $ StuckValue $ MetaApp meta (replacedArguments <> arguments)
-                        StuckValue (SkolemApp skolem replacedArguments) ->
-                            pure $ StuckValue $ SkolemApp skolem (replacedArguments <> arguments)
-                        ClosureV closure ->
-                            case arguments of
-                                Empty -> pure (ClosureV closure)
-                                (argument :<| rest) -> do
-                                    argument <- lazyValueM argument
-                                    applied <- applyClosure closure argument
-                                    applyReplacement applied rest
-                        type_ -> case arguments of
-                            Empty -> pure type_
-                            arguments ->
-                                error
-                                    $ "Meta variable substituted with non-application or closure type: "
-                                    <> prettyPlain
-                                        ( pretty type_
-                                            <> "\n   arguments: "
-                                            <> sep (fmap pretty arguments)
-                                        )
-        type_ -> pure type_
+followMetas context type_ = liftEval (Eval.followMetas context type_)
 
 freshSkolem :: (MonadUnique m) => Name -> m Skolem
 freshSkolem name = do
@@ -224,7 +183,7 @@ instantiate :: Type -> Infer Type
 instantiate = \case
     Forall name _domain (codomainExpr, codomainContext) -> do
         meta <- freshMeta name
-        metaValue <- lazyValueM (StuckValue (MetaApp meta []))
+        metaValue <- lazyValueM (StuckMeta meta [])
         instantiated <- liftEval $ eval (define name metaValue codomainContext) codomainExpr
         instantiate instantiated
     type_ -> pure type_
@@ -233,7 +192,7 @@ skolemize :: Type -> Infer Type
 skolemize = \case
     Forall name _domain (codomainExpr, codomainContext) -> do
         skolem <- freshSkolem name
-        varValue <- lazyValueM (StuckValue (SkolemApp skolem []))
+        varValue <- lazyValueM (StuckSkolem skolem [])
         skolemized <- liftEval $ eval (define name varValue codomainContext) codomainExpr
         skolemize skolemized
     type_ -> pure type_
@@ -295,7 +254,7 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
             expectedReturnType <-
                 TypeConstructorApp typeConstructorName
                     . viaList
-                    <$> replicateM typeConstructorArgumentCount (fmap (\meta -> StuckValue (MetaApp meta [])) freshAnonymousMeta)
+                    <$> replicateM typeConstructorArgumentCount (fmap (\meta -> StuckMeta meta []) freshAnonymousMeta)
             subsumes env loc definedReturnType expectedReturnType
 
             value <- lazyValueM $ DataConstructorApp dataConstructorName []
@@ -367,7 +326,7 @@ infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
             scrutineeVar <- freshName "x"
 
             resultMeta <- freshAnonymousMeta
-            let resultType = StuckValue (MetaApp resultMeta [])
+            let resultType = StuckMeta resultMeta []
             newCases <- forM cases \(pattern_, body) -> do
                 (envTrans, _patternValue, corePattern) <- checkPattern env scrutineeType pattern_
                 coreBody <- check (envTrans env) resultType body
@@ -410,7 +369,7 @@ infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
                 Nothing -> pure env
                 Just name -> do
                     skolem <- freshSkolem name
-                    varValue <- lazyValueM $ StuckValue (SkolemApp skolem [])
+                    varValue <- lazyValueM $ StuckSkolem skolem []
 
                     pure (extendVariable name domainValue varValue env)
 
@@ -423,7 +382,7 @@ infer env expr = withTrace Types ("infer" <+> showHeadConstructor expr) $ do
 
             skolem <- freshSkolem name
 
-            varValue <- lazyValueM $ StuckValue (SkolemApp skolem [])
+            varValue <- lazyValueM $ StuckSkolem skolem []
 
             codomainCore <- check (extendVariable name domainValue varValue env) Type codomain
 
@@ -545,7 +504,7 @@ checkStatement env = \case
             Nothing -> do
                 (patternTypes, envTransformers, corePatterns) <- Vector.unzip3 <$> traverse (inferPattern env) patterns
                 resultMeta <- freshAnonymousMeta
-                let resultType = StuckValue (MetaApp resultMeta [])
+                let resultType = StuckMeta resultMeta []
                 let ownType = foldr (\domain codomain -> Pi Nothing domain (CQuote codomain, emptyContext)) resultType patternTypes
                 pure (ownType, resultType, compose envTransformers, corePatterns)
         let addLambdas core = do
@@ -572,9 +531,9 @@ inferPattern :: Env -> Pattern Renamed -> Infer (Type, Env -> Env, CorePattern (
 inferPattern env = \case
     VarPat _loc name -> do
         varMeta <- freshAnonymousMeta
-        let varType = StuckValue (MetaApp varMeta [])
+        let varType = StuckMeta varMeta []
         varSkolem <- freshSkolem name
-        varValue <- lazyValueM $ StuckValue $ SkolemApp varSkolem []
+        varValue <- lazyValueM $ StuckSkolem varSkolem []
         pure (varType, extendVariable name varType varValue, CVarPat name)
     ConstructorPat _ _ _ -> undefined
     IntPat _loc value -> pure (Int, id, CIntPat value)
@@ -594,9 +553,9 @@ checkPattern :: Env -> Type -> Pattern Renamed -> Infer (Env -> Env, LazyM Eval 
 checkPattern env expectedType = \case
     VarPat _loc name -> do
         skolem <- freshSkolem name
-        value <- lazyValueM (StuckValue (SkolemApp skolem []))
+        value <- lazyValueM (StuckSkolem skolem [])
         pure (extendVariable name expectedType value, value, CVarPat name)
-    ConstructorPat loc name subPatterns -> do
+    ConstructorPat _loc name subPatterns -> do
         case lookup name env.dataConstructors of
             Nothing -> error $ "unbound data constructor in type checker: " <> show name
             Just constructorType -> do
@@ -604,7 +563,6 @@ checkPattern env expectedType = \case
                 (envTrans, subPatternValues, subPatterns, resultType) <- checkParameterPatterns env constructorType subPatterns
 
                 gadtEqualityEnvTrans <- modifyContext <$> givenEqual env expectedType resultType
-                -- TODO: Compare the result type and get some equalities that way
 
                 value <- lazyM do
                     values <- traverse forceM subPatternValues
@@ -669,7 +627,7 @@ splitFunctionType context loc type_ =
             let resultClosureExpr = CMeta resultMeta
             let resultClosureContext = emptyEvalContext
 
-            let paramType = StuckValue (MetaApp paramMeta [])
+            let paramType = StuckMeta paramMeta []
 
             subsumes context loc type_ (Pi Nothing paramType (resultClosureExpr, resultClosureContext))
             pure (Nothing, paramType, resultClosureExpr, resultClosureContext)
@@ -681,7 +639,7 @@ splitTupleType context loc type_ expectedArgCount =
             | length arguments == expectedArgCount -> pure arguments
             | otherwise -> undefined
         type_ -> do
-            argumentTypes <- Vector.replicateM expectedArgCount (fmap (\x -> StuckValue (MetaApp x [])) freshAnonymousMeta)
+            argumentTypes <- Vector.replicateM expectedArgCount (fmap (\x -> StuckMeta x []) freshAnonymousMeta)
             subsumes context loc type_ (TupleType argumentTypes)
             pure argumentTypes
 
@@ -689,6 +647,8 @@ splitTupleType context loc type_ expectedArgCount =
 (usually a recursive call to the calling function that handles the interesting cases before calling this).
 
 This will traverse pi types by alpha-normalizing them (i.e. skolemizing both with the same skolem).
+
+Notably, this does *NOT* recurse into stuck skolem- or unification variable continuations
 -}
 zipTypes
     :: forall m context infer
@@ -725,7 +685,7 @@ zipTypes context recur onDifferent type1 type2 = do
             Pi mname2 domain2 (codomainCore2, codomainContext2) -> do
                 defaultName <- liftBase $ freshName "a"
                 skolem <- liftBase $ freshSkolem (fromMaybe defaultName (mname1 <|> mname2))
-                skolemValue <- liftBase $ lazyValueM (StuckValue (SkolemApp skolem []))
+                skolemValue <- liftBase $ lazyValueM (StuckSkolem skolem [])
 
                 codomain1 <- case mname1 of
                     Nothing -> liftBase $ liftEval $ eval codomainContext1 codomainCore1
@@ -742,7 +702,7 @@ zipTypes context recur onDifferent type1 type2 = do
             Forall name2 domain2 (codomainCore2, codomainContext2) -> do
                 -- We have to pick some name so we arbitrarily pick name1 (not super happy about this tbh)
                 skolem <- liftBase $ freshSkolem name1
-                skolemValue <- liftBase $ lazyValueM (StuckValue (SkolemApp skolem []))
+                skolemValue <- liftBase $ lazyValueM (StuckSkolem skolem [])
 
                 codomain1 <- liftBase $ liftEval $ eval (define name1 skolemValue codomainContext1) codomainCore1
                 codomain2 <- liftBase $ liftEval $ eval (define name2 skolemValue codomainContext2) codomainCore2
@@ -751,16 +711,11 @@ zipTypes context recur onDifferent type1 type2 = do
                     <$> recur domain1 domain2
                     <*> recur codomain1 codomain2
             _ -> different
-        StuckValue (MetaApp metaVar1 args1) -> case type2 of
-            StuckValue (MetaApp metaVar2 args2) | metaVar1 == metaVar2 -> do
-                foldMapM (uncurry recur) (Seq.zip args1 args2)
+        StuckMeta metaVar1 _cont1 -> case type2 of
+            StuckMeta metaVar2 _cont2 | metaVar1 == metaVar2 -> pure mempty
             _ -> different
-        StuckValue (SkolemApp skolem1 args1) -> case type2 of
-            StuckValue (SkolemApp skolem2 args2) | skolem1 == skolem2 && length args1 == length args2 -> do
-                foldMapM (uncurry recur) (Seq.zip args1 args2)
-            _ -> different
-        StuckValue (StuckCase stuck1 closureContext1 cases1) -> case type2 of
-            StuckValue (StuckCase stuck2 closureContext2 cases2) -> undefined
+        StuckSkolem skolem1 _cont1 -> case type2 of
+            StuckSkolem skolem2 _cont2 | skolem1 == skolem2 -> pure mempty
             _ -> different
         ClosureV{} -> undefined
         TupleV arguments1 -> case type2 of
@@ -795,16 +750,15 @@ givenEqual (getContext -> context) type1 type2 = do
                 pure (Endo contextTrans)
 
     case (type1, type2) of
-        (StuckValue (SkolemApp skolem1 args1), StuckValue (SkolemApp skolem2 args2)) | skolem1 == skolem2 -> do
-            recurAll context args1 args2
-        (StuckValue (SkolemApp skolem []), type_) -> do
+        (StuckSkolem skolem1 cont1, StuckSkolem skolem2 cont2) | skolem1 == skolem2 -> undefined
+        (StuckSkolem skolem [], type_) -> do
             pure $ defineSkolem skolem type_
-        (type_, StuckValue (SkolemApp skolem [])) -> do
+        (type_, StuckSkolem skolem []) -> do
             pure $ defineSkolem skolem type_
-        (StuckValue (SkolemApp _name1 _args1), _type2) -> do
+        (StuckSkolem _skolem1 cont1, _type2) -> do
             -- TODO: No idea how to handle more interesting given equalities yet tbh
             undefined
-        (_type1, StuckValue (SkolemApp _name2 _args2)) -> undefined
+        (_type1, StuckSkolem _skolem2 _args2) -> undefined
         -- We just ignore equalities on non-skolem types for now since we don't really
         -- have a way of handling them.
         _ ->
@@ -842,7 +796,7 @@ unify context loc type1 type2 = do
     case (type1, type2) of
         (Forall name1 domain1 (codomainCore1, codomainContext1), Forall name2 domain2 (codomainCore2, codomainContext2)) -> do
             skolem <- freshSkolem name1
-            skolemValue <- lazyValueM (StuckValue (SkolemApp skolem []))
+            skolemValue <- lazyValueM (StuckSkolem skolem [])
 
             codomain1 <- liftEval $ eval (define name1 skolemValue codomainContext1) codomainCore1
             codomain2 <- liftEval $ eval (define name2 skolemValue codomainContext2) codomainCore2
@@ -853,15 +807,30 @@ unify context loc type1 type2 = do
         -- TODO: this might not actually be an impredicative instantiation in all cases
         (Forall{}, _) -> typeError (Impredicative loc type1 type2)
         (_, Forall{}) -> typeError (Impredicative loc type1 type2)
-        (StuckValue (MetaApp metaVar1 args1), StuckValue (MetaApp metaVar2 args2))
-            | metaVar1 == metaVar2 -> traverse_ (uncurry (unify context loc)) (mzip args1 args2)
-        (StuckValue (MetaApp metaVar1 []), type2) -> bind context loc metaVar1 type2
-        (type1, StuckValue (MetaApp metaVar2 [])) -> bind context loc metaVar2 type1
+        (StuckMeta metaVar1 cont1, StuckMeta metaVar2 cont2)
+            | metaVar1 == metaVar2 ->
+                unifyStuckCont context loc cont1 cont2
+        (StuckMeta metaVar1 [], type2) -> bind context loc metaVar1 type2
+        (type1, StuckMeta metaVar2 []) -> bind context loc metaVar2 type1
         -- See Note [Pattern Unification]
-        (StuckValue (MetaApp metaVar1 arguments1), type2) -> patternUnification context metaVar1 arguments1 type2
+        (StuckMeta metaVar1 arguments1, type2) -> undefined -- patternUnification context metaVar1 arguments1 type2
         -- TODO: Keep track of the change of direction here for the sake of error messages
-        (type1, StuckValue (MetaApp metaVar2 arguments2)) -> patternUnification context metaVar2 arguments2 type1
+        (type1, StuckMeta metaVar2 arguments2) -> undefined -- patternUnification context metaVar2 arguments2 type1
         _ -> zipTypes context (unify context loc) unableToUnify type1 type2
+
+unifyStuckCont
+    :: (HasContext context)
+    => context
+    -> Loc
+    -> Seq (StuckCont EvalContext)
+    -> Seq (StuckCont EvalContext)
+    -> Infer ()
+-- TODO: something something pattern unification
+unifyStuckCont context loc Empty Empty = pure ()
+unifyStuckCont context loc (StuckApp argument1 :<| rest1) (StuckApp argument2 :<| rest2) = do
+    unify context loc argument1 argument2
+    unifyStuckCont context loc rest1 rest2
+unifyStuckCont context loc _ _ = undefined
 
 -- See Note [Pattern Unification]
 patternUnification :: (HasContext context) => context -> MetaVar -> Seq Type -> Type -> Infer ()
@@ -869,7 +838,7 @@ patternUnification env metaVar arguments type2 =
     followMetas env type2 >>= \case
         -- TODO: This is kind of slow. We should figure out something more efficient
         -- TODO: Make sure we catch escaping skolems
-        StuckValue (SkolemApp skolem skolemArguments) -> do
+        StuckSkolem skolem skolemArguments -> do
             undefined
         _ -> undefined
 
@@ -928,15 +897,30 @@ occursCheck context meta type_ =
 
                 codomain <- lift $ liftEval $ skolemizeClosure (Just name) codomainCore codomainContext
                 go codomain
-            StuckValue (SkolemApp _ arguments) -> traverse_ go arguments
-            StuckValue (MetaApp otherMeta arguments) -> do
+            StuckSkolem _ stuckCont -> do
+                goCont stuckCont
+            StuckMeta otherMeta stuckCont -> do
                 if (meta == otherMeta)
                     then throwError ()
-                    else traverse_ go arguments
-            StuckValue (StuckCase stuck closureContext cases) -> do
-                go (StuckValue stuck)
-                -- TODO: skolemize the cases and traverse them i think? (this sounds really slow tbh)
-                todo (pure ())
+                    else goCont stuckCont
+
+    goCont :: Seq (StuckCont EvalContext) -> ExceptT () Infer ()
+    goCont = \case
+        Empty -> pure ()
+        (StuckApp argument :<| rest) -> do
+            go argument
+            goCont rest
+        (StuckCase closureContext cases :<| rest) -> do
+            -- TODO: I'm *not* happy about this
+            for_ cases \case
+                (CVarPat name, body) -> do
+                    bodyValue <- lift $ liftEval $ skolemizeClosure (Just name) body closureContext
+                    go bodyValue
+                    goCont rest
+                (_pattern, body) -> do
+                    bodyValue <- lift $ liftEval $ skolemizeClosure Nothing body closureContext
+                    go bodyValue
+                    goCont rest
 
 skolemizeClosure :: Maybe Name -> CoreExpr -> EvalContext -> Eval Type
 skolemizeClosure mname codomainCore codomainContext = do
@@ -944,7 +928,7 @@ skolemizeClosure mname codomainCore codomainContext = do
         Nothing -> pure codomainContext
         Just name -> do
             codomainSkolem <- freshSkolem name
-            skolemValue <- lazyValueM (StuckValue (SkolemApp codomainSkolem []))
+            skolemValue <- lazyValueM (StuckSkolem codomainSkolem [])
             pure (define name skolemValue codomainContext)
     eval codomainContext codomainCore
 
@@ -954,9 +938,9 @@ bind context loc metaVar type_ = do
         Just substituted -> do
             unify context loc substituted type_
         Nothing -> do
-            trace Subst (pretty (StuckValue (MetaApp metaVar [])) <+> keyword ":=" <+> pretty type_)
+            trace Subst (pretty (StuckMeta metaVar []) <+> keyword ":=" <+> pretty type_)
             followMetas context type_ >>= \case
-                StuckValue (MetaApp metaVar2 []) | metaVar == metaVar2 -> pure ()
+                StuckMeta metaVar2 [] | metaVar == metaVar2 -> pure ()
                 type_ -> do
                     occursCheck context metaVar type_ >>= \case
                         True -> do
@@ -1006,14 +990,22 @@ quoteFully context type_ =
             codomain <- liftEval $ skolemizeClosure (Just name) codomainExpr codomainEnv
             quotedCodomain <- quoteFully context codomain
             pure $ CForall name quotedDomain quotedCodomain
-        StuckValue (SkolemApp (MkSkolem skolemName skolemUnique) arguments) -> do
-            quotedArguments <- traverse (quoteFully context) arguments
+        StuckSkolem (MkSkolem skolemName skolemUnique) cont -> do
             -- We use the skolem unique as the variable unique here.
             -- This technically loses provenance of the skolem but we don't use that anywhere
             -- so it should be fine.
-            -- Since Uniques are globally unique, this will not
-            pure $ foldl' CApp (CVar (Name.makeDirectlyUnchecked (Name.original skolemName) skolemUnique)) quotedArguments
-        StuckValue (MetaApp metaVar arguments) -> do
-            quotedArguments <- traverse (quoteFully context) arguments
-            pure $ foldl' CApp (CMeta metaVar) quotedArguments
-        StuckValue (StuckCase{}) -> undefined
+            let skolemVar = CVar (Name.makeDirectlyUnchecked (Name.original skolemName) skolemUnique)
+
+            quoteCont context skolemVar cont
+        StuckMeta metaVar cont -> do
+            quoteCont context (CMeta metaVar) cont
+
+quoteCont :: (HasContext context) => context -> CoreExpr -> Seq (StuckCont EvalContext) -> Infer CoreExpr
+quoteCont _context argument Empty = pure argument
+quoteCont context functionExpr (StuckApp arg :<| rest) = do
+    quotedArg <- quoteFully context arg
+    quoteCont context (CApp functionExpr quotedArg) rest
+quoteCont context argument (StuckCase closedContext cases :<| rest) = do
+    -- not entirely sure what to do here, we somehow need to quote cases using the context, but
+    -- also cases is already an expression?
+    undefined

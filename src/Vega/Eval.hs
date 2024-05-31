@@ -6,7 +6,7 @@ module Vega.Eval (
     emptyEvalContext,
     define,
     defineSkolem,
-    followSkolems,
+    followMetas,
     Value,
     CoreDeclaration,
     CoreExpr,
@@ -76,7 +76,7 @@ instance EvalClosureForPrinting EvalContext where
         let ?traceAction = ignoredTraceAction
         runEval do
             let skolem = MkSkolem name (Name.unique name)
-            lazyValue <- lazyValueM (StuckValue (SkolemApp skolem []))
+            lazyValue <- lazyValueM (StuckSkolem skolem [])
             applyClosure (MkClosure name expr context) lazyValue
 
 emptyEvalContext :: EvalContext
@@ -92,39 +92,64 @@ define name value context = context{varValues = insert name value context.varVal
 defineSkolem :: Skolem -> Value -> EvalContext -> EvalContext
 defineSkolem skolem value context = context{skolemBindings = insert skolem value context.skolemBindings}
 
-followSkolems :: (HasContext context) => context -> Value -> Eval Value
-followSkolems (getContext -> context) = \case
-    StuckValue stuck -> followStuckValues context stuck
+readMetaVar :: MetaVarF EvalContext -> Eval (Maybe Value)
+readMetaVar (MkMeta _name _unique ref) = MkEval (liftIO (readIORef ref))
+
+setMetaVar :: MetaVarF EvalContext -> Value -> Eval ()
+setMetaVar (MkMeta _name _unique ref) value = MkEval (liftIO (writeIORef ref (Just value)))
+
+followMetas :: (HasContext context) => context -> Value -> Eval Value
+followMetas (getContext -> context) value = case value of
+    StuckMeta meta cont -> do
+        readMetaVar meta >>= \case
+            Nothing -> pure value
+            Just replacement -> do
+                replacement <- followMetas context replacement
+
+                -- We do path compression.
+                -- If a meta variable points to another substituted meta variable,
+                -- we skip the indirection and bend the first one to point to the target directly.
+                -- This means that further followMetas calls will only need to traverse one level of indirection
+                -- rather than re-traversing the entire chain.
+                -- Plus, this is extremely easy and fast to do so it's not like we're losing anything by doing path compression.
+                setMetaVar meta replacement
+                instantiateStuck replacement cont
+    StuckSkolem skolem cont -> do
+        case lookup skolem context.skolemBindings of
+            Nothing -> pure value
+            Just replacement -> do
+                replacement <- followMetas context replacement
+
+                -- Unfortunately we cannot do path compression on skolems since we don't actually have anything to mutate
+                instantiateStuck replacement cont
     value -> pure value
 
--- TODO: This really needs to follow meta variables as well
-followStuckValues :: (HasContext context) => context -> StuckValue EvalContext -> Eval Value
-followStuckValues (getContext -> context) = \case
-    (SkolemApp skolem [])
-        | Just value <- lookup skolem context.skolemBindings ->
-            followSkolems context value
-    (SkolemApp skolem args)
-        | Just funValue <- lookup skolem context.skolemBindings -> do
-            let applyOne funValue argValue = do
-                    lazyArgValue <- lazyValueM argValue
-                    evalApplication context funValue lazyArgValue
-            foldlM applyOne funValue args
-    stuck@SkolemApp{} -> pure (StuckValue stuck)
-    -- TODO: This should all be merged with followMetas
-    stuck@MetaApp{} -> pure (StuckValue stuck)
-    StuckCase stuckValue closureContext cases ->
-        followStuckValues context stuckValue >>= \case
-            StuckValue stuck -> pure $ StuckValue (StuckCase stuck closureContext cases)
-            value -> evalCase context value closureContext cases
+{- | Instantiate a stuck value with something concrete. This will evaluate the stuck value's continuation
+This assumes that the value is *NOT* a bound meta variable or skolem
+-}
+instantiateStuck :: Value -> Seq (StuckCont EvalContext) -> Eval Value
+instantiateStuck value = \case
+    Empty -> pure value
+    (StuckApp argument :<| rest) -> do
+        -- TODO: not sure about the lazies here :/
+        lazyArgument <- lazyValueM argument
+        result <- evalApplication value lazyArgument
+        instantiateStuck result rest
+    (StuckCase closureContext cases :<| rest) -> do
+        result <- evalCase closureContext value cases
+        instantiateStuck result rest
 
-evalApplication :: EvalContext -> Value -> LazyM Eval Value -> Eval Value
-evalApplication context funValue argValue = case funValue of
+evalApplication :: Value -> LazyM Eval Value -> Eval Value
+evalApplication funValue argValue = case funValue of
     ClosureV closure ->
         applyClosure closure argValue
-    StuckValue (SkolemApp skolem arguments) -> do
-        -- TODO: Do we really need to force the value here? :/
+    -- TODO: This should not need to force the value
+    StuckMeta meta cont -> do
         argValue <- forceM argValue
-        pure $ StuckValue (SkolemApp skolem (arguments :|> argValue))
+        pure (StuckMeta meta (cont :|> StuckApp argValue))
+    StuckSkolem skolem cont -> do
+        argValue <- forceM argValue
+        pure (StuckSkolem skolem (cont :|> StuckApp argValue))
     TypeConstructorApp name arguments -> do
         argValue <- forceM argValue
         pure $ TypeConstructorApp name (arguments :|> argValue)
@@ -150,11 +175,11 @@ eval context expr = withTrace
         CApp funExpr argExpr -> do
             funValue <- eval context funExpr
             argValue <- lazyM (eval context argExpr)
-            evalApplication context funValue argValue
+            evalApplication funValue argValue
         CLambda name body -> pure $ ClosureV (MkClosure name body context)
         CCase expr cases -> do
             value <- eval context expr
-            evalCase context value context cases
+            evalCase context value cases
         CTupleLiteral arguments -> do
             values <- traverse (eval context) arguments
             pure (TupleV values)
@@ -176,25 +201,24 @@ eval context expr = withTrace
             pure $ Forall name type_ (body, context)
         CMeta (MkMeta name unique ref) ->
             readRef ref >>= \case
-                Nothing -> pure (StuckValue (MetaApp (MkMeta name unique ref) []))
+                Nothing -> pure (StuckMeta (MkMeta name unique ref) [])
                 Just value -> pure value
         CTupleType arguments -> do
             values <- traverse (eval context) arguments
             pure (TupleType values)
         CQuote value -> pure value
 
--- TODO: This should follow metas
-evalCase :: EvalContext -> Value -> EvalContext -> Vector (CorePattern Name, CoreExpr) -> Eval Value
-evalCase context value closureContext cases =
-    followSkolems context value >>= \case
-        StuckValue stuck -> pure $ StuckValue (StuckCase stuck closureContext cases)
-        value -> do
-            -- TODO: This is kind of slow. We could generate a more efficient direct case based on the kind of pattern here
-            matchingCase <- findMapM (\(pattern_, body) -> fmap (,body) <$> matchPattern value pattern_) cases
-            case matchingCase of
-                Nothing -> error "non-exhaustive patterns during eval"
-                Just (contextTrans, body) ->
-                    eval (contextTrans closureContext) body
+evalCase :: EvalContext -> Value -> Vector (CorePattern Name, CoreExpr) -> Eval Value
+evalCase context value cases = case value of
+    StuckMeta meta cont -> pure $ StuckMeta meta (cont :|> StuckCase context cases)
+    StuckSkolem skolem cont -> pure $ StuckSkolem skolem (cont :|> StuckCase context cases)
+    value -> do
+        -- TODO: This is kind of slow. We could generate a more efficient direct case based on the kind of pattern here
+        matchingCase <- findMapM (\(pattern_, body) -> fmap (,body) <$> matchPattern value pattern_) cases
+        case matchingCase of
+            Nothing -> error "non-exhaustive patterns during eval"
+            Just (contextTrans, body) ->
+                eval (contextTrans context) body
 
 matchPattern :: Value -> CorePattern Name -> Eval (Maybe (EvalContext -> EvalContext))
 matchPattern value = \case

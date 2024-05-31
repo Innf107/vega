@@ -18,7 +18,7 @@ module Vega.Syntax (
     EvalClosureForPrinting (..),
     -- Values
     ValueF (..),
-    StuckValue (..),
+    StuckCont (..),
     ClosureF (..),
     Skolem (..),
     MetaVarF (..),
@@ -153,13 +153,13 @@ data ValueF context
     | -- TODO: Add effects
       Pi (Maybe Name) (ValueF context) (CoreExprF context, context)
     | Forall Name (ValueF context) (CoreExprF context, context)
-    | StuckValue (StuckValue context)
+    | StuckSkolem Skolem (Seq (StuckCont context))
+    | StuckMeta (MetaVarF context) (Seq (StuckCont context))
     deriving (Generic)
 
-data StuckValue context
-    = SkolemApp Skolem (Seq (ValueF context))
-    | MetaApp (MetaVarF context) (Seq (ValueF context))
-    | StuckCase (StuckValue context) context (Vector (CorePattern Name, CoreExprF context))
+data StuckCont context
+    = StuckApp (ValueF context)
+    | StuckCase context (Vector (CorePattern Name, CoreExprF context))
 
 data ClosureF context
     = MkClosure Name (CoreExprF context) context
@@ -218,49 +218,31 @@ instance (EvalClosureForPrinting context) => Pretty (ValueF context) where
                 <> keyword "."
                 <+> pretty codomain
                 <> rparen ")"
-        StuckValue (SkolemApp skolem []) ->
-            pretty skolem
-        StuckValue (SkolemApp skolem arguments) ->
-            lparen "(" <> pretty skolem <+> sep (map pretty (toList arguments)) <> rparen ")"
-        StuckValue (MetaApp meta arguments) ->
-            prettyMetaApp meta arguments
-        StuckValue (StuckCase stuck closureContext cases) ->
-            -- TODO
-            lparen "(" <> keyword "case" <+> pretty (StuckValue stuck) <+> "{TODO}" <> rparen ")"
+        StuckSkolem skolem cont ->
+            prettyStuckCont (pretty skolem) cont
+        StuckMeta meta cont ->
+            prettyStuckCont (prettyMeta meta) cont
 
 class EvalClosureForPrinting context where
     applyNullaryClosurePrint :: context -> CoreExprF context -> IO (ValueF context)
     applyClosureForPrinting :: context -> CoreExprF context -> Name -> IO (ValueF context)
 
+prettyStuckCont :: EvalClosureForPrinting context => Doc Ann -> Seq (StuckCont context) -> Doc Ann
+prettyStuckCont target Empty = target
+prettyStuckCont target (StuckApp argument :<| rest) = do
+    prettyStuckCont (lparen "(" <> target <+> pretty argument <> ")") rest
+prettyStuckCont target (StuckCase closureContext cases :<| rest) =
+    prettyStuckCont (keyword "case" <+> target <+> lparen "{" <> "TODO" <> rparen "}") rest
+
 -- TODO: Zonk these correctly instead of using unsafePerformIO here
 
 -- Using NOINLINE, just in case
-prettyMetaApp :: (EvalClosureForPrinting context) => MetaVarF context -> Seq (ValueF context) -> Doc Ann
-prettyMetaApp (MkMeta name unique ref) arguments = unsafePerformIO do
+prettyMeta :: (EvalClosureForPrinting context) => MetaVarF context -> Doc Ann
+prettyMeta (MkMeta name unique ref) = unsafePerformIO do
     readIORef ref >>= \case
-        Nothing ->
-            case arguments of
-                [] -> pure $ meta unique ("?" <> original name)
-                arguments ->
-                    pure
-                        $ lparen "("
-                        <> meta unique ("?" <> original name)
-                        <+> sep (map pretty (toList arguments))
-                        <> rparen ")"
-        Just replacement -> pure $ prettyApp replacement arguments
-{-# NOINLINE prettyMetaApp #-}
-
-prettyApp :: (EvalClosureForPrinting context) => ValueF context -> Seq (ValueF context) -> Doc Ann
-prettyApp (StuckValue (MetaApp meta arguments)) additionalArguments =
-    prettyMetaApp meta (arguments <> additionalArguments)
-prettyApp (StuckValue (SkolemApp skolem [])) [] =
-    pretty skolem
-prettyApp (StuckValue (SkolemApp skolem arguments)) additionalArguments =
-    lparen "(" <> pretty skolem <+> sep (map pretty (toList (arguments <> additionalArguments))) <> rparen ")"
-prettyApp type_ arguments =
-    case arguments of
-        [] -> pretty type_
-        arguments -> lparen "(" <> pretty type_ <+> sep (map pretty (toList arguments)) <> rparen ")"
+        Nothing -> pure $ meta unique ("?" <> original name)
+        Just replacement -> pure $ pretty replacement
+{-# NOINLINE prettyMeta #-}
 
 instance Pretty Skolem where
     pretty (MkSkolem name unique) =
@@ -318,7 +300,7 @@ instance (EvalClosureForPrinting context) => Pretty (CoreExprF context) where
                 <> keyword "."
                 <+> pretty codomain
                 <> rparen ")"
-        CMeta meta -> prettyMetaApp meta []
+        CMeta meta -> prettyMeta meta
         CTupleType [] -> keyword "Unit"
         CTupleType arguments -> lparen "(" <> intercalateMap (keyword " ** ") pretty arguments <> rparen ")"
         CQuote value_ -> pretty value_
