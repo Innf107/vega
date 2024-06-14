@@ -17,8 +17,16 @@ import System.IO (hIsTerminalDevice)
 import Data.Text.IO qualified as Text
 import System.FilePath (replaceExtension)
 
-data Flags = Flags {trace :: [Text], includeUnique :: Bool, skipCoreLint :: Bool, lintError :: Bool}
-    deriving (Show, Generic)
+import GHC.Read (readsPrec)
+
+data Flags = Flags
+    { trace :: [Text]
+    , target :: Maybe Target
+    , includeUnique :: Bool
+    , skipCoreLint :: Bool
+    , lintError :: Bool
+    }
+    deriving (Generic)
 
 instance ParseRecord Flags
 
@@ -29,13 +37,26 @@ data Arguments
 instance ParseRecord Arguments
 
 data ArgumentsAndFlags = MkArgumentsAndFlags {flags :: Flags, arguments :: Arguments}
-    deriving (Show, Generic)
+    deriving (Generic)
 
 instance ParseRecord ArgumentsAndFlags where
     parseRecord =
         MkArgumentsAndFlags
             <$> parseRecordWithModifiers lispCaseModifiers
             <*> parseRecordWithModifiers lispCaseModifiers
+
+data Target
+    = Lua
+    | Native
+    deriving (Generic)
+
+instance ParseRecord Target
+instance ParseFields Target
+instance ParseField Target
+instance Read Target where
+    readsPrec _ ('l' : 'u' : 'a' : rest) = [(Lua, rest)]
+    readsPrec _ ('n' : 'a' : 't' : 'i' : 'v' : 'e' : rest) = [(Native, rest)]
+    readsPrec _ _ = []
 
 parseTraceConfig :: IO () -> [Text] -> IO TraceConfig
 parseTraceConfig help = go (MkTraceConfig{types = False, unify = False, subst = False, patterns = False, eval = False})
@@ -89,15 +110,21 @@ main = do
             when (flags.lintError && (not (null warnings)))
                 $ exitFailure
 
-            luaCode <- case coreOrErrors of
+            core <- case coreOrErrors of
                 Left errors -> do
                     for_ errors \error -> do
                         doc <- prettyErrorLoc (getLoc error) (pretty error)
                         putTextLn (renderStdout doc)
                     exitFailure
-                Right core -> Lua.compile core
-            writeFileLBS (replaceExtension file "lua") (encodeUtf8 luaCode)
+                Right core -> pure core
 
+            case fromMaybe Lua flags.target of
+                Lua -> do
+                    luaCode <- Lua.compile core
+                    writeFileLBS (replaceExtension file "lua") (encodeUtf8 luaCode)
+                Native -> do
+                    Driver.compile core
+                    undefined
 
 prettyErrorLoc :: (MonadIO io) => Loc -> Doc Ann -> io (Doc Ann)
 prettyErrorLoc loc doc = do

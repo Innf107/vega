@@ -7,6 +7,7 @@ module Vega.Eval (
     define,
     defineSkolem,
     followMetas,
+    lookupVar,
     Value,
     CoreDeclaration,
     CoreExpr,
@@ -91,6 +92,9 @@ define name value context = context{varValues = insert name value context.varVal
 
 defineSkolem :: Skolem -> Value -> EvalContext -> EvalContext
 defineSkolem skolem value context = context{skolemBindings = insert skolem value context.skolemBindings}
+
+lookupVar :: Name -> EvalContext -> Maybe Value
+lookupVar name context = undefined
 
 readMetaVar :: MetaVarF EvalContext -> Eval (Maybe Value)
 readMetaVar (MkMeta _name _unique ref) = MkEval (liftIO (readIORef ref))

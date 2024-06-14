@@ -10,6 +10,7 @@ import Vega.Name qualified as Name
 import Data.Vector qualified as Vector
 import Vega.Eval
 import Vega.Name (freshNameIO)
+import qualified Vega.Eval as Eval
 
 newtype Compile a = MkCompile (IO a)
     deriving (Functor, Applicative, Monad)
@@ -69,14 +70,17 @@ definitions =
 
 compileDeclaration :: CoreDeclaration -> Compile Text
 compileDeclaration = \case
-    CDefineVar name expr -> do
-        exprCode <- compileExpr expr
+    CDefineVar name value -> do
+        exprCode <- compileValue value
         pure (renderName name <> " = " <> exprCode)
     CDefineGADT _typeName constructors -> do
         let defineConstructor (name, argumentCount) = do
                 let result = "{ tag = \"" <> renderName name <> "\"" <> foldMap (\i -> ", x" <> show i) ([1 .. argumentCount] :: Vector Int) <> " }"
                 "local " <> renderName name <> " = " <> foldr (\i rest -> "function (x" <> show i <> ") return " <> rest <> " end") result ([1 .. argumentCount] :: Vector Int)
         pure $ intercalate "\n" (fmap defineConstructor constructors)
+
+compileValue :: Eval.Value -> Compile Text
+compileValue = undefined
 
 compileExpr :: CoreExpr -> Compile Text
 compileExpr = \case

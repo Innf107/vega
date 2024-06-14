@@ -9,6 +9,7 @@ import Vega.Prelude
 import Vega.Pretty
 import Vega.Syntax
 import Vega.Util (viaList)
+import qualified Vega.Eval as Eval
 
 data LintError
     = UnboundVariable Name
@@ -58,7 +59,7 @@ lintDeclaration :: Env -> CoreDeclaration -> Lint Env
 lintDeclaration env (CDefineVar name expr) = do
     -- TODO: top level definitions should only be recursive if they bind functions i think?
     env <- pure $ defineVar name env
-    lintExpr env expr
+    lintValue env expr
     pure env
 lintDeclaration env (CDefineGADT typeName constructors) = pure $ foldr (defineVar . fst) (defineVar typeName env) constructors
 
@@ -95,6 +96,9 @@ lintExpr env = \case
     CTupleType args ->
         traverse_ (lintExpr env) args
     CQuote _value -> undefined
+
+lintValue :: Env -> Eval.Value -> Lint ()
+lintValue = undefined
 
 lintPattern :: Env -> CorePattern Name -> Lint Env
 lintPattern env = \case

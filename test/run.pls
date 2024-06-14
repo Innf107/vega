@@ -2,6 +2,7 @@
 options {
     "-s" "--sync" as sync: "Run tests synchronously"
     "--announce" as announce: "Announce the test that is about to be run. Useful for debugging infinite loops"
+    "--vega-option" "-o" (*) as vegaOptions : "Options to pass to the vega executable"
 }
 
 # TODO: I really need a usable package system in Polaris
@@ -57,7 +58,7 @@ let evalTest(file) = {
     }
 
     try {
-        let _ = !env vega "--lint-error" file
+        let _ = !env vega "--lint-error" vegaOptions file
         let result = !lua luaFile
         cleanup()
         Success(result)

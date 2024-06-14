@@ -45,6 +45,8 @@ data Terminator
     | -- | Call a function through a closure and write the returned value to `target`.
       -- This will check the arity and convert to closures or iteratively call on overapplication.
       CallIndirect {target :: Target, closureSource :: Source, arguments :: Vector Source, cont :: Maybe Block}
+    | CaseInt {target :: Target, cases :: Vector (Int, Block), default_ :: Block}
+    | CaseConstructor {target :: Target, cases :: Vector (Int, Block), default_ :: Block}
 
 data FunctionDefinition = MkFunctionDefinition
     { arity :: Int

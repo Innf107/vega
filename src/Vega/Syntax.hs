@@ -104,7 +104,7 @@ data Primop
     deriving (Generic, Show, Eq, Ord)
 
 data CoreDeclarationF context
-    = CDefineVar Name (CoreExprF context)
+    = CDefineVar Name (ValueF context)
     | CDefineGADT Name (Vector (Name, Int))
 
 -- TODO: Maybe this shouldn't be a separate core type but just another TTG pass.

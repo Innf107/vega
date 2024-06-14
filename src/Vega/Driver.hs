@@ -1,4 +1,8 @@
-module Vega.Driver (parseRenameTypeCheck, DriverConfig (..)) where
+module Vega.Driver (
+    parseRenameTypeCheck,
+    compile,
+    DriverConfig (..),
+) where
 
 import Vega.Eval (CoreDeclaration)
 import Vega.Loc (HasLoc)
@@ -7,13 +11,16 @@ import Vega.Pretty
 import Vega.Util (Untagged (..), viaList)
 
 import Control.Monad.Writer (MonadWriter (tell), WriterT (..))
+import Data.These (These (..))
+import Vega.Compile.CoreToMIR qualified as CoreToMIR
+import Vega.Compile.LIRTox86_64 qualified as LIRTox86_64
+import Vega.Compile.MIRToLIR qualified as MirToLIR
 import Vega.CoreLint qualified as CoreLint
 import Vega.Infer qualified as Infer
 import Vega.Lexer qualified as Lexer
 import Vega.Parser qualified as Parser
 import Vega.Rename qualified as Rename
 import Vega.Trace (TraceAction)
-import Data.These (These(..))
 
 data VegaError
     = LexicalError Lexer.LexError
@@ -58,3 +65,10 @@ parseRenameTypeCheck filename code = runWriterT $ runExceptT do
                 errors <- liftIO $ CoreLint.lint core
                 tell (fmap CoreLintError errors)
             pure core
+
+compile :: Vector CoreDeclaration -> IO Text
+compile core = do
+    mir <- CoreToMIR.coreToMIR core
+    lir <- MirToLIR.mirToLIR mir
+    LIRTox86_64.compile lir
+    undefined

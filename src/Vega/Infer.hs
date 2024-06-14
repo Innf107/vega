@@ -225,7 +225,7 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
         -- Recursive definitions are able to mention themselves on the type level
         -- so we need to do this recursive dance with mdo
         mdo
-            (core, value) <- do
+            (core, lazyValue) <- do
                 let envWithParams = envTrans env
 
                 value <- lazyM (eval (getContext env) core)
@@ -234,7 +234,9 @@ checkDeclaration env decl = withTrace Types ("checkDeclaration: " <> showHeadCon
 
                 core <- addLambdas =<< check bodyEnv resultType body
                 pure (core, value)
-            pure (extendVariable name type_ value env, CDefineVar name core)
+            -- TODO: If we are immediately forcing the value here anyway, do we even need it to be lazy?
+            value <- liftEval $ forceM lazyValue
+            pure (extendVariable name type_ lazyValue env, CDefineVar name value)
     DefineGADT loc typeConstructorName kind constructors -> do
         kindCore <- check env Type kind
         kindValue <- liftEval $ eval env.evalContext kindCore
@@ -961,7 +963,8 @@ quoteFully context type_ =
         StringV text -> pure $ CLiteral (StringLit text)
         ClosureV (MkClosure name body context) -> do
             value <- liftEval $ skolemizeClosure (Just name) body context
-            quoteFully context value
+            -- TODO: This is just wrong wtf
+            undefined
         ClosureV (PrimopClosure primop arguments) -> do
             quotedArguments <- traverse (quoteFully context) arguments
             pure $ foldl' CApp (CPrimop primop) quotedArguments
