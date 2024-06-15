@@ -14,7 +14,10 @@ import Vega.Eval (
     defineSkolem,
     emptyEvalContext,
     eval,
+    freshSkolem,
     runEval,
+    skolemizeClosure,
+    quote
  )
 import Vega.Eval qualified as Eval
 import Vega.Primop
@@ -24,7 +27,7 @@ import Vega.LazyM
 import Vega.Loc (HasLoc)
 import Vega.Monad.Ref
 import Vega.Pattern qualified as Pattern
-import Vega.Pretty
+import Vega.Pretty hiding (quote)
 import Vega.Trace
 import Vega.Util
 
@@ -160,11 +163,6 @@ setMetaVar (MkMeta _ _ ref) type_ =
 
 followMetas :: (HasContext context) => context -> Type -> Infer Type
 followMetas context type_ = liftEval (Eval.followMetas context type_)
-
-freshSkolem :: (MonadUnique m) => Name -> m Skolem
-freshSkolem name = do
-    unique <- newUnique
-    pure (MkSkolem name unique)
 
 emptyEnv :: Env
 emptyEnv =
@@ -791,8 +789,8 @@ unify context loc type1 type2 = do
     trace Unify (pretty type1 <+> keyword "~" <+> pretty type2)
 
     let unableToUnify type1 type2 = do
-            type1 <- quoteFully context type1
-            type2 <- quoteFully context type2
+            type1 <- liftEval $ quote context type1
+            type2 <- liftEval $ quote context type2
             typeError (UnableToUnify loc type1 type2)
 
     case (type1, type2) of
@@ -924,16 +922,6 @@ occursCheck context meta type_ =
                     go bodyValue
                     goCont rest
 
-skolemizeClosure :: Maybe Name -> CoreExpr -> EvalContext -> Eval Type
-skolemizeClosure mname codomainCore codomainContext = do
-    codomainContext <- case mname of
-        Nothing -> pure codomainContext
-        Just name -> do
-            codomainSkolem <- freshSkolem name
-            skolemValue <- lazyValueM (StuckSkolem codomainSkolem [])
-            pure (define name skolemValue codomainContext)
-    eval codomainContext codomainCore
-
 bind :: (HasContext context) => context -> Loc -> MetaVar -> Type -> Infer ()
 bind context loc metaVar type_ = do
     readMetaVar metaVar >>= \case
@@ -946,69 +934,6 @@ bind context loc metaVar type_ = do
                 type_ -> do
                     occursCheck context metaVar type_ >>= \case
                         True -> do
-                            type_ <- quoteFully context type_
+                            type_ <- liftEval $ quote context type_
                             typeError (OccursCheckViolation loc metaVar type_)
                         False -> setMetaVar metaVar type_
-
--- TODO: This happens to early. If meta variables are inserted later they will still be *values* so
--- error messages are still wrong (and still rely on unsafePerformIO) :/
-
-{- | Fully quote a type, e.g. for error messages.
-Note that this also follows lazy `Quote`s inside CoreExprs
--}
-quoteFully :: (HasContext context) => context -> Type -> Infer CoreExpr
-quoteFully context type_ =
-    followMetas context type_ >>= \case
-        IntV n -> pure $ CLiteral (IntLit n)
-        StringV text -> pure $ CLiteral (StringLit text)
-        ClosureV (MkClosure name body context) -> do
-            value <- liftEval $ skolemizeClosure (Just name) body context
-            -- TODO: This is just wrong wtf
-            undefined
-        ClosureV (PrimopClosure primop arguments) -> do
-            quotedArguments <- traverse (quoteFully context) arguments
-            pure $ foldl' CApp (CPrimop primop) quotedArguments
-        TupleV arguments -> do
-            quotedArguments <- traverse (quoteFully context) arguments
-            pure $ CTupleLiteral quotedArguments
-        DataConstructorApp constructorName arguments -> do
-            quotedArguments <- traverse (quoteFully context) arguments
-            pure $ foldl' CApp (CVar constructorName) quotedArguments
-        TypeConstructorApp constructorName arguments -> do
-            quotedArguments <- traverse (quoteFully context) arguments
-            pure $ foldl' CApp (CVar constructorName) quotedArguments
-        Type -> pure $ CLiteral TypeLit
-        Int -> pure $ CLiteral IntTypeLit
-        String -> pure $ CLiteral StringTypeLit
-        TupleType arguments -> do
-            quotedArguments <- traverse (quoteFully context) arguments
-            pure $ CTupleType quotedArguments
-        Pi mname domain (codomainExpr, codomainEnv) -> do
-            quotedDomain <- quoteFully context domain
-            codomain <- liftEval $ skolemizeClosure mname codomainExpr codomainEnv
-            quotedCodomain <- quoteFully context codomain
-            pure $ CPi mname quotedDomain quotedCodomain
-        Forall name domain (codomainExpr, codomainEnv) -> do
-            quotedDomain <- quoteFully context domain
-            codomain <- liftEval $ skolemizeClosure (Just name) codomainExpr codomainEnv
-            quotedCodomain <- quoteFully context codomain
-            pure $ CForall name quotedDomain quotedCodomain
-        StuckSkolem (MkSkolem skolemName skolemUnique) cont -> do
-            -- We use the skolem unique as the variable unique here.
-            -- This technically loses provenance of the skolem but we don't use that anywhere
-            -- so it should be fine.
-            let skolemVar = CVar (Name.makeDirectlyUnchecked (Name.original skolemName) skolemUnique)
-
-            quoteCont context skolemVar cont
-        StuckMeta metaVar cont -> do
-            quoteCont context (CMeta metaVar) cont
-
-quoteCont :: (HasContext context) => context -> CoreExpr -> Seq (StuckCont EvalContext) -> Infer CoreExpr
-quoteCont _context argument Empty = pure argument
-quoteCont context functionExpr (StuckApp arg :<| rest) = do
-    quotedArg <- quoteFully context arg
-    quoteCont context (CApp functionExpr quotedArg) rest
-quoteCont context argument (StuckCase closedContext cases :<| rest) = do
-    -- not entirely sure what to do here, we somehow need to quote cases using the context, but
-    -- also cases is already an expression?
-    undefined

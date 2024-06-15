@@ -80,7 +80,15 @@ compileDeclaration = \case
         pure $ intercalate "\n" (fmap defineConstructor constructors)
 
 compileValue :: Eval.Value -> Compile Text
-compileValue = undefined
+compileValue = \case
+    IntV int -> pure $ compileLiteral (IntLit int)
+    StringV str -> pure $ compileLiteral (StringLit str)
+    Type -> pure "nil"
+    Int -> pure "nil"
+    String -> pure "nil"
+    TupleType{} -> pure "nil"
+    _ -> undefined
+
 
 compileExpr :: CoreExpr -> Compile Text
 compileExpr = \case

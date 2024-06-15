@@ -5,6 +5,8 @@ module Vega.Eval (
     HasContext (..),
     emptyEvalContext,
     define,
+    freshSkolem,
+    skolemizeClosure,
     defineSkolem,
     followMetas,
     lookupVar,
@@ -13,6 +15,7 @@ module Vega.Eval (
     CoreExpr,
     eval,
     applyClosure,
+    quote,
 ) where
 
 import Vega.Prelude
@@ -28,7 +31,7 @@ import Vega.Monad.Ref
 import Vega.Monad.Unique
 import Vega.Name (ident)
 import Vega.Name qualified as Name
-import Vega.Pretty
+import Vega.Pretty hiding (quote)
 import Vega.Trace
 
 newtype Eval a = MkEval (ReaderT (TraceAction IO) IO a)
@@ -44,10 +47,17 @@ instance MonadUnique Eval where
     freshName text = MkEval $ liftIO $ freshName text
     newUnique = MkEval $ liftIO newUnique
 
+class MonadEval m where
+    liftEval :: Eval a -> m a
+
+instance MonadEval Eval where
+    liftEval = id
+
 runEval :: (?traceAction :: TraceAction IO) => Eval a -> IO a
 runEval (MkEval io) = runReaderT io ?traceAction
 
 type Value = ValueF EvalContext
+type Type = Value
 
 type CoreDeclaration = CoreDeclarationF EvalContext
 
@@ -101,6 +111,11 @@ readMetaVar (MkMeta _name _unique ref) = MkEval (liftIO (readIORef ref))
 
 setMetaVar :: MetaVarF EvalContext -> Value -> Eval ()
 setMetaVar (MkMeta _name _unique ref) value = MkEval (liftIO (writeIORef ref (Just value)))
+
+freshSkolem :: (MonadUnique m) => Name -> m Skolem
+freshSkolem name = do
+    unique <- newUnique
+    pure (MkSkolem name unique)
 
 followMetas :: (HasContext context) => context -> Value -> Eval Value
 followMetas (getContext -> context) value = case value of
@@ -272,3 +287,81 @@ applyClosure (PrimopClosure primop previousArgs) argument
             (Multiply, [arg1, arg2]) ->
                 undefined
             (primop, args) -> error ("Invalid primop / argument combination: " <> show primop <> " (" <> prettyPlain (intercalateDoc ", " (fmap pretty args)) <> ")")
+
+
+-- TODO: This happens to early. If meta variables are inserted later they will still be *values* so
+-- error messages are still wrong (and still rely on unsafePerformIO) :/
+
+{- | Fully quote a type, e.g. for error messages.
+Note that this also follows lazy `Quote`s inside CoreExprs
+-}
+quote :: (HasContext context) => context -> Type -> Eval CoreExpr
+quote context type_ =
+    followMetas context type_ >>= \case
+        IntV n -> pure $ CLiteral (IntLit n)
+        StringV text -> pure $ CLiteral (StringLit text)
+        ClosureV (MkClosure name body context) -> do
+            parameterSkolem <- freshSkolem name
+            parameterValue <- lazyValueM (StuckSkolem parameterSkolem [])
+
+            let bodyContext = define name parameterValue context
+            evaluatedBody <- eval bodyContext body
+
+            CLambda name <$> quote bodyContext evaluatedBody
+        ClosureV (PrimopClosure primop arguments) -> do
+            quotedArguments <- traverse (quote context) arguments
+            pure $ foldl' CApp (CPrimop primop) quotedArguments
+        TupleV arguments -> do
+            quotedArguments <- traverse (quote context) arguments
+            pure $ CTupleLiteral quotedArguments
+        DataConstructorApp constructorName arguments -> do
+            quotedArguments <- traverse (quote context) arguments
+            pure $ foldl' CApp (CVar constructorName) quotedArguments
+        TypeConstructorApp constructorName arguments -> do
+            quotedArguments <- traverse (quote context) arguments
+            pure $ foldl' CApp (CVar constructorName) quotedArguments
+        Type -> pure $ CLiteral TypeLit
+        Int -> pure $ CLiteral IntTypeLit
+        String -> pure $ CLiteral StringTypeLit
+        TupleType arguments -> do
+            quotedArguments <- traverse (quote context) arguments
+            pure $ CTupleType quotedArguments
+        Pi mname domain (codomainExpr, codomainEnv) -> do
+            quotedDomain <- quote context domain
+            codomain <- skolemizeClosure mname codomainExpr codomainEnv
+            quotedCodomain <- quote context codomain
+            pure $ CPi mname quotedDomain quotedCodomain
+        Forall name domain (codomainExpr, codomainEnv) -> do
+            quotedDomain <- quote context domain
+            codomain <- skolemizeClosure (Just name) codomainExpr codomainEnv
+            quotedCodomain <- quote context codomain
+            pure $ CForall name quotedDomain quotedCodomain
+        StuckSkolem (MkSkolem skolemName skolemUnique) cont -> do
+            -- We use the skolem unique as the variable unique here.
+            -- This technically loses provenance of the skolem but we don't use that anywhere
+            -- so it should be fine.
+            let skolemVar = CVar (Name.makeDirectlyUnchecked (Name.original skolemName) skolemUnique)
+
+            quoteCont context skolemVar cont
+        StuckMeta metaVar cont -> do
+            quoteCont context (CMeta metaVar) cont
+
+quoteCont :: (HasContext context) => context -> CoreExpr -> Seq (StuckCont EvalContext) -> Eval CoreExpr
+quoteCont _context argument Empty = pure argument
+quoteCont context functionExpr (StuckApp arg :<| rest) = do
+    quotedArg <- quote context arg
+    quoteCont context (CApp functionExpr quotedArg) rest
+quoteCont context argument (StuckCase closedContext cases :<| rest) = do
+    -- not entirely sure what to do here, we somehow need to quote cases using the context, but
+    -- also cases is already an expression?
+    undefined
+
+skolemizeClosure :: Maybe Name -> CoreExpr -> EvalContext -> Eval Type
+skolemizeClosure mname codomainCore codomainContext = do
+    codomainContext <- case mname of
+        Nothing -> pure codomainContext
+        Just name -> do
+            codomainSkolem <- freshSkolem name
+            skolemValue <- lazyValueM (StuckSkolem codomainSkolem [])
+            pure (define name skolemValue codomainContext)
+    eval codomainContext codomainCore
