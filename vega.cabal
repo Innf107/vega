@@ -1,0 +1,102 @@
+cabal-version: 2.2
+
+-- This file has been generated from package.yaml by hpack version 0.37.0.
+--
+-- see: https://github.com/sol/hpack
+
+name:           vega
+version:        0.1.0.0
+description:    Please see the README on GitHub at <https://github.com/githubuser/vega#readme>
+homepage:       https://github.com/githubuser/vega#readme
+bug-reports:    https://github.com/githubuser/vega/issues
+author:         Author name here
+maintainer:     example@example.com
+copyright:      2025 Author name here
+license:        BSD-3-Clause
+license-file:   LICENSE
+build-type:     Simple
+extra-source-files:
+    README.md
+    CHANGELOG.md
+
+source-repository head
+  type: git
+  location: https://github.com/githubuser/vega
+
+library
+  exposed-modules:
+      Lib
+      Vega.Effect.Dependency
+      Vega.Effect.GlobalTypes
+      Vega.Effect.Handler.MemoryGraph
+      Vega.Syntax
+      Vega.TypeCheck
+  other-modules:
+      Paths_vega
+  autogen-modules:
+      Paths_vega
+  hs-source-dirs:
+      src
+  default-extensions:
+      NoImplicitPrelude
+      StrictData
+      NoFieldSelectors
+      OverloadedRecordDot
+      DuplicateRecordFields
+      DataKinds
+      TypeFamilies
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints
+  build-depends:
+      base >=4.7 && <5
+    , effectful
+    , relude
+  default-language: GHC2021
+
+executable vega-exe
+  main-is: Main.hs
+  other-modules:
+      Paths_vega
+  autogen-modules:
+      Paths_vega
+  hs-source-dirs:
+      app
+  default-extensions:
+      NoImplicitPrelude
+      StrictData
+      NoFieldSelectors
+      OverloadedRecordDot
+      DuplicateRecordFields
+      DataKinds
+      TypeFamilies
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , effectful
+    , relude
+    , vega
+  default-language: GHC2021
+
+test-suite vega-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_vega
+  autogen-modules:
+      Paths_vega
+  hs-source-dirs:
+      test
+  default-extensions:
+      NoImplicitPrelude
+      StrictData
+      NoFieldSelectors
+      OverloadedRecordDot
+      DuplicateRecordFields
+      DataKinds
+      TypeFamilies
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.7 && <5
+    , effectful
+    , relude
+    , vega
+  default-language: GHC2021
