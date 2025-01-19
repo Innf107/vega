@@ -23,6 +23,8 @@ dependencies:
 - base >= 4.7 && < 5
 - relude
 - effectful
+- hashtables
+- vector
 
 ghc-options:
 - -Wall
@@ -63,9 +65,15 @@ language: GHC2021
 
 default-extensions:
 - NoImplicitPrelude
+- OverloadedLists
 - StrictData
-- NoFieldSelectors
 - OverloadedRecordDot
+- NoFieldSelectors
+- OverloadedStrings
 - DuplicateRecordFields
 - DataKinds
 - TypeFamilies
+- BlockArguments
+- DerivingVia
+- DeriveAnyClass
+- LambdaCase

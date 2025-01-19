@@ -1,0 +1,2 @@
+module Vega.Rename () where
+

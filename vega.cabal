@@ -26,11 +26,18 @@ source-repository head
 library
   exposed-modules:
       Lib
+      Vega.Diff
+      Vega.Driver
       Vega.Effect.Dependency
       Vega.Effect.GlobalTypes
       Vega.Effect.Handler.MemoryGraph
+      Vega.Effect.LastKnownDeclarations
+      Vega.Loc
+      Vega.Parser
+      Vega.Rename
       Vega.Syntax
       Vega.TypeCheck
+      Vega.Util
   other-modules:
       Paths_vega
   autogen-modules:
@@ -39,17 +46,25 @@ library
       src
   default-extensions:
       NoImplicitPrelude
+      OverloadedLists
       StrictData
-      NoFieldSelectors
       OverloadedRecordDot
+      NoFieldSelectors
+      OverloadedStrings
       DuplicateRecordFields
       DataKinds
       TypeFamilies
+      BlockArguments
+      DerivingVia
+      DeriveAnyClass
+      LambdaCase
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints
   build-depends:
       base >=4.7 && <5
     , effectful
+    , hashtables
     , relude
+    , vector
   default-language: GHC2021
 
 executable vega-exe
@@ -62,17 +77,25 @@ executable vega-exe
       app
   default-extensions:
       NoImplicitPrelude
+      OverloadedLists
       StrictData
-      NoFieldSelectors
       OverloadedRecordDot
+      NoFieldSelectors
+      OverloadedStrings
       DuplicateRecordFields
       DataKinds
       TypeFamilies
+      BlockArguments
+      DerivingVia
+      DeriveAnyClass
+      LambdaCase
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.7 && <5
     , effectful
+    , hashtables
     , relude
+    , vector
     , vega
   default-language: GHC2021
 
@@ -87,16 +110,24 @@ test-suite vega-test
       test
   default-extensions:
       NoImplicitPrelude
+      OverloadedLists
       StrictData
-      NoFieldSelectors
       OverloadedRecordDot
+      NoFieldSelectors
+      OverloadedStrings
       DuplicateRecordFields
       DataKinds
       TypeFamilies
+      BlockArguments
+      DerivingVia
+      DeriveAnyClass
+      LambdaCase
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.7 && <5
     , effectful
+    , hashtables
     , relude
+    , vector
     , vega
   default-language: GHC2021
