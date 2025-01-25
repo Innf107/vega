@@ -36,6 +36,7 @@ library
       Vega.Parser
       Vega.Rename
       Vega.Syntax
+      Vega.Trace
       Vega.TypeCheck
       Vega.Util
   other-modules:
@@ -67,7 +68,7 @@ library
     , vector
   default-language: GHC2021
 
-executable vega-exe
+executable vega
   main-is: Main.hs
   other-modules:
       Paths_vega

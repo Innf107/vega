@@ -5,14 +5,15 @@ import Relude hiding (Type)
 import Vega.Syntax
 import Vega.Effect.GlobalTypes
 import Vega.Effect.Dependency (DependencyManagement)
+import Data.HashTable.IO (BasicHashTable)
 
 import Effectful
 
 data Dependency = DeclarationDependency GlobalName
 
 data MemoryGraph = MkMemoryGraph
-    { typeInfo :: IORef (Map GlobalName Type)
-    , declarationDependencies :: IORef (Map GlobalName Dependency)
+    { typeInfo :: BasicHashTable GlobalName Type
+    , declarationDependencies :: BasicHashTable GlobalName Dependency
 
     , moduleContents :: IORef ()
     }
