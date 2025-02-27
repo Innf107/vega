@@ -25,6 +25,7 @@ dependencies:
 - effectful
 - hashtables
 - vector
+- megaparsec
 
 ghc-options:
 - -Wall

@@ -32,6 +32,7 @@ library
       Vega.Effect.GlobalTypes
       Vega.Effect.Handler.MemoryGraph
       Vega.Effect.LastKnownDeclarations
+      Vega.Lexer
       Vega.Loc
       Vega.Parser
       Vega.Rename
@@ -64,6 +65,7 @@ library
       base >=4.7 && <5
     , effectful
     , hashtables
+    , megaparsec
     , relude
     , vector
   default-language: GHC2021
@@ -95,6 +97,7 @@ executable vega
       base >=4.7 && <5
     , effectful
     , hashtables
+    , megaparsec
     , relude
     , vector
     , vega
@@ -128,6 +131,7 @@ test-suite vega-test
       base >=4.7 && <5
     , effectful
     , hashtables
+    , megaparsec
     , relude
     , vector
     , vega

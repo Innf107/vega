@@ -5,7 +5,7 @@ module Vega.Effect.Dependency (
     declareDependency,
 ) where
 
-import Vega.Syntax
+import Vega.Syntax hiding (Effect)
 
 import Effectful
 import Effectful.Dispatch.Dynamic (send)

@@ -2,7 +2,7 @@ module Vega.Effect.LastKnownDeclarations where
 
 import Relude
 
-import Vega.Syntax
+import Vega.Syntax hiding (Effect)
 
 import Effectful
 import Effectful.Dispatch.Dynamic (send)

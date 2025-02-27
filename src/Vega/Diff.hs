@@ -59,6 +59,9 @@ instance {-# OVERLAPPING #-} DiffGen (K1 _i Loc) where
 instance (Diff c) => DiffGen (K1 _i c) where
     diffGen (K1 x) (K1 y) = diff x y
 
+instance DiffGen U1 where
+    diffGen U1 U1 = False
+
 instance (Generic x, DiffGen (Rep x)) => Diff (Generically x) where
     diff (Generically x) (Generically y) = diffGen (from x) (from y)
 
@@ -82,15 +85,26 @@ instance (Diff a) => Diff (Seq a) where
         (Seq.length seq1 /= Seq.length seq2)
             || Util.seqAny2 diff seq1 seq2
 
+deriving via Generically (Maybe a) instance Diff a => Diff (Maybe a)
+deriving via Generically (Either a b) instance (Diff a, Diff b) => Diff (Either a b)
+deriving via Generically (a, b) instance (Diff a, Diff b) => Diff (a, b)
+
 deriving via Generically (Declaration Parsed) instance Diff (Declaration Parsed)
 deriving via Generically (DeclarationSyntax Parsed) instance Diff (DeclarationSyntax Parsed)
 deriving via Generically (Expr Parsed) instance Diff (Expr Parsed)
-deriving via Generically Type instance Diff Type
+deriving via Generically (Statement Parsed) instance Diff (Statement Parsed)
+deriving via Generically (Pattern Parsed) instance Diff (Pattern Parsed)
+deriving via Generically (MatchCase Parsed) instance Diff (MatchCase Parsed)
+deriving via Generically BinaryOperator instance Diff BinaryOperator
+deriving via Generically (TypeSyntax Parsed) instance Diff (TypeSyntax Parsed)
 deriving via Generically LocalName instance Diff LocalName
 deriving via Generically GlobalName instance Diff GlobalName
 deriving via Generically Name instance Diff Name
 
 deriving via DiffFromEq Text instance Diff Text
 deriving via DiffFromEq Int instance Diff Int
+deriving via DiffFromEq Integer instance Diff Integer
+-- TODO: Might not be the best idea to rely on floating point equality here
+deriving via DiffFromEq Double instance Diff Double
 
 deriving via IgnoredInDiff Loc instance Diff Loc

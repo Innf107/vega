@@ -4,7 +4,7 @@ module Vega.Effect.GlobalTypes (
     setGlobalType,
 ) where
 
-import Vega.Syntax
+import Vega.Syntax hiding (Effect)
 
 import Effectful
 import Effectful.Dispatch.Dynamic (send)
