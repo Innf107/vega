@@ -96,7 +96,9 @@ deriving via Generically (Statement Parsed) instance Diff (Statement Parsed)
 deriving via Generically (Pattern Parsed) instance Diff (Pattern Parsed)
 deriving via Generically (MatchCase Parsed) instance Diff (MatchCase Parsed)
 deriving via Generically BinaryOperator instance Diff BinaryOperator
+deriving via Generically (TypeVarBinderS Parsed) instance Diff (TypeVarBinderS Parsed)
 deriving via Generically (TypeSyntax Parsed) instance Diff (TypeSyntax Parsed)
+deriving via Generically (KindSyntax Parsed) instance Diff (KindSyntax Parsed)
 deriving via Generically LocalName instance Diff LocalName
 deriving via Generically GlobalName instance Diff GlobalName
 deriving via Generically Name instance Diff Name

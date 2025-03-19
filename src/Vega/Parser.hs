@@ -1,8 +1,254 @@
-module Vega.Parser (parse) where
+{-# LANGUAGE NoOverloadedLists #-}
 
-import Relude
+module Vega.Parser (Parser, module_) where
+
+import Relude hiding (many)
 
 import Vega.Syntax
 
-parse :: FilePath -> Text -> ParsedModule
-parse = undefined
+import GHC.IsList (Item)
+import Text.Megaparsec hiding (Token, many, sepBy, sepBy1)
+import Text.Megaparsec qualified as MegaParsec
+import Vega.Lexer as Lexer (Token (..))
+import Vega.Loc (Loc (MkLoc), getLoc)
+
+data AdditionalParseError
+    = MismatchedFunctionName
+        { typeSignature :: Text
+        , definition :: Text
+        }
+    | UnknowNamedKind Text
+    deriving (Show, Eq, Ord, Generic)
+
+type Parser = Parsec AdditionalParseError [Token]
+
+-- TODO
+loc :: Parser Loc
+loc = pure MkLoc
+
+identifier :: Parser Text
+identifier = token matchIdentifier (fromList [Label (fromList "identifier")])
+  where
+    matchIdentifier = \case
+        Ident ident -> Just ident
+        _ -> Nothing
+
+constructor :: Parser Text
+constructor = token matchConstructor (fromList [Label (fromList "constructor")])
+  where
+    matchConstructor = \case
+        Constructor ident -> Just ident
+        _ -> Nothing
+
+many :: (IsList l, Item l ~ a, MonadPlus m) => m a -> m l
+many parser = fromList <$> MegaParsec.many parser
+
+many1 :: (IsList l, Item l ~ a, MonadPlus m) => m a -> m l
+many1 parser = do
+    first <- parser
+    rest <- many parser
+    pure $ fromList (first : rest)
+
+sepBy :: (MonadPlus m, IsList l, Item l ~ a) => m a -> m sep -> m l
+sepBy item separator = fromList <$> MegaParsec.sepBy item separator
+
+sepBy1 :: (MonadPlus m, IsList l, Item l ~ a) => m a -> m sep -> m l
+sepBy1 item separator = fromList <$> MegaParsec.sepBy1 item separator
+
+-- Why is this not in megaparsec?
+chainl1 :: (MonadPlus m) => m a -> m (a -> a -> a) -> m a
+chainl1 parser between = do
+    first <- parser
+    rest <- many @[_] (liftA2 (,) between parser)
+    pure $ foldl' (\(left :: a) (operator, right) -> left `operator` right) first rest
+
+module_ :: Parser ParsedModule
+module_ = do
+    imports <- many import_
+    declarations <- many declaration
+    pure (MkParsedModule{imports, declarations})
+
+declaration :: Parser (Declaration Parsed)
+declaration =
+    choice
+        [ defineFunction
+        , defineVariantType
+        ]
+
+defineFunction :: Parser (Declaration Parsed)
+defineFunction = do
+    startLoc <- loc
+    name <- identifier
+    _ <- single Colon
+    typeSignature <- type_
+    definitionName <- identifier
+
+    when (name /= definitionName) do
+        registerFancyFailure
+            ( fromList
+                [ ErrorCustom
+                    ( MismatchedFunctionName
+                        { typeSignature = name
+                        , definition = definitionName
+                        }
+                    )
+                ]
+            )
+
+    _ <- single LParen
+    parameters <- pattern_ `sepBy` (single Comma)
+    _ <- single RParen
+    _ <- single Equals
+    body <- expr
+    endLoc <- loc
+    pure
+        ( MkDeclaration
+            { name = undefined
+            , syntax =
+                DefineFunction
+                    { typeSignature
+                    , name
+                    , parameters
+                    , body
+                    }
+            , loc = startLoc <> endLoc
+            }
+        )
+
+defineVariantType :: Parser (Declaration Parsed)
+defineVariantType = do
+    startLoc <- loc
+    _ <- single Data
+    name <- constructor
+    typeParameters <- option (fromList []) (arguments identifier)
+    _ <- single Equals
+    _ <- optional (single Pipe)
+    constructors <- constructorDefinition `sepBy1` (single Pipe)
+    endLoc <- loc
+    pure
+        ( MkDeclaration
+            { name = undefined
+            , syntax =
+                DefineVariantType
+                    { name
+                    , typeParameters
+                    , constructors
+                    }
+            , loc = startLoc <> endLoc
+            }
+        )
+  where
+    constructorDefinition = do
+        name <- constructor
+        dataArguments <- option (fromList []) (arguments type_)
+        pure (name, dataArguments)
+
+-- TODO: '(' type ')', '(' kind ')'
+type_ :: Parser (TypeSyntax Parsed)
+type_ =
+    choice
+        [ chainl1 type1 (single Arrow *> pure (\type1 type2 -> PureFunctionS (getLoc type1 <> getLoc type2) (fromList [type1]) type2))
+        , chainl1 type1 (effectArrow >>= \effect -> pure (\type1 type2 -> FunctionS undefined (fromList [type1]) effect type2))
+        ]
+  where
+    type1 = do
+        typeConstructor <- type2
+        applications <- many @[_] (liftA2 (,) (arguments type_) loc)
+        pure
+            $ foldl'
+                (\constr (arguments, endLoc) -> TypeApplicationS (getLoc typeConstructor <> endLoc) constr arguments)
+                typeConstructor
+                applications
+    type2 =
+        choice
+            [ -- typeApplication
+              forall_
+            , TypeConstructorS undefined <$> constructor
+            , TypeVarS undefined <$> identifier
+            , do
+                startLoc <- loc
+                parameters <- arguments type_
+                choice
+                    [ do
+                        _ <- single Arrow
+                        result <- type_
+                        pure (PureFunctionS (startLoc <> getLoc result) parameters result)
+                    , do
+                        effect <- effectArrow
+                        result <- type_
+                        pure (FunctionS (startLoc <> getLoc result) parameters effect result)
+                    ]
+            ]
+
+effectArrow :: Parser (EffectSyntax Parsed)
+effectArrow = do
+    _ <- single EffArrowStart
+    effect <- type_
+    _ <- single EffArrowEnd
+    pure effect
+
+forall_ :: Parser (TypeSyntax Parsed)
+forall_ = do
+    startLoc <- loc
+    _ <- single Lexer.Forall
+    vars <- many1 (typeVarBinder)
+    _ <- single Lexer.Period
+    remainingType <- type_
+    pure (ForallS (startLoc <> getLoc remainingType) vars remainingType)
+
+typeVarBinder :: Parser (TypeVarBinderS Parsed)
+typeVarBinder =
+    choice
+        [ do
+            startLoc <- loc
+            varName <- identifier
+            endLoc <- loc
+            pure (MkTypeVarBinderS{loc = startLoc <> endLoc, varName, kind = Nothing})
+        , do
+            startLoc <- loc
+            _ <- single LParen
+            varName <- identifier
+            _ <- single Colon
+            varKind <- kind
+            _ <- single RParen
+            endLoc <- loc
+            pure (MkTypeVarBinderS{loc = startLoc <> endLoc, varName, kind = Just varKind})
+        ]
+
+kind :: Parser (KindSyntax Parsed)
+kind = do
+    chainl1 kind1 (single Arrow *> pure (\kind1 kind2 -> ArrowKindS (getLoc kind1 <> getLoc kind2) (fromList [kind1]) kind2))
+  where
+    kind1 =
+        choice
+            [ do
+                startLoc <- loc
+                namedKind <- constructor
+                endLoc <- loc
+                case namedKind of
+                    "Type" -> pure $ TypeS (startLoc <> endLoc)
+                    "Effect" -> pure $ EffectS (startLoc <> endLoc)
+                    _ -> customFailure (UnknowNamedKind namedKind)
+            , do
+                startLoc <- loc
+                parameterKinds <- arguments kind
+                _ <- single Arrow
+                result <- kind
+                pure (ArrowKindS (startLoc <> getLoc result) parameterKinds result)
+            ]
+
+pattern_ :: Parser (Pattern Parsed)
+pattern_ = undefined
+
+expr :: Parser (Expr Parsed)
+expr = undefined
+
+import_ :: Parser Import
+import_ = empty
+
+arguments :: Parser a -> Parser (Seq a)
+arguments parser = do
+    _ <- single LParen
+    args <- parser `sepBy` (single Comma)
+    _ <- single RParen
+    pure args

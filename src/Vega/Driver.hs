@@ -28,8 +28,8 @@ rebuildOnlyFiles files = do
                 trace Driver $ "File removed: " <> toText filePath
                 undefined
             True -> do
-                contents <- decodeUtf8 <$> readFileBS filePath
-                let !parsedModule = Parser.parse filePath contents
+                contents :: Text <- decodeUtf8 <$> readFileBS filePath
+                let !parsedModule :: ParsedModule = undefined filePath contents
                 LastKnownDeclarations.getDeclarations filePath >>= \case
                     Nothing -> do
                         trace Driver $ "File added: " <> toText filePath

@@ -60,6 +60,7 @@ library
       DerivingVia
       DeriveAnyClass
       LambdaCase
+      DefaultSignatures
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints
   build-depends:
       base >=4.7 && <5
@@ -92,6 +93,7 @@ executable vega
       DerivingVia
       DeriveAnyClass
       LambdaCase
+      DefaultSignatures
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.7 && <5
@@ -126,6 +128,7 @@ test-suite vega-test
       DerivingVia
       DeriveAnyClass
       LambdaCase
+      DefaultSignatures
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.7 && <5

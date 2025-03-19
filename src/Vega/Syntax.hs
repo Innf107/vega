@@ -4,6 +4,7 @@ module Vega.Syntax where
 
 import Data.Unique (Unique)
 import Relude hiding (Type)
+import Vega.Loc (HasLoc, Loc)
 
 data GlobalName = MkGlobalName {moduleName :: Text, name :: Text}
     deriving stock (Generic, Eq)
@@ -32,6 +33,7 @@ type family XName (p :: Pass) where
 data Declaration p = MkDeclaration
     { name :: GlobalName
     , syntax :: DeclarationSyntax p
+    , loc :: Loc
     }
     deriving (Generic)
 
@@ -39,12 +41,12 @@ data DeclarationSyntax p
     = DefineFunction
         { typeSignature :: TypeSyntax p
         , name :: XName p
-        , parameters :: Seq (XName p)
+        , parameters :: Seq (Pattern p)
         , body :: Expr p
         }
     | DefineVariantType
         { name :: XName p
-        , parameters :: Seq (XName p)
+        , typeParameters :: Seq (XName p)
         , constructors :: Seq (XName p, Seq (TypeSyntax p))
         }
     deriving (Generic)
@@ -128,12 +130,32 @@ data Import = ImportUnqualified
     deriving (Generic)
 
 data TypeSyntax p
-    = TypeConstructorS (XName p)
-    | TypeApplicationS (TypeSyntax p) (Seq (TypeSyntax p))
-    | TypeVarS (XName p)
-    | ForallS (Seq (XName p)) (TypeSyntax p)
-    | FunctionS (Seq (TypeSyntax p)) (EffectSyntax p) (TypeSyntax p)
+    = TypeConstructorS Loc (XName p)
+    | TypeApplicationS Loc (TypeSyntax p) (Seq (TypeSyntax p))
+    | TypeVarS Loc (XName p)
+    | ForallS Loc (Seq (TypeVarBinderS p)) (TypeSyntax p)
+    | PureFunctionS Loc (Seq (TypeSyntax p)) (TypeSyntax p)
+    | FunctionS Loc (Seq (TypeSyntax p)) (EffectSyntax p) (TypeSyntax p)
     deriving (Generic)
+
+instance HasLoc (TypeSyntax p)
+
+data TypeVarBinderS p = MkTypeVarBinderS
+    { loc :: Loc
+    , varName :: XName p
+    , kind :: Maybe (KindSyntax p)
+    }
+    deriving (Generic)
+
+instance HasLoc (TypeVarBinderS p)
+
+data KindSyntax p
+    = TypeS Loc
+    | EffectS Loc
+    | ArrowKindS Loc (Seq (KindSyntax p)) (KindSyntax p)
+    deriving (Generic)
+
+instance HasLoc (KindSyntax p)
 
 type EffectSyntax = TypeSyntax
 
@@ -141,7 +163,7 @@ data Type
     = TypeConstructor Name
     | TypeApplication Type (Seq Type)
     | TypeVar LocalName
-    | Forall (Seq LocalName) Type
+    | Forall (Seq (LocalName, Kind)) Type
     | Function (Seq Type) Effect Type
     | MetaVar MetaVar
     | Skolem Skolem
