@@ -20,6 +20,11 @@ data Name
     deriving stock (Generic, Eq)
     deriving anyclass (Hashable)
 
+unqualifiedName :: Name -> Text
+unqualifiedName = \case
+    Global global -> global.name
+    Local local -> local.name
+
 internalName :: Text -> GlobalName
 internalName name = MkGlobalName{name, moduleName = "<<internal>>"}
 
@@ -29,6 +34,11 @@ type family XName (p :: Pass) where
     XName Parsed = Text
     XName Renamed = Name
     XName Typed = Name
+
+type family XLocalName (p :: Pass) where
+    XLocalName Parsed = Text
+    XLocalName Renamed = LocalName
+    XLocalName Typed = LocalName
 
 data Declaration p = MkDeclaration
     { name :: GlobalName
@@ -40,12 +50,12 @@ data Declaration p = MkDeclaration
 data DeclarationSyntax p
     = DefineFunction
         { typeSignature :: TypeSyntax p
-        , name :: XName p
+        , name :: GlobalName
         , parameters :: Seq (Pattern p)
         , body :: Expr p
         }
     | DefineVariantType
-        { name :: XName p
+        { name :: GlobalName
         , typeParameters :: Seq (XName p)
         , constructors :: Seq (XName p, Seq (TypeSyntax p))
         }
@@ -81,7 +91,6 @@ data Expr p
         }
     deriving (Generic)
 
-
 data Statement p
     = Run (Expr p)
     | Let (Pattern p) (Expr p)
@@ -107,8 +116,8 @@ data BinaryOperator
     deriving (Generic)
 
 data Pattern p
-    = VarPattern (XName p)
-    | AsPattern (Pattern p) (XName p)
+    = VarPattern (XLocalName p)
+    | AsPattern (Pattern p) (XLocalName p)
     | ConstructorPattern
         { constructor :: XName p
         , subPatterns :: Seq (Pattern p)
@@ -168,6 +177,7 @@ data Type
     | Function (Seq Type) Effect Type
     | MetaVar MetaVar
     | Skolem Skolem
+    | Pure
     deriving (Generic)
 
 data MetaVar = MkMetaVar
