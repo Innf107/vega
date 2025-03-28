@@ -4,11 +4,20 @@ import Relude
 
 import GHC.Generics (Generically (..), K1 (..), M1 (..), Rep (..), V1, (:*:) (..), (:+:) (..))
 
--- | Stub so we can exclude it from Diff
 data Loc = MkLoc
+    { startLine :: Int
+    , startColumn :: Int
+    , endLine :: Int
+    , endColumn :: Int
+    , file :: Text
+    }
     deriving (Show, Eq, Ord, Generic)
 
-deriving via Generically Loc instance Semigroup Loc
+instance Semigroup Loc where
+    MkLoc{startLine, startColumn, file = file1}
+        <> MkLoc{endLine, endColumn, file = file2}
+            | file1 /= file2 = error ("(<>) @Loc: trying to merge locations from different files")
+            | otherwise = MkLoc{file = file1, startLine, startColumn, endLine, endColumn}
 
 class HasLoc a where
     getLoc :: a -> Loc

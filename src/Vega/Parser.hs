@@ -6,8 +6,9 @@ import Relude hiding (many)
 
 import Vega.Syntax
 
+import Data.Sequence (Seq (..))
 import GHC.IsList (Item)
-import Text.Megaparsec hiding (Token, many, sepBy, sepBy1)
+import Text.Megaparsec hiding (Token, many, sepBy, sepBy1, single)
 import Text.Megaparsec qualified as MegaParsec
 import Vega.Lexer as Lexer (Token (..))
 import Vega.Loc (Loc (MkLoc), getLoc)
@@ -20,25 +21,38 @@ data AdditionalParseError
     | UnknowNamedKind Text
     deriving (Show, Eq, Ord, Generic)
 
-type Parser = Parsec AdditionalParseError [Token]
 
--- TODO
+type Parser = Parsec AdditionalParseError [(Token, Loc)]
+
 loc :: Parser Loc
-loc = pure MkLoc
+loc = undefined
 
-identifier :: Parser Text
-identifier = token matchIdentifier (fromList [Label (fromList "identifier")])
+single :: Token -> Parser Loc
+single target = MegaParsec.token match (fromList [undefined])
+  where
+    match = \case
+        (token, loc) | token == target -> Just loc
+        _ -> Nothing
+
+identifierWithLoc :: Parser (Text, Loc)
+identifierWithLoc = token matchIdentifier (fromList [Label (fromList "identifier")])
   where
     matchIdentifier = \case
-        Ident ident -> Just ident
+        (Ident ident, loc) -> Just (ident, loc)
+        _ -> Nothing
+
+identifier :: Parser Text
+identifier = fmap fst identifierWithLoc
+
+constructorWithLoc :: Parser (Text, Loc)
+constructorWithLoc = token matchConstructor (fromList [Label (fromList "constructor")])
+  where
+    matchConstructor = \case
+        (Constructor ident, loc) -> Just (ident, loc)
         _ -> Nothing
 
 constructor :: Parser Text
-constructor = token matchConstructor (fromList [Label (fromList "constructor")])
-  where
-    matchConstructor = \case
-        Constructor ident -> Just ident
-        _ -> Nothing
+constructor = fmap fst constructorWithLoc
 
 many :: (IsList l, Item l ~ a, MonadPlus m) => m a -> m l
 many parser = fromList <$> MegaParsec.many parser
@@ -77,8 +91,7 @@ declaration =
 
 defineFunction :: Parser (Declaration Parsed)
 defineFunction = do
-    startLoc <- loc
-    name <- identifier
+    (name, startLoc) <- identifierWithLoc
     _ <- single Colon
     typeSignature <- type_
     definitionName <- identifier
@@ -100,7 +113,6 @@ defineFunction = do
     _ <- single RParen
     _ <- single Equals
     body <- expr
-    endLoc <- loc
     pure
         ( MkDeclaration
             { name = undefined
@@ -111,20 +123,21 @@ defineFunction = do
                     , parameters
                     , body
                     }
-            , loc = startLoc <> endLoc
+            , loc = startLoc <> undefined -- getLoc body
             }
         )
 
 defineVariantType :: Parser (Declaration Parsed)
 defineVariantType = do
-    startLoc <- loc
-    _ <- single Data
+    startLoc <- single Data
     name <- constructor
     typeParameters <- option (fromList []) (arguments identifier)
     _ <- single Equals
     _ <- optional (single Pipe)
     constructors <- constructorDefinition `sepBy1` (single Pipe)
-    endLoc <- loc
+    let endLoc = case constructors of
+            Empty -> error "sepBy returned empty?"
+            (_ :|> (_, _, endLoc)) -> endLoc
     pure
         ( MkDeclaration
             { name = undefined
@@ -132,16 +145,16 @@ defineVariantType = do
                 DefineVariantType
                     { name
                     , typeParameters
-                    , constructors
+                    , constructors = fmap (\(name, arguments, _) -> (name, arguments)) constructors
                     }
             , loc = startLoc <> endLoc
             }
         )
   where
     constructorDefinition = do
-        name <- constructor
-        dataArguments <- option (fromList []) (arguments type_)
-        pure (name, dataArguments)
+        (name, startLoc) <- constructorWithLoc
+        (dataArguments, endLoc) <- option (fromList [], startLoc) (argumentsWithLoc type_)
+        pure (name, dataArguments, startLoc <> endLoc)
 
 -- TODO: '(' type ')', '(' kind ')'
 type_ :: Parser (TypeSyntax Parsed)
@@ -246,9 +259,12 @@ expr = undefined
 import_ :: Parser Import
 import_ = empty
 
-arguments :: Parser a -> Parser (Seq a)
-arguments parser = do
-    _ <- single LParen
+argumentsWithLoc :: Parser a -> Parser (Seq a, Loc)
+argumentsWithLoc parser = do
+    startLoc <- single LParen
     args <- parser `sepBy` (single Comma)
-    _ <- single RParen
-    pure args
+    endLoc <- single RParen
+    pure (args, startLoc <> endLoc)
+
+arguments :: Parser a -> Parser (Seq a)
+arguments parser = fmap fst $ argumentsWithLoc parser

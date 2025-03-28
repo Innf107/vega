@@ -10,6 +10,6 @@ import Effectful
 type TypeCheck es = (GlobalTypes :> es)
 
 
-checkDeclaration :: (GlobalTypes :> es) => Declaration Renamed -> Eff es ()
+checkDeclaration :: (GlobalTypes :> es) => Declaration Renamed -> Eff es (Declaration Typed)
 checkDeclaration = undefined
 

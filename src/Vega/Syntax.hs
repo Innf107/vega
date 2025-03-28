@@ -81,6 +81,7 @@ data Expr p
         }
     deriving (Generic)
 
+
 data Statement p
     = Run (Expr p)
     | Let (Pattern p) (Expr p)
@@ -93,7 +94,7 @@ data Statement p
     deriving (Generic)
 
 data MatchCase p = MkMatchCase
-    { pattern :: Pattern p
+    { pattern_ :: Pattern p
     , body :: Expr p
     }
     deriving (Generic)

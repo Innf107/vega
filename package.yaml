@@ -36,6 +36,7 @@ ghc-options:
 - -Wmissing-export-lists
 - -Wmissing-home-modules
 - -Wredundant-constraints
+- -Wno-name-shadowing
 
 library:
   source-dirs: src
@@ -79,3 +80,5 @@ default-extensions:
 - DeriveAnyClass
 - LambdaCase
 - DefaultSignatures
+- PatternSynonyms
+- ViewPatterns
