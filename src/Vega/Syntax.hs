@@ -46,11 +46,12 @@ type family XLocalName (p :: Pass) where
     XLocalName Typed = LocalName
 
 data Declaration p = MkDeclaration
-    { name :: GlobalName
+    { loc :: Loc
+    , name :: GlobalName
     , syntax :: DeclarationSyntax p
-    , loc :: Loc
     }
-    deriving (Generic)
+    deriving stock (Generic)
+    deriving anyclass (HasLoc)
 
 data DeclarationSyntax p
     = DefineFunction
@@ -62,85 +63,99 @@ data DeclarationSyntax p
         { typeParameters :: Seq (XName p)
         , constructors :: Seq (XName p, Seq (TypeSyntax p))
         }
-    deriving (Generic)
+    deriving stock (Generic)
 
 data Expr p
-    = Var (XName p)
-    | DataConstructor (XName p)
+    = Var Loc (XName p)
+    | DataConstructor Loc (XName p)
     | Application
-        { functionExpr :: Expr p
+        { loc :: Loc
+        , functionExpr :: Expr p
         , arguments :: Seq (Expr p)
         }
     | VisibleTypeApplication
-        { expr :: Expr p
+        { loc :: Loc
+        , expr :: Expr p
         , typeArguments :: Seq (TypeSyntax p)
         }
-    | Lambda (Seq (Pattern p)) (Expr p)
-    | StringLiteral Text
-    | IntLiteral Integer
-    | DoubleLiteral Double
-    | BinaryOperator (Expr p) BinaryOperator (Expr p)
+    | Lambda Loc (Seq (Pattern p)) (Expr p)
+    | StringLiteral Loc Text
+    | IntLiteral Loc Integer
+    | DoubleLiteral Loc Double
+    | BinaryOperator Loc (Expr p) BinaryOperator (Expr p)
     | If
-        { condition :: Expr p
+        { loc :: Loc
+        , condition :: Expr p
         , thenBranch :: Expr p
         , elseBranch :: Expr p
         }
     | SequenceBlock
-        { statements :: Seq (Statement p)
+        { loc :: Loc
+        , statements :: Seq (Statement p)
         }
     | Match
-        { scrutinee :: Expr p
+        { loc :: Loc
+        , scrutinee :: Expr p
         , cases :: Seq (MatchCase p)
         }
-    deriving (Generic)
+    deriving stock (Generic)
+    deriving anyclass (HasLoc)
 
 data Statement p
-    = Run (Expr p)
-    | Let (Pattern p) (Expr p)
+    = Run Loc (Expr p)
+    | Let Loc (Pattern p) (Expr p)
     | LetFunction
-        { name :: XLocalName p
+        { loc :: Loc
+        , name :: XLocalName p
         , typeSignature :: Maybe (TypeSyntax p)
         , parameters :: Seq (Pattern p)
         , body :: Expr p
         }
-    deriving (Generic)
+    deriving stock (Generic)
+    deriving anyclass (HasLoc)
 
 data MatchCase p = MkMatchCase
-    { pattern_ :: Pattern p
+    { loc :: Loc
+    , pattern_ :: Pattern p
     , body :: Expr p
     }
-    deriving (Generic)
+    deriving stock (Generic)
+    deriving anyclass (HasLoc)
 
 data BinaryOperator
     = Add
     | Subtract
     | Multiply
     | Divide
-    deriving (Generic)
+    deriving stock (Generic)
 
 data Pattern p
-    = VarPattern (XLocalName p)
-    | AsPattern (Pattern p) (XLocalName p)
+    = VarPattern Loc (XLocalName p)
+    | AsPattern Loc (Pattern p) (XLocalName p)
     | ConstructorPattern
-        { constructor :: XName p
+        { loc :: Loc
+        , constructor :: XName p
         , subPatterns :: Seq (Pattern p)
         }
-    | TypePattern (Pattern p) (TypeSyntax p)
-    | OrPattern (Seq (Pattern p))
-    deriving (Generic)
+    | TypePattern Loc (Pattern p) (TypeSyntax p)
+    | OrPattern Loc (Seq (Pattern p))
+    deriving stock (Generic)
+    deriving anyclass (HasLoc)
 
 data ParsedModule = MkParsedModule
     { imports :: Seq Import
     , declarations :: Seq (Declaration Parsed)
     }
-    deriving (Generic)
+    deriving stock (Generic)
 
 data Import = ImportUnqualified
     { -- TODO: really just Text?
-      moduleName :: Text
+      loc :: Loc
+    , moduleName :: Text
     , importedDeclarations :: Seq Text
     }
-    deriving (Generic)
+    deriving stock (Generic)
+    deriving anyclass (HasLoc)
 
 data TypeSyntax p
     = TypeConstructorS Loc (XName p)
@@ -149,26 +164,23 @@ data TypeSyntax p
     | ForallS Loc (Seq (TypeVarBinderS p)) (TypeSyntax p)
     | PureFunctionS Loc (Seq (TypeSyntax p)) (TypeSyntax p)
     | FunctionS Loc (Seq (TypeSyntax p)) (EffectSyntax p) (TypeSyntax p)
-    deriving (Generic)
-
-instance HasLoc (TypeSyntax p)
+    deriving stock (Generic)
+    deriving anyclass (HasLoc)
 
 data TypeVarBinderS p = MkTypeVarBinderS
     { loc :: Loc
     , varName :: XLocalName p
     , kind :: Maybe (KindSyntax p)
     }
-    deriving (Generic)
-
-instance HasLoc (TypeVarBinderS p)
+    deriving stock (Generic)
+    deriving anyclass (HasLoc)
 
 data KindSyntax p
     = TypeS Loc
     | EffectS Loc
     | ArrowKindS Loc (Seq (KindSyntax p)) (KindSyntax p)
-    deriving (Generic)
-
-instance HasLoc (KindSyntax p)
+    deriving stock (Generic)
+    deriving anyclass (HasLoc)
 
 type EffectSyntax = TypeSyntax
 

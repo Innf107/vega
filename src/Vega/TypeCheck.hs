@@ -12,24 +12,30 @@ import Relude.Extra
 import Vega.Util (compose, unzip3Seq, zipWithSeqM)
 
 import Data.Sequence qualified as Seq
+import Vega.Loc (HasLoc, Loc)
 
 data TypeError
     = FunctionDefinedWithIncorrectNumberOfArguments
-        { functionName :: GlobalName
+        { loc :: Loc
+        , functionName :: GlobalName
         , expectedType :: Type
         , expectedNumberOfArguments :: Int
         , numberOfDefinedParameters :: Int
         }
     | LambdaDefinedWithIncorrectNumberOfArguments
-        { expectedType :: Type
+        { loc :: Loc
+        , expectedType :: Type
         , expected :: Int
         , actual :: Int
         }
     | FunctionAppliedToIncorrectNumberOfArgs
-        { functionType :: Type
+        { loc :: Loc
+        , functionType :: Type
         , expected :: Int
         , actual :: Int
         }
+    deriving stock (Generic)
+    deriving anyclass (HasLoc)
 
 newtype Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -49,15 +55,16 @@ checkDeclaration = undefined
 typeError :: (Writer (Seq TypeError) :> es) => TypeError -> Eff es ()
 typeError error = tell @(Seq _) [error]
 
-checkDeclarationSyntax :: (TypeCheck es) => GlobalName -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
-checkDeclarationSyntax name = \case
+checkDeclarationSyntax :: (TypeCheck es) => Loc -> GlobalName -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
+checkDeclarationSyntax loc name = \case
     DefineFunction{typeSignature, parameters, body} -> do
         (functionType, typeSignature) <- checkType Type typeSignature
         (parameterTypes, effect, returnType) <- splitFunctionType functionType
         when (length parameters /= length parameterTypes) $ do
             typeError
                 ( FunctionDefinedWithIncorrectNumberOfArguments
-                    { functionName = name
+                    { loc
+                    , functionName = name
                     , expectedType = functionType
                     , expectedNumberOfArguments = length parameterTypes
                     , numberOfDefinedParameters = length parameters
@@ -78,27 +85,27 @@ checkDeclarationSyntax name = \case
 
 checkPattern :: (TypeCheck es) => Type -> Pattern Renamed -> Eff es (Pattern Typed, Env -> Env)
 checkPattern expectedType = \case
-    VarPattern var -> pure (VarPattern var, bindVarType var expectedType)
-    AsPattern pattern_ name -> do
+    VarPattern loc var -> pure (VarPattern loc var, bindVarType var expectedType)
+    AsPattern loc pattern_ name -> do
         (pattern_, innerTrans) <- checkPattern expectedType pattern_
-        pure (AsPattern pattern_ name, bindVarType name expectedType . innerTrans)
+        pure (AsPattern loc pattern_ name, bindVarType name expectedType . innerTrans)
     ConstructorPattern{} -> undefined
-    TypePattern innerPattern innerTypeSyntax -> do
+    TypePattern loc innerPattern innerTypeSyntax -> do
         (innerType, innerTypeSyntax) <- checkType Type innerTypeSyntax
         (innerPattern, innerTrans) <- checkPattern innerType innerPattern
         subsumes innerType expectedType
-        pure (TypePattern innerPattern innerTypeSyntax, innerTrans)
+        pure (TypePattern loc innerPattern innerTypeSyntax, innerTrans)
     OrPattern{} -> undefined
 
 inferPattern :: (TypeCheck es) => Pattern Renamed -> Eff es (Pattern Typed, Type, Env -> Env)
 inferPattern = \case
-    VarPattern varName -> do
+    VarPattern loc varName -> do
         meta <- freshMeta (varName.name)
         let type_ = MetaVar meta
-        pure (VarPattern varName, type_, bindVarType varName type_)
-    AsPattern innerPattern name -> do
+        pure (VarPattern loc varName, type_, bindVarType varName type_)
+    AsPattern loc innerPattern name -> do
         (innerPattern, innerType, innerTrans) <- inferPattern innerPattern
-        pure (AsPattern innerPattern name, innerType, bindVarType name innerType . innerTrans)
+        pure (AsPattern loc innerPattern name, innerType, bindVarType name innerType . innerTrans)
     _ -> undefined
 
 check :: (TypeCheck es) => Env -> Type -> Expr Renamed -> Eff es (Expr Typed, Effect)
@@ -112,12 +119,13 @@ check env expectedType expr = do
         DataConstructor{} -> undefined
         Application{} -> deferToInference
         VisibleTypeApplication{} -> undefined
-        Lambda parameters body -> do
+        Lambda loc parameters body -> do
             (parameterTypes, expectedEffect, returnType) <- splitFunctionType expectedType
             when (length parameters /= length parameterTypes) do
                 typeError
                     ( LambdaDefinedWithIncorrectNumberOfArguments
-                        { expectedType
+                        { loc
+                        , expectedType
                         , expected = length parameterTypes
                         , actual = length parameters
                         }
@@ -128,36 +136,37 @@ check env expectedType expr = do
             (parameters, envTransformers) <- Seq.unzip <$> zipWithSeqM checkParameter parameters parameterTypes
             (body, bodyEffect) <- check (compose envTransformers env) returnType body
             subsumesEffect bodyEffect expectedEffect
-            pure (Lambda parameters body, Pure)
+            pure (Lambda loc parameters body, Pure)
         StringLiteral{} -> deferToInference
         IntLiteral{} -> deferToInference
         DoubleLiteral{} -> deferToInference
-        If{condition, thenBranch, elseBranch} -> do
+        If{loc, condition, thenBranch, elseBranch} -> do
             (condition, conditionEffect) <- check env boolType condition
             (thenBranch, thenEffect) <- check env expectedType thenBranch
             (elseBranch, elseEffect) <- check env expectedType elseBranch
 
             effect <- unionAll [conditionEffect, thenEffect, elseEffect]
-            pure (If{condition, thenBranch, elseBranch}, effect)
-        SequenceBlock{statements} -> do
+            pure (If{loc, condition, thenBranch, elseBranch}, effect)
+        SequenceBlock{loc, statements} -> do
             undefined
         _ -> undefined
 
 infer :: (TypeCheck es) => Env -> Expr Renamed -> Eff es (Type, Expr Typed, Effect)
 infer env = \case
-    Var name -> case name of
+    Var loc name -> case name of
         Global globalName -> do
             type_ <- getGlobalType globalName
-            pure (type_, Var name, Pure)
+            pure (type_, Var loc name, Pure)
         Local localName -> do
             undefined
-    Application{functionExpr, arguments} -> do
+    Application{loc, functionExpr, arguments} -> do
         (functionType, functionExpr, functionExprEffect) <- infer env functionExpr
         (argumentTypes, functionEffect, returnType) <- splitFunctionType functionType
         when (length argumentTypes /= length arguments) do
             typeError
                 $ FunctionAppliedToIncorrectNumberOfArgs
-                    { expected = length argumentTypes
+                    { loc
+                    , expected = length argumentTypes
                     , actual = length arguments
                     , functionType
                     }
@@ -165,27 +174,27 @@ infer env = \case
                 check env argumentType argumentExpr
         (arguments, argumentEffects) <- Seq.unzip <$> zipWithSeqM checkArguments arguments argumentTypes
         finalEffect <- pure functionExprEffect `unionM` unionAll argumentEffects `unionM` pure functionEffect
-        pure (returnType, Application{functionExpr, arguments}, finalEffect)
+        pure (returnType, Application{loc, functionExpr, arguments}, finalEffect)
     VisibleTypeApplication{} ->
         undefined
-    Lambda parameters body -> do
+    Lambda loc parameters body -> do
         (parameters, parameterTypes, envTransformers) <- unzip3Seq <$> traverse inferPattern parameters
 
         (bodyType, body, bodyEffect) <- infer (compose envTransformers env) body
 
-        pure (Function parameterTypes bodyEffect bodyType, Lambda parameters body, Pure)
-    StringLiteral literal -> pure (stringType, StringLiteral literal, Pure)
-    IntLiteral literal -> pure (intType, IntLiteral literal, Pure)
-    DoubleLiteral literal -> pure (doubleType, DoubleLiteral literal, Pure)
+        pure (Function parameterTypes bodyEffect bodyType, Lambda loc parameters body, Pure)
+    StringLiteral loc literal -> pure (stringType, StringLiteral loc literal, Pure)
+    IntLiteral loc literal -> pure (intType, IntLiteral loc literal, Pure)
+    DoubleLiteral loc literal -> pure (doubleType, DoubleLiteral loc literal, Pure)
     BinaryOperator{} -> undefined
-    If{condition, thenBranch, elseBranch} -> do
+    If{loc, condition, thenBranch, elseBranch} -> do
         (condition, conditionEffect) <- check env boolType condition
         (thenType, thenBranch, thenEffect) <- infer env thenBranch
         (elseType, elseBranch, elseEffect) <- infer env elseBranch
         subsumes thenType elseType
         subsumes elseType thenType
         effect <- unionAll [conditionEffect, thenEffect, elseEffect]
-        pure (thenType, If{condition, thenBranch, elseBranch}, effect)
+        pure (thenType, If{loc, condition, thenBranch, elseBranch}, effect)
     _ -> undefined
 
 stringType :: Type

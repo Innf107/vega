@@ -116,51 +116,51 @@ renameKindSyntax env = \case
 
 renamePattern :: (Rename es) => Env -> Pattern Parsed -> Eff es (Pattern Renamed, Env -> Env)
 renamePattern env = \case
-    VarPattern name -> do
+    VarPattern loc name -> do
         (localName, envTrans) <- bindLocalVar name
-        pure (VarPattern localName, envTrans)
-    AsPattern innerPattern name -> do
+        pure (VarPattern loc localName, envTrans)
+    AsPattern loc innerPattern name -> do
         (innerPattern, innerTrans) <- renamePattern env innerPattern
         (localName, envTrans) <- bindLocalVar name
-        pure (AsPattern innerPattern localName, envTrans . innerTrans)
+        pure (AsPattern loc innerPattern localName, envTrans . innerTrans)
     ConstructorPattern{} -> undefined
-    TypePattern innerPattern type_ -> do
+    TypePattern loc innerPattern type_ -> do
         (innerPattern, innerTrans) <- renamePattern env innerPattern
         type_ <- renameTypeSyntax env type_
-        pure (TypePattern innerPattern type_, innerTrans)
+        pure (TypePattern loc innerPattern type_, innerTrans)
     OrPattern{} -> undefined
 
 renameExpr :: (Rename es) => Env -> Expr Parsed -> Eff es (Expr Renamed)
 renameExpr env = \case
-    Var name -> do
+    Var loc name -> do
         name <- findVarName env name
-        pure (Var name)
+        pure (Var loc name)
     DataConstructor{} -> undefined
-    Application{functionExpr, arguments} -> do
+    Application{loc, functionExpr, arguments} -> do
         functionExpr <- renameExpr env functionExpr
         arguments <- traverse (renameExpr env) arguments
-        pure (Application functionExpr arguments)
-    VisibleTypeApplication{expr, typeArguments} -> do
+        pure (Application{loc, functionExpr, arguments})
+    VisibleTypeApplication{loc, expr, typeArguments} -> do
         expr <- renameExpr env expr
         typeArguments <- traverse (renameTypeSyntax env) typeArguments
-        pure (VisibleTypeApplication{expr, typeArguments})
-    Lambda parameters body -> do
+        pure (VisibleTypeApplication{loc, expr, typeArguments})
+    Lambda loc parameters body -> do
         (parameters, transformers) <- Seq.unzip <$> traverse (renamePattern env) parameters
         body <- renameExpr (Util.compose transformers env) body
-        pure (Lambda parameters body)
-    StringLiteral literal -> pure (StringLiteral literal)
-    IntLiteral literal -> pure (IntLiteral literal)
-    DoubleLiteral literal -> pure (DoubleLiteral literal)
-    BinaryOperator arg1 operator arg2 -> do
+        pure (Lambda loc parameters body)
+    StringLiteral loc literal -> pure (StringLiteral loc literal)
+    IntLiteral loc literal -> pure (IntLiteral loc literal)
+    DoubleLiteral loc literal -> pure (DoubleLiteral loc literal)
+    BinaryOperator loc arg1 operator arg2 -> do
         arg1 <- renameExpr env arg1
         arg2 <- renameExpr env arg2
-        pure (BinaryOperator arg1 operator arg2)
-    If{condition, thenBranch, elseBranch} -> do
+        pure (BinaryOperator loc arg1 operator arg2)
+    If{loc, condition, thenBranch, elseBranch} -> do
         condition <- renameExpr env condition
         thenBranch <- renameExpr env thenBranch
         elseBranch <- renameExpr env elseBranch
-        pure (If{condition, thenBranch, elseBranch})
-    SequenceBlock{statements} -> do
+        pure (If{loc, condition, thenBranch, elseBranch})
+    SequenceBlock{loc, statements} -> do
         (_, statements) <-
             Util.mapAccumLM
                 ( \env statement -> do
@@ -169,33 +169,33 @@ renameExpr env = \case
                 )
                 env
                 statements
-        pure (SequenceBlock{statements})
-    Match{scrutinee, cases} -> do
+        pure (SequenceBlock{loc, statements})
+    Match{loc, scrutinee, cases} -> do
         scrutinee <- renameExpr env scrutinee
         cases <- traverse (renameMatchCase env) cases
-        pure (Match{scrutinee, cases})
+        pure (Match{loc, scrutinee, cases})
 
 renameStatement :: (Rename es) => Env -> Statement Parsed -> Eff es (Statement Renamed, Env -> Env)
 renameStatement env = \case
-    Run expr -> do
+    Run loc expr -> do
         expr <- renameExpr env expr
-        pure (Run expr, id)
-    Let pattern_ body -> do
+        pure (Run loc expr, id)
+    Let loc pattern_ body -> do
         (pattern_, envTrans) <- renamePattern env pattern_
         -- Regular lets are non-recursive so we don't use the env transformer here just yet
         body <- renameExpr env body
-        pure (Let pattern_ body, envTrans)
-    LetFunction{name, typeSignature, parameters, body} -> do
+        pure (Let loc pattern_ body, envTrans)
+    LetFunction{loc, name, typeSignature, parameters, body} -> do
         (name, envTrans) <- bindLocalVar name
         typeSignature <- traverse (renameTypeSyntax env) typeSignature
         (parameters, innerTransformers) <- Seq.unzip <$> traverse (renamePattern env) parameters
         -- Function let bindings are recursive so we apply the functions own transformer first
         -- before binding any parameters
         body <- renameExpr (Util.compose innerTransformers (envTrans env)) body
-        pure (LetFunction{name, typeSignature, parameters, body}, envTrans)
+        pure (LetFunction{loc, name, typeSignature, parameters, body}, envTrans)
 
 renameMatchCase :: (Rename es) => Env -> MatchCase Parsed -> Eff es (MatchCase Renamed)
-renameMatchCase env (MkMatchCase{pattern_, body}) = do
+renameMatchCase env (MkMatchCase{loc, pattern_, body}) = do
     (pattern_, envTrans) <- renamePattern env pattern_
     body <- renameExpr (envTrans env) body
-    pure (MkMatchCase{pattern_, body})
+    pure (MkMatchCase{loc, pattern_, body})
