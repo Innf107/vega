@@ -21,7 +21,16 @@ data AdditionalParseError
     | UnknowNamedKind Text
     deriving (Show, Eq, Ord, Generic)
 
-type Parser = Parsec AdditionalParseError [(Token, Loc)]
+newtype ParserEnv = MkParserEnv
+    { moduleName :: Text
+    }
+
+type Parser = ReaderT ParserEnv (Parsec AdditionalParseError [(Token, Loc)])
+
+globalNameForCurrentModule :: Text -> Parser GlobalName
+globalNameForCurrentModule name = do
+    MkParserEnv{moduleName} <- ask
+    pure (MkGlobalName{moduleName, name})
 
 loc :: Parser Loc
 loc = undefined
@@ -112,9 +121,10 @@ defineFunction = do
     _ <- single RParen
     _ <- single Equals
     body <- expr
+    name <- globalNameForCurrentModule name
     pure
         ( MkDeclaration
-            { name = undefined
+            { name
             , syntax =
                 DefineFunction
                     { typeSignature
@@ -136,9 +146,11 @@ defineVariantType = do
     let endLoc = case constructors of
             Empty -> error "sepBy returned empty?"
             (_ :|> (_, _, endLoc)) -> endLoc
+
+    name <- globalNameForCurrentModule name
     pure
         ( MkDeclaration
-            { name = undefined
+            { name = name
             , syntax =
                 DefineVariantType
                     { typeParameters
