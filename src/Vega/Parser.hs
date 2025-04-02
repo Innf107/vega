@@ -21,7 +21,6 @@ data AdditionalParseError
     | UnknowNamedKind Text
     deriving (Show, Eq, Ord, Generic)
 
-
 type Parser = Parsec AdditionalParseError [(Token, Loc)]
 
 loc :: Parser Loc

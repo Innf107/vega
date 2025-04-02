@@ -35,6 +35,11 @@ type family XName (p :: Pass) where
     XName Renamed = Name
     XName Typed = Name
 
+type family XGlobalName (p :: Pass) where
+    XGlobalName Parsed = Text
+    XGlobalName Renamed = GlobalName
+    XGlobalName Typed = GlobalName
+
 type family XLocalName (p :: Pass) where
     XLocalName Parsed = Text
     XLocalName Renamed = LocalName
@@ -50,12 +55,12 @@ data Declaration p = MkDeclaration
 data DeclarationSyntax p
     = DefineFunction
         { typeSignature :: TypeSyntax p
-        , name :: GlobalName
+        , name :: XGlobalName p
         , parameters :: Seq (Pattern p)
         , body :: Expr p
         }
     | DefineVariantType
-        { name :: GlobalName
+        { name :: XGlobalName p
         , typeParameters :: Seq (XName p)
         , constructors :: Seq (XName p, Seq (TypeSyntax p))
         }
@@ -95,7 +100,7 @@ data Statement p
     = Run (Expr p)
     | Let (Pattern p) (Expr p)
     | LetFunction
-        { name :: XName p
+        { name :: XLocalName p
         , typeSignature :: Maybe (TypeSyntax p)
         , parameters :: Seq (Pattern p)
         , body :: Expr p
@@ -142,7 +147,7 @@ data Import = ImportUnqualified
 data TypeSyntax p
     = TypeConstructorS Loc (XName p)
     | TypeApplicationS Loc (TypeSyntax p) (Seq (TypeSyntax p))
-    | TypeVarS Loc (XName p)
+    | TypeVarS Loc (XLocalName p)
     | ForallS Loc (Seq (TypeVarBinderS p)) (TypeSyntax p)
     | PureFunctionS Loc (Seq (TypeSyntax p)) (TypeSyntax p)
     | FunctionS Loc (Seq (TypeSyntax p)) (EffectSyntax p) (TypeSyntax p)
@@ -152,7 +157,7 @@ instance HasLoc (TypeSyntax p)
 
 data TypeVarBinderS p = MkTypeVarBinderS
     { loc :: Loc
-    , varName :: XName p
+    , varName :: XLocalName p
     , kind :: Maybe (KindSyntax p)
     }
     deriving (Generic)

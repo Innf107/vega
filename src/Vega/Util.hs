@@ -3,6 +3,7 @@ module Vega.Util (
     zipWithSeqM,
     compose,
     unzip3Seq,
+    mapAccumLM,
 ) where
 
 import Data.Sequence (Seq (..))
@@ -35,3 +36,18 @@ unzip3Seq Empty = (Empty, Empty, Empty)
 unzip3Seq ((a, b, c) :<| rest) = do
     let (as, bs, cs) = unzip3Seq rest
     (a :<| as, b :<| bs, c :<| cs)
+
+mapAccumLM :: (Monad m, Traversable t) => (s -> a -> m (s, b)) -> s -> t a -> m (s, t b)
+mapAccumLM f initial traversable =
+    swap <$> flip runStateT initial do
+        traverse
+            ( \a -> do
+                current <- get
+                (next, b) <- lift $ f current a
+                put next
+                pure b
+            )
+            traversable
+
+forAccumLM :: (Monad m, Traversable t) => s -> t a -> (s -> a -> m (s, b)) -> m (s, t b)
+forAccumLM initial traversable f = mapAccumLM f initial traversable

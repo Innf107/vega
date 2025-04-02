@@ -52,7 +52,7 @@ typeError error = tell @(Seq _) [error]
 checkDeclarationSyntax :: (TypeCheck es) => DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
 checkDeclarationSyntax = \case
     DefineFunction{typeSignature, name, parameters, body} -> do
-        (functionType, typeSignature) <- evaluateType typeSignature
+        (functionType, typeSignature) <- checkType Type typeSignature
         (parameterTypes, effect, returnType) <- splitFunctionType functionType
         when (length parameters /= length parameterTypes) $ do
             typeError
@@ -84,7 +84,7 @@ checkPattern expectedType = \case
         pure (AsPattern pattern_ name, bindVarType name expectedType . innerTrans)
     ConstructorPattern{} -> undefined
     TypePattern innerPattern innerTypeSyntax -> do
-        (innerType, innerTypeSyntax) <- evaluateType innerTypeSyntax
+        (innerType, innerTypeSyntax) <- checkType Type innerTypeSyntax
         (innerPattern, innerTrans) <- checkPattern innerType innerPattern
         subsumes innerType expectedType
         pure (TypePattern innerPattern innerTypeSyntax, innerTrans)
@@ -97,8 +97,9 @@ inferPattern = \case
         let type_ = MetaVar meta
         pure (VarPattern varName, type_, bindVarType varName type_)
     AsPattern innerPattern name -> do
-        (innerPattern, innerType, innerTrans) <-inferPattern innerPattern
+        (innerPattern, innerType, innerTrans) <- inferPattern innerPattern
         pure (AsPattern innerPattern name, innerType, bindVarType name innerType . innerTrans)
+    _ -> undefined
 
 check :: (TypeCheck es) => Env -> Type -> Expr Renamed -> Eff es (Expr Typed, Effect)
 check env expectedType expr = do
@@ -140,6 +141,7 @@ check env expectedType expr = do
             pure (If{condition, thenBranch, elseBranch}, effect)
         SequenceBlock{statements} -> do
             undefined
+        _ -> undefined
 
 infer :: (TypeCheck es) => Env -> Expr Renamed -> Eff es (Type, Expr Typed, Effect)
 infer env = \case
@@ -182,8 +184,9 @@ infer env = \case
         (elseType, elseBranch, elseEffect) <- infer env elseBranch
         subsumes thenType elseType
         subsumes elseType thenType
-        effect <- unionAll [thenEffect, elseEffect]
+        effect <- unionAll [conditionEffect, thenEffect, elseEffect]
         pure (thenType, If{condition, thenBranch, elseBranch}, effect)
+    _ -> undefined
 
 stringType :: Type
 stringType = TypeConstructor (Global (internalName "String"))
@@ -197,8 +200,8 @@ doubleType = TypeConstructor (Global (internalName "Double"))
 boolType :: Type
 boolType = TypeConstructor (Global (internalName "Bool"))
 
-evaluateType :: (TypeCheck es) => TypeSyntax Renamed -> Eff es (Type, TypeSyntax Typed)
-evaluateType = undefined
+checkType :: (TypeCheck es) => Kind -> TypeSyntax Renamed -> Eff es (Type, TypeSyntax Typed)
+checkType = undefined
 
 splitFunctionType :: (TypeCheck es) => Type -> Eff es (Seq Type, Effect, Type)
 splitFunctionType = undefined
