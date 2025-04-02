@@ -32,9 +32,6 @@ globalNameForCurrentModule name = do
     MkParserEnv{moduleName} <- ask
     pure (MkGlobalName{moduleName, name})
 
-loc :: Parser Loc
-loc = undefined
-
 single :: Token -> Parser Loc
 single target = MegaParsec.token match (fromList [undefined])
   where
@@ -82,7 +79,7 @@ chainl1 :: (MonadPlus m) => m a -> m (a -> a -> a) -> m a
 chainl1 parser between = do
     first <- parser
     rest <- many @[_] (liftA2 (,) between parser)
-    pure $ foldl' (\(left :: a) (operator, right) -> left `operator` right) first rest
+    pure $ foldl' (\left (operator, right) -> left `operator` right) first rest
 
 module_ :: Parser ParsedModule
 module_ = do
@@ -175,7 +172,7 @@ type_ =
   where
     type1 = do
         typeConstructor <- type2
-        applications <- many @[_] (liftA2 (,) (arguments type_) loc)
+        applications <- many @[_] $ argumentsWithLoc type_
         pure
             $ foldl'
                 (\constr (arguments, endLoc) -> TypeApplicationS (getLoc typeConstructor <> endLoc) constr arguments)
@@ -185,20 +182,28 @@ type_ =
         choice
             [ -- typeApplication
               forall_
-            , TypeConstructorS undefined <$> constructor
-            , TypeVarS undefined <$> identifier
             , do
-                startLoc <- loc
-                parameters <- arguments type_
+                (name, loc) <- constructorWithLoc
+                applications <- many @[_] (argumentsWithLoc type_)
+                pure
+                    $ foldl'
+                        (\constr (args, loc) -> TypeApplicationS (getLoc constr <> loc) constr args)
+                        (TypeConstructorS loc name)
+                        applications
+            , do
+                (name, loc) <- identifierWithLoc
+                pure $ TypeVarS loc name
+            , do
+                (parameters, loc) <- argumentsWithLoc type_
                 choice
                     [ do
                         _ <- single Arrow
                         result <- type_
-                        pure (PureFunctionS (startLoc <> getLoc result) parameters result)
+                        pure (PureFunctionS (loc <> getLoc result) parameters result)
                     , do
                         effect <- effectArrow
                         result <- type_
-                        pure (FunctionS (startLoc <> getLoc result) parameters effect result)
+                        pure (FunctionS (loc <> getLoc result) parameters effect result)
                     ]
             ]
 
@@ -211,8 +216,7 @@ effectArrow = do
 
 forall_ :: Parser (TypeSyntax Parsed)
 forall_ = do
-    startLoc <- loc
-    _ <- single Lexer.Forall
+    startLoc <- single Lexer.Forall
     vars <- many1 (typeVarBinder)
     _ <- single Lexer.Period
     remainingType <- type_
@@ -222,18 +226,14 @@ typeVarBinder :: Parser (TypeVarBinderS Parsed)
 typeVarBinder =
     choice
         [ do
-            startLoc <- loc
-            varName <- identifier
-            endLoc <- loc
-            pure (MkTypeVarBinderS{loc = startLoc <> endLoc, varName, kind = Nothing})
+            (varName, loc) <- identifierWithLoc
+            pure (MkTypeVarBinderS{loc, varName, kind = Nothing})
         , do
-            startLoc <- loc
-            _ <- single LParen
+            startLoc <- single LParen
             varName <- identifier
             _ <- single Colon
             varKind <- kind
-            _ <- single RParen
-            endLoc <- loc
+            endLoc <- single RParen
             pure (MkTypeVarBinderS{loc = startLoc <> endLoc, varName, kind = Just varKind})
         ]
 
@@ -244,16 +244,13 @@ kind = do
     kind1 =
         choice
             [ do
-                startLoc <- loc
-                namedKind <- constructor
-                endLoc <- loc
+                (namedKind, loc) <- constructorWithLoc
                 case namedKind of
-                    "Type" -> pure $ TypeS (startLoc <> endLoc)
-                    "Effect" -> pure $ EffectS (startLoc <> endLoc)
+                    "Type" -> pure $ TypeS loc
+                    "Effect" -> pure $ EffectS loc
                     _ -> customFailure (UnknowNamedKind namedKind)
             , do
-                startLoc <- loc
-                parameterKinds <- arguments kind
+                (parameterKinds, startLoc) <- argumentsWithLoc kind
                 _ <- single Arrow
                 result <- kind
                 pure (ArrowKindS (startLoc <> getLoc result) parameterKinds result)
