@@ -49,9 +49,9 @@ checkDeclaration = undefined
 typeError :: (Writer (Seq TypeError) :> es) => TypeError -> Eff es ()
 typeError error = tell @(Seq _) [error]
 
-checkDeclarationSyntax :: (TypeCheck es) => DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
-checkDeclarationSyntax = \case
-    DefineFunction{typeSignature, name, parameters, body} -> do
+checkDeclarationSyntax :: (TypeCheck es) => GlobalName -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
+checkDeclarationSyntax name = \case
+    DefineFunction{typeSignature, parameters, body} -> do
         (functionType, typeSignature) <- checkType Type typeSignature
         (parameterTypes, effect, returnType) <- splitFunctionType functionType
         when (length parameters /= length parameterTypes) $ do
@@ -73,7 +73,7 @@ checkDeclarationSyntax = \case
         (body, bodyEffect) <- check env returnType body
         subsumesEffect bodyEffect effect
 
-        pure DefineFunction{typeSignature, name, parameters, body}
+        pure DefineFunction{typeSignature, parameters, body}
     DefineVariantType{} -> undefined
 
 checkPattern :: (TypeCheck es) => Type -> Pattern Renamed -> Eff es (Pattern Typed, Env -> Env)

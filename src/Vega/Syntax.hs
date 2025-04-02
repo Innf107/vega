@@ -55,13 +55,11 @@ data Declaration p = MkDeclaration
 data DeclarationSyntax p
     = DefineFunction
         { typeSignature :: TypeSyntax p
-        , name :: XGlobalName p
         , parameters :: Seq (Pattern p)
         , body :: Expr p
         }
     | DefineVariantType
-        { name :: XGlobalName p
-        , typeParameters :: Seq (XName p)
+        { typeParameters :: Seq (XName p)
         , constructors :: Seq (XName p, Seq (TypeSyntax p))
         }
     deriving (Generic)

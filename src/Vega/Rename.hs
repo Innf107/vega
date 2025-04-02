@@ -38,9 +38,6 @@ bindTypeVariable text = do
 findGlobalVariable :: (Rename es) => Text -> Eff es (Maybe GlobalName)
 findGlobalVariable = undefined
 
-globalizeName :: (Rename es) => Text -> Eff es GlobalName
-globalizeName = undefined
-
 rename :: (Rename es) => Declaration Parsed -> Eff es (Declaration Renamed)
 rename = undefined
 
@@ -61,16 +58,15 @@ findTypeVariable env text = case lookup text env.localTypeVariables of
     Just localName -> pure localName
     Nothing -> undefined
 
-renameDeclarationSyntax :: (Rename es) => DeclarationSyntax Parsed -> Eff es (DeclarationSyntax Renamed)
-renameDeclarationSyntax = \case
-    DefineFunction{typeSignature, name, parameters, body} -> do
+renameDeclarationSyntax :: (Rename es) => GlobalName -> DeclarationSyntax Parsed -> Eff es (DeclarationSyntax Renamed)
+renameDeclarationSyntax name = \case
+    DefineFunction{typeSignature, parameters, body} -> do
         let env = emptyEnv
         typeSignature <- renameTypeSyntax env typeSignature
-        name <- globalizeName name
         (parameters, transformers) <- Seq.unzip <$> traverse (renamePattern env) parameters
         body <- renameExpr (Util.compose transformers env) body
-        pure (DefineFunction{typeSignature, name, parameters, body})
-    DefineVariantType{name, typeParameters, constructors} -> do
+        pure (DefineFunction{typeSignature, parameters, body})
+    DefineVariantType{typeParameters, constructors} -> do
         undefined
 
 renameTypeSyntax :: (Rename es) => Env -> TypeSyntax Parsed -> Eff es (TypeSyntax Renamed)

@@ -118,7 +118,6 @@ defineFunction = do
             , syntax =
                 DefineFunction
                     { typeSignature
-                    , name
                     , parameters
                     , body
                     }
@@ -142,8 +141,7 @@ defineVariantType = do
             { name = undefined
             , syntax =
                 DefineVariantType
-                    { name
-                    , typeParameters
+                    { typeParameters
                     , constructors = fmap (\(name, arguments, _) -> (name, arguments)) constructors
                     }
             , loc = startLoc <> endLoc
