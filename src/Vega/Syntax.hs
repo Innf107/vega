@@ -81,7 +81,8 @@ data Expr p
     | Lambda Loc (Seq (Pattern p)) (Expr p)
     | StringLiteral Loc Text
     | IntLiteral Loc Integer
-    | DoubleLiteral Loc Double
+    | DoubleLiteral Loc Rational
+    | TupleLiteral Loc (Seq (Expr p))
     | BinaryOperator Loc (Expr p) BinaryOperator (Expr p)
     | If
         { loc :: Loc
@@ -127,6 +128,14 @@ data BinaryOperator
     | Subtract
     | Multiply
     | Divide
+    | And
+    | Or
+    | Less
+    | LessEqual
+    | Equal
+    | NotEqual
+    | GreaterEqual
+    | Greater
     deriving stock (Generic)
 
 data Pattern p
@@ -135,6 +144,10 @@ data Pattern p
     | ConstructorPattern
         { loc :: Loc
         , constructor :: XName p
+        , subPatterns :: Seq (Pattern p)
+        }
+    | TuplePattern
+        { loc :: Loc
         , subPatterns :: Seq (Pattern p)
         }
     | TypePattern Loc (Pattern p) (TypeSyntax p)
@@ -164,6 +177,7 @@ data TypeSyntax p
     | ForallS Loc (Seq (TypeVarBinderS p)) (TypeSyntax p)
     | PureFunctionS Loc (Seq (TypeSyntax p)) (TypeSyntax p)
     | FunctionS Loc (Seq (TypeSyntax p)) (EffectSyntax p) (TypeSyntax p)
+    | TupleS Loc (Seq (TypeSyntax p))
     deriving stock (Generic)
     deriving anyclass (HasLoc)
 
@@ -179,7 +193,8 @@ data KindSyntax p
     = TypeS Loc
     | EffectS Loc
     | ArrowKindS Loc (Seq (KindSyntax p)) (KindSyntax p)
-    deriving stock (Generic)
+    -- This has to implement Eq and Ord because megaparsec is being silly
+    deriving stock (Generic, Eq, Ord)
     deriving anyclass (HasLoc)
 
 type EffectSyntax = TypeSyntax
@@ -190,6 +205,7 @@ data Type
     | TypeVar LocalName
     | Forall (Seq (LocalName, Kind)) Type
     | Function (Seq Type) Effect Type
+    | Tuple (Seq Type)
     | MetaVar MetaVar
     | Skolem Skolem
     | Pure

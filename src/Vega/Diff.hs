@@ -106,7 +106,6 @@ deriving via Generically Name instance Diff Name
 deriving via DiffFromEq Text instance Diff Text
 deriving via DiffFromEq Int instance Diff Int
 deriving via DiffFromEq Integer instance Diff Integer
--- TODO: Might not be the best idea to rely on floating point equality here
-deriving via DiffFromEq Double instance Diff Double
+deriving via DiffFromEq Rational instance Diff Rational
 
 deriving via IgnoredInDiff Loc instance Diff Loc

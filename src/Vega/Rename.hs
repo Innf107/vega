@@ -92,6 +92,9 @@ renameTypeSyntax env = \case
         effect <- renameTypeSyntax env effect
         resultType <- renameTypeSyntax env resultType
         pure (FunctionS loc parameters effect resultType)
+    TupleS loc elements -> do
+        elements <- traverse (renameTypeSyntax env) elements
+        pure (TupleS loc elements)
 
 renameTypeVarBinders :: (Rename es) => Env -> Seq (TypeVarBinderS Parsed) -> Eff es (Seq (TypeVarBinderS Renamed), Env)
 renameTypeVarBinders env = \case
@@ -151,6 +154,9 @@ renameExpr env = \case
     StringLiteral loc literal -> pure (StringLiteral loc literal)
     IntLiteral loc literal -> pure (IntLiteral loc literal)
     DoubleLiteral loc literal -> pure (DoubleLiteral loc literal)
+    TupleLiteral loc elements -> do
+        elements <- traverse (renameExpr env) elements
+        pure (TupleLiteral loc elements)
     BinaryOperator loc arg1 operator arg2 -> do
         arg1 <- renameExpr env arg1
         arg2 <- renameExpr env arg2

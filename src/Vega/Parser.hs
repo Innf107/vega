@@ -12,6 +12,7 @@ import Text.Megaparsec hiding (Token, many, sepBy, sepBy1, single)
 import Text.Megaparsec qualified as MegaParsec
 import Vega.Lexer as Lexer (Token (..))
 import Vega.Loc (Loc (MkLoc), getLoc)
+import Vega.Syntax qualified as Syntax
 
 data AdditionalParseError
     = MismatchedFunctionName
@@ -19,7 +20,8 @@ data AdditionalParseError
         , definition :: Text
         }
     | UnknowNamedKind Text
-    deriving (Show, Eq, Ord, Generic)
+    | TupleKind (Seq (KindSyntax Parsed))
+    deriving stock (Eq, Ord, Generic)
 
 newtype ParserEnv = MkParserEnv
     { moduleName :: Text
@@ -37,6 +39,27 @@ single target = MegaParsec.token match (fromList [undefined])
   where
     match = \case
         (token, loc) | token == target -> Just loc
+        _ -> Nothing
+
+stringLit :: Parser (Text, Loc)
+stringLit = MegaParsec.token match (fromList [Label (fromList "string literal")])
+  where
+    match = \case
+        (Lexer.StringLiteral text, loc) -> Just (text, loc)
+        _ -> Nothing
+
+intLit :: Parser (Integer, Loc)
+intLit = MegaParsec.token match (fromList [Label (fromList "integer literal")])
+  where
+    match = \case
+        (Lexer.IntLiteral int, loc) -> Just (int, loc)
+        _ -> Nothing
+
+floatLit :: Parser (Rational, Loc)
+floatLit = MegaParsec.token match (fromList [Label (fromList "float literal")])
+  where
+    match = \case
+        (Lexer.FloatLiteral float, loc) -> Just (float, loc)
         _ -> Nothing
 
 identifierWithLoc :: Parser (Text, Loc)
@@ -128,7 +151,7 @@ defineFunction = do
                     , parameters
                     , body
                     }
-            , loc = startLoc <> undefined -- getLoc body
+            , loc = startLoc <> getLoc body
             }
         )
 
@@ -162,12 +185,11 @@ defineVariantType = do
         (dataArguments, endLoc) <- option (fromList [], startLoc) (argumentsWithLoc type_)
         pure (name, dataArguments, startLoc <> endLoc)
 
--- TODO: '(' type ')', '(' kind ')'
 type_ :: Parser (TypeSyntax Parsed)
 type_ =
     choice
         [ chainl1 type1 (single Arrow *> pure (\type1 type2 -> PureFunctionS (getLoc type1 <> getLoc type2) (fromList [type1]) type2))
-        , chainl1 type1 (effectArrow >>= \effect -> pure (\type1 type2 -> FunctionS undefined (fromList [type1]) effect type2))
+        , chainl1 type1 (effectArrow >>= \effect -> pure (\type1 type2 -> FunctionS (getLoc type1 <> getLoc type2) (fromList [type1]) effect type2))
         ]
   where
     type1 = do
@@ -204,6 +226,10 @@ type_ =
                         effect <- effectArrow
                         result <- type_
                         pure (FunctionS (loc <> getLoc result) parameters effect result)
+                    , do
+                        case parameters of
+                            (type_ :<| Empty) -> pure type_
+                            parameters -> pure (TupleS loc parameters)
                     ]
             ]
 
@@ -251,19 +277,173 @@ kind = do
                     _ -> customFailure (UnknowNamedKind namedKind)
             , do
                 (parameterKinds, startLoc) <- argumentsWithLoc kind
-                _ <- single Arrow
-                result <- kind
-                pure (ArrowKindS (startLoc <> getLoc result) parameterKinds result)
+
+                choice
+                    [ do
+                        _ <- single Arrow
+                        result <- kind
+                        pure (ArrowKindS (startLoc <> getLoc result) parameterKinds result)
+                    , case parameterKinds of
+                        (kind :<| _) -> pure kind
+                        _ -> customFailure (TupleKind parameterKinds)
+                    ]
             ]
 
 pattern_ :: Parser (Pattern Parsed)
-pattern_ = undefined
+pattern_ = do
+    firstPattern <- pattern1
+    rest <- many (single Pipe *> pattern1)
+    case rest of
+        Empty -> pure firstPattern
+        (_ :|> lastPattern) -> pure (OrPattern (getLoc firstPattern <> getLoc lastPattern) (firstPattern :<| rest))
+  where
+    pattern1 =
+        choice
+            [ do
+                inner <- pattern2
+                _ <- single As
+                (name, endLoc) <- identifierWithLoc
+                pure (AsPattern (getLoc inner <> endLoc) inner name)
+            , do
+                inner <- pattern2
+                _ <- single Colon
+                typeSignature <- type_
+                pure (TypePattern (getLoc inner <> getLoc typeSignature) inner typeSignature)
+            , pattern2
+            ]
+    pattern2 =
+        choice
+            [ do
+                (name, loc) <- identifierWithLoc
+                pure (VarPattern loc name)
+            , do
+                (name, startLoc) <- constructorWithLoc
+                subPatterns <- optional (argumentsWithLoc pattern_)
+                case subPatterns of
+                    Nothing -> pure $ ConstructorPattern startLoc name (fromList [])
+                    Just (subPatterns, endLoc) -> pure $ ConstructorPattern (startLoc <> endLoc) name subPatterns
+            , do
+                (patterns, loc) <- argumentsWithLoc pattern_
+                case patterns of
+                    (pattern_ :<| Empty) -> pure pattern_
+                    _ -> pure $ TuplePattern loc patterns
+            ]
 
 expr :: Parser (Expr Parsed)
-expr = undefined
+expr = exprLogical
+  where
+    makeBinOp operator = \expr1 expr2 -> BinaryOperator (getLoc expr1 <> getLoc expr2) expr1 operator expr2
+
+    exprLogical =
+        exprCompare
+            `chainl1` choice
+                [ single DoubleAmpersand *> pure (makeBinOp And)
+                , single DoublePipe *> pure (makeBinOp Or)
+                ]
+
+    exprCompare =
+        exprAdd
+            `chainl1` choice
+                [ single Lexer.Less *> pure (makeBinOp Syntax.Less)
+                , single Lexer.LessEqual *> pure (makeBinOp Syntax.LessEqual)
+                , single Lexer.DoubleEqual *> pure (makeBinOp Syntax.Equal)
+                , single Lexer.NotEqual *> pure (makeBinOp Syntax.NotEqual)
+                , single Lexer.GreaterEqual *> pure (makeBinOp Syntax.GreaterEqual)
+                , single Lexer.Greater *> pure (makeBinOp Syntax.Greater)
+                ]
+
+    exprAdd =
+        exprMultiply
+            `chainl1` choice
+                [ single Lexer.Plus *> pure (makeBinOp Syntax.Add)
+                , single Lexer.Minus *> pure (makeBinOp Syntax.Subtract)
+                ]
+
+    exprMultiply =
+        exprFun
+            `chainl1` choice
+                [ single Lexer.Asterisk *> pure (makeBinOp Syntax.Multiply)
+                , single Lexer.Slash *> pure (makeBinOp Syntax.Divide)
+                ]
+    exprFun = do
+        funExpr <- exprLeaf
+        applications <- many @[_] functionApplication
+        pure $ foldl' (\expr application -> application expr) funExpr applications
+    exprLeaf =
+        choice
+            [ do
+                (name, loc) <- identifierWithLoc
+                pure (Var loc name)
+            , do
+                (name, loc) <- constructorWithLoc
+                pure (DataConstructor loc name)
+            , do
+                startLoc <- single Lexer.Lambda
+                parameters <- many pattern_
+                _ <- single Arrow
+                body <- expr
+                pure (Syntax.Lambda (startLoc <> getLoc body) parameters body)
+            , do
+                (literal, loc) <- stringLit
+                pure (Syntax.StringLiteral loc literal)
+            , do
+                (integer, loc) <- intLit
+                pure (Syntax.IntLiteral loc integer)
+            , do
+                (float, loc) <- floatLit
+                pure (Syntax.DoubleLiteral loc float)
+            , do
+                (elements, loc) <- argumentsWithLoc expr
+                case elements of
+                    (expr :<| Empty) -> pure expr
+                    _ -> pure (TupleLiteral loc elements)
+            , do
+                startLoc <- single Lexer.If
+                condition <- expr
+                _ <- single Lexer.Then
+                thenBranch <- expr
+                _ <- single Lexer.Else
+                elseBranch <- expr
+                pure (Syntax.If{loc = startLoc <> getLoc elseBranch, condition, thenBranch, elseBranch})
+            , do
+                startLoc <- single Lexer.LBrace
+                statements <- fromList <$> statement `sepEndBy` (single Lexer.Comma)
+                endLoc <- single Lexer.RBrace
+                pure (SequenceBlock (startLoc <> endLoc) statements)
+            , do
+                startLoc <- single Lexer.Match
+                scrutinee <- expr
+                _ <- single LBrace
+                cases <- fromList <$> matchCase `sepEndBy` (single Lexer.Semicolon)
+                endLoc <- single RBrace
+                pure (Syntax.Match{loc = startLoc <> endLoc, scrutinee, cases})
+            ]
+
+matchCase :: Parser (MatchCase Parsed)
+matchCase = do
+    pattern_ <- pattern_
+    _ <- single Arrow
+    body <- expr
+    pure (MkMatchCase{loc = getLoc pattern_ <> getLoc body, pattern_, body})
+
+statement :: Parser (Statement Parsed)
+statement = undefined
+
+functionApplication :: Parser (Expr Parsed -> Expr Parsed)
+functionApplication =
+    choice
+        [ do
+            (args, endLoc) <- argumentsWithLoc expr
+            pure (\inner -> Application (getLoc inner <> endLoc) inner args)
+        , do
+            _ <- single LBracket
+            typeArguments <- type_ `sepBy` (single Comma)
+            endLoc <- single RBracket
+            pure (\inner -> VisibleTypeApplication (getLoc inner <> endLoc) inner typeArguments)
+        ]
 
 import_ :: Parser Import
-import_ = empty
+import_ = undefined
 
 argumentsWithLoc :: Parser a -> Parser (Seq a, Loc)
 argumentsWithLoc parser = do

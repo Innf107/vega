@@ -37,14 +37,16 @@ data Token
     | FloatLiteral Rational
     | LParen
     | RParen
+    | LBracket
+    | RBracket
+    | LBrace
+    | RBrace
     | Lambda
-    | DoubleEquals
+    | DoubleEqual
     | Equals
     | Arrow
     | EffArrowStart
     | EffArrowEnd
-    | LBrace
-    | RBrace
     | DoubleColon
     | Colon
     | Semicolon
@@ -54,6 +56,22 @@ data Token
     | Let
     | Data
     | Forall
+    | As
+    | DoubleAmpersand
+    | DoublePipe
+    | Less
+    | LessEqual
+    | NotEqual
+    | Greater
+    | GreaterEqual
+    | Asterisk
+    | Slash
+    | Plus
+    | Minus
+    | If
+    | Then
+    | Else
+    | Match
     deriving (Show, Eq, Ord, Generic)
 
 data LexState = MkLexState
@@ -136,19 +154,32 @@ lex state = case state of
     '(' :! state -> pure (LParen, state)
     ')' :! state -> pure (RParen, state)
     '\\' :! state -> pure (Lambda, state)
-    '=' :! '=' :! state -> pure (DoubleEquals, state)
+    '=' :! '=' :! state -> pure (DoubleEqual, state)
     '=' :! state -> pure (Equals, state)
     '-' :! '>' :! state -> pure (Arrow, state)
     '-' :! '{' :! state -> pure (EffArrowStart, state)
     '}' :! '>' :! state -> pure (EffArrowEnd, state)
     '{' :! state -> pure (LBrace, state)
     '}' :! state -> pure (RBrace, state)
+    '[' :! state -> pure (LBracket, state)
+    ']' :! state -> pure (RBracket, state)
     ':' :! ':' :! state -> pure (DoubleColon, state)
     ':' :! state -> pure (Colon, state)
     ';' :! state -> pure (Semicolon, state)
     ',' :! state -> pure (Comma, state)
     '.' :! state -> pure (Period, state)
+    '|' :! '|' :! state -> pure (DoublePipe, state)
     '|' :! state -> pure (Pipe, state)
+    '&' :! '&' :! state -> pure (DoubleAmpersand, state)
+    '<' :! '=' :! state -> pure (LessEqual, state)
+    '<' :! state -> pure (Less, state)
+    '!' :! '=' :! state -> pure (NotEqual, state)
+    '>' :! '=' :! state -> pure (GreaterEqual, state)
+    '>' :! state -> pure (Greater, state)
+    '*' :! state -> pure (Asterisk, state)
+    '/' :! state -> pure (Slash, state)
+    '+' :! state -> pure (Plus, state)
+    '-' :! state -> pure (Minus, state)
     '"' :! state -> lexStringLiteral [] state
     char :! state
         | Char.isDigit char -> lexNumber [char] state
@@ -231,7 +262,16 @@ lexIdentifier :: [Char] -> LexState -> Lexer (Token, LexState)
 lexIdentifier chars state = case state of
     char :! state
         | isIdentifier char -> lexIdentifier (char : chars) state
-    state -> pure (Ident (fromString (reverse chars)), state)
+    state ->
+        case fromString (reverse chars) of
+            "data" -> pure (Data, state)
+            "forall" -> pure (Forall, state)
+            "as" -> pure (As, state)
+            "if" -> pure (If, state)
+            "then" -> pure (Then, state)
+            "else" -> pure (Else, state)
+            "match" -> pure (Match, state)
+            ident -> pure (Ident ident, state)
 
 isIdentifierStart :: Char -> Bool
 isIdentifierStart char = Char.isAlpha char || char == '_'
