@@ -21,6 +21,7 @@ data AdditionalParseError
         }
     | UnknowNamedKind Text
     | TupleKind (Seq (KindSyntax Parsed))
+    | NonVarInFunctionDefinition
     deriving stock (Eq, Ord, Generic)
 
 newtype ParserEnv = MkParserEnv
@@ -427,14 +428,63 @@ matchCase = do
     pure (MkMatchCase{loc = getLoc pattern_ <> getLoc body, pattern_, body})
 
 statement :: Parser (Statement Parsed)
-statement = undefined
+statement =
+    choice
+        [ let_
+        , do
+            startLoc <- single Lexer.Use
+            pattern_ <- pattern_
+            rhs <- expr
+            pure (Syntax.Use (startLoc <> getLoc rhs) pattern_ rhs)
+        , do
+            exprToRun <- expr
+            pure (Run (getLoc exprToRun) exprToRun)
+        ]
+
+let_ :: Parser (Statement Parsed)
+let_ = do
+    startLoc <- single Lexer.Let
+    boundPattern <- pattern_
+    choice
+        [ -- let x = e
+          do
+            _ <- single Lexer.Equals
+            rhs <- expr
+            pure (Syntax.Let (startLoc <> getLoc rhs) boundPattern rhs)
+        , -- let f(x, y) = e
+          do
+            params <- arguments pattern_
+            _ <- single Lexer.Equals
+            rhs <- expr
+            case boundPattern of
+                VarPattern _ varName -> pure $ Syntax.LetFunction (startLoc <> getLoc rhs) varName Nothing params rhs
+                _ -> customFailure NonVarInFunctionDefinition
+        , -- let f : Int -> Int; let f(x) = x
+          do
+            _ <- single Lexer.Colon
+            typeSig <- type_
+            _ <- single Lexer.Semicolon
+            _ <- single Lexer.Let
+            name <- identifier
+            params <- arguments pattern_
+            _ <- single Lexer.Equals
+            rhs <- expr
+            pure (Syntax.LetFunction (startLoc <> getLoc rhs) name (Just typeSig) params rhs)
+        ]
 
 functionApplication :: Parser (Expr Parsed -> Expr Parsed)
 functionApplication =
     choice
         [ do
-            (args, endLoc) <- argumentsWithLoc expr
-            pure (\inner -> Application (getLoc inner <> endLoc) inner args)
+            (partialArgs, endLoc) <-
+                argumentsWithLoc
+                    $ choice
+                        [ Just <$> expr
+                        , single Underscore *> pure Nothing
+                        ]
+            case sequence partialArgs of
+                Nothing -> pure (\inner -> PartialApplication (getLoc inner <> endLoc) inner partialArgs)
+                Just args -> pure (\inner -> Application (getLoc inner <> endLoc) inner args)
         , do
             _ <- single LBracket
             typeArguments <- type_ `sepBy` (single Comma)
@@ -443,7 +493,9 @@ functionApplication =
         ]
 
 import_ :: Parser Import
-import_ = undefined
+import_ = do
+    startLoc <- single Lexer.Import
+    undefined
 
 argumentsWithLoc :: Parser a -> Parser (Seq a, Loc)
 argumentsWithLoc parser = do

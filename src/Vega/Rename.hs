@@ -39,7 +39,10 @@ findGlobalVariable :: (Rename es) => Text -> Eff es (Maybe GlobalName)
 findGlobalVariable = undefined
 
 rename :: (Rename es) => Declaration Parsed -> Eff es (Declaration Renamed)
-rename = undefined
+rename (MkDeclaration loc name syntax) = do
+    -- TODO: graph stuff
+    syntax <- renameDeclarationSyntax name syntax
+    pure (MkDeclaration loc name syntax)
 
 findVarName :: Env -> Text -> Eff es Name
 findVarName env text = case lookup text env.localVariables of
@@ -119,6 +122,7 @@ renameKindSyntax env = \case
 
 renamePattern :: (Rename es) => Env -> Pattern Parsed -> Eff es (Pattern Renamed, Env -> Env)
 renamePattern env = \case
+    WildcardPattern loc -> pure (WildcardPattern loc, id)
     VarPattern loc name -> do
         (localName, envTrans) <- bindLocalVar name
         pure (VarPattern loc localName, envTrans)
@@ -127,6 +131,9 @@ renamePattern env = \case
         (localName, envTrans) <- bindLocalVar name
         pure (AsPattern loc innerPattern localName, envTrans . innerTrans)
     ConstructorPattern{} -> undefined
+    TuplePattern loc subPatterns -> do
+        (subPatterns, transformers) <- Seq.unzip <$> traverse (renamePattern env) subPatterns
+        pure (TuplePattern loc subPatterns, Util.compose transformers)
     TypePattern loc innerPattern type_ -> do
         (innerPattern, innerTrans) <- renamePattern env innerPattern
         type_ <- renameTypeSyntax env type_
@@ -143,6 +150,10 @@ renameExpr env = \case
         functionExpr <- renameExpr env functionExpr
         arguments <- traverse (renameExpr env) arguments
         pure (Application{loc, functionExpr, arguments})
+    PartialApplication{loc, functionExpr, partialArguments} -> do
+        functionExpr <- renameExpr env functionExpr
+        partialArguments <- traverse (traverse (renameExpr env)) partialArguments
+        pure (PartialApplication{loc, functionExpr, partialArguments})
     VisibleTypeApplication{loc, expr, typeArguments} -> do
         expr <- renameExpr env expr
         typeArguments <- traverse (renameTypeSyntax env) typeArguments
@@ -199,6 +210,7 @@ renameStatement env = \case
         -- before binding any parameters
         body <- renameExpr (Util.compose innerTransformers (envTrans env)) body
         pure (LetFunction{loc, name, typeSignature, parameters, body}, envTrans)
+    Use{} -> undefined
 
 renameMatchCase :: (Rename es) => Env -> MatchCase Parsed -> Eff es (MatchCase Renamed)
 renameMatchCase env (MkMatchCase{loc, pattern_, body}) = do

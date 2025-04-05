@@ -73,6 +73,11 @@ data Expr p
         , functionExpr :: Expr p
         , arguments :: Seq (Expr p)
         }
+    | PartialApplication
+        { loc :: Loc
+        , functionExpr :: Expr p
+        , partialArguments :: Seq (Maybe (Expr p))
+        }
     | VisibleTypeApplication
         { loc :: Loc
         , expr :: Expr p
@@ -112,6 +117,7 @@ data Statement p
         , parameters :: Seq (Pattern p)
         , body :: Expr p
         }
+    | Use Loc (Pattern p) (Expr p)
     deriving stock (Generic)
     deriving anyclass (HasLoc)
 
@@ -139,7 +145,8 @@ data BinaryOperator
     deriving stock (Generic)
 
 data Pattern p
-    = VarPattern Loc (XLocalName p)
+    = WildcardPattern Loc
+    | VarPattern Loc (XLocalName p)
     | AsPattern Loc (Pattern p) (XLocalName p)
     | ConstructorPattern
         { loc :: Loc

@@ -72,6 +72,9 @@ data Token
     | Then
     | Else
     | Match
+    | Underscore
+    | Use
+    | Import
     deriving (Show, Eq, Ord, Generic)
 
 data LexState = MkLexState
@@ -271,6 +274,9 @@ lexIdentifier chars state = case state of
             "then" -> pure (Then, state)
             "else" -> pure (Else, state)
             "match" -> pure (Match, state)
+            "use" -> pure (Use, state)
+            "import" -> pure (Import, state)
+            "_" -> pure (Underscore, state)
             ident -> pure (Ident ident, state)
 
 isIdentifierStart :: Char -> Bool
