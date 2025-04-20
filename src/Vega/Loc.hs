@@ -3,6 +3,7 @@ module Vega.Loc (Loc (..), HasLoc (..)) where
 import Relude
 
 import GHC.Generics (Generically (..), K1 (..), M1 (..), Rep (..), V1, (:*:) (..), (:+:) (..))
+import Vega.Pretty (Pretty (pretty), emphasis)
 
 data Loc = MkLoc
     { startLine :: Int
@@ -13,7 +14,13 @@ data Loc = MkLoc
     }
     deriving (Show, Eq, Ord, Generic)
 
+instance Pretty Loc where
+    pretty (MkLoc{file, startLine, startColumn}) =
+        -- TODO: Add flag to display end line/column as well
+        emphasis (file <> ":" <> show startLine <> ":" <> show startColumn)
+
 instance Semigroup Loc where
+    (<>) :: Loc -> Loc -> Loc
     MkLoc{startLine, startColumn, file = file1}
         <> MkLoc{endLine, endColumn, file = file2}
             | file1 /= file2 = error ("(<>) @Loc: trying to merge locations from different files")

@@ -1,5 +1,5 @@
 module Vega.Trace (
-    Category(..),
+    Category (..),
     traceIO,
     trace,
     tracePure,
@@ -7,7 +7,6 @@ module Vega.Trace (
 
 import Data.Text qualified as Text
 import Relude hiding (trace)
-import System.Environment (getEnv)
 import System.IO.Unsafe (unsafePerformIO)
 
 data Category
@@ -18,26 +17,31 @@ data Traces = MkTraces
     { driver :: Bool
     }
 
+defaultTraces :: Traces
+defaultTraces = MkTraces{driver = False}
+
 getTraces :: IO Traces
-getTraces = do
-    traceSetting <- Text.pack <$> getEnv "VEGA_TRACE"
-    let traceNames = Text.splitOn "," traceSetting
-    go (MkTraces{driver = False}) traceNames
+getTraces =
+    lookupEnv "VEGA_TRACE" >>= \case
+        Nothing -> pure defaultTraces
+        Just traceSettings -> do
+            let traceNames = Text.splitOn "," (Text.pack traceSettings)
+            go defaultTraces traceNames
   where
     go traces names = case names of
         [] -> pure traces
+        ("" : rest) -> go traces rest
         ("driver" : rest) -> go (traces{driver = True}) rest
         (trace_ : rest) -> do
             -- TODO: make the warning prettier
             putTextLn $ "WARNING: unrecognized trace category: " <> trace_
             go traces rest
 
+-- This is NOINLINE to avoid duplicating work but since getTraces is deterministic, it doesn't
+-- actually do anything dangerous
 enabledTraces :: Traces
 enabledTraces = unsafePerformIO $ getTraces
 {-# NOINLINE enabledTraces #-}
-
--- This is NOINLINE to avoid duplicating work but since getTraces is deterministic, it doesn't
--- actually do anything dangerous
 
 traceEnabled :: Category -> Bool
 traceEnabled = \case

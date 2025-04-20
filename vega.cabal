@@ -26,15 +26,19 @@ source-repository head
 library
   exposed-modules:
       Lib
+      Vega.Compilation.LIR
+      Vega.Compilation.MIR
+      Vega.Compilation.Shape
       Vega.Diff
+      Vega.Disambiguate
       Vega.Driver
-      Vega.Effect.Dependency
-      Vega.Effect.GlobalTypes
-      Vega.Effect.Handler.MemoryGraph
-      Vega.Effect.LastKnownDeclarations
+      Vega.Effect.GraphPersistence
+      Vega.Effect.GraphPersistence.InMemory
+      Vega.Error
       Vega.Lexer
       Vega.Loc
       Vega.Parser
+      Vega.Pretty
       Vega.Rename
       Vega.Syntax
       Vega.Trace
@@ -64,13 +68,21 @@ library
       PatternSynonyms
       ViewPatterns
       ApplicativeDo
+      ImplicitParams
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing
   build-depends:
       base >=4.7 && <5
+    , containers
     , effectful
+    , effectful-th
+    , filepath
     , hashtables
     , megaparsec
+    , optparse-applicative
+    , prettyprinter
     , relude
+    , time
+    , unordered-containers
     , vector
   default-language: GHC2021
 
@@ -100,13 +112,21 @@ executable vega
       PatternSynonyms
       ViewPatterns
       ApplicativeDo
+      ImplicitParams
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.7 && <5
+    , containers
     , effectful
+    , effectful-th
+    , filepath
     , hashtables
     , megaparsec
+    , optparse-applicative
+    , prettyprinter
     , relude
+    , time
+    , unordered-containers
     , vector
     , vega
   default-language: GHC2021
@@ -138,13 +158,21 @@ test-suite vega-test
       PatternSynonyms
       ViewPatterns
       ApplicativeDo
+      ImplicitParams
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.7 && <5
+    , containers
     , effectful
+    , effectful-th
+    , filepath
     , hashtables
     , megaparsec
+    , optparse-applicative
+    , prettyprinter
     , relude
+    , time
+    , unordered-containers
     , vector
     , vega
   default-language: GHC2021

@@ -7,17 +7,17 @@ import Relude hiding (Type)
 import Vega.Loc (HasLoc, Loc)
 
 data GlobalName = MkGlobalName {moduleName :: Text, name :: Text}
-    deriving stock (Generic, Eq)
+    deriving stock (Generic, Eq, Show)
     deriving anyclass (Hashable)
 
 data LocalName = MkLocalName {parent :: Name, name :: Text, count :: Int}
-    deriving stock (Generic, Eq)
+    deriving stock (Generic, Eq, Show)
     deriving anyclass (Hashable)
 
 data Name
     = Global GlobalName
     | Local LocalName
-    deriving stock (Generic, Eq)
+    deriving stock (Generic, Eq, Show)
     deriving anyclass (Hashable)
 
 unqualifiedName :: Name -> Text

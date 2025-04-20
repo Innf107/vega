@@ -1,13 +1,22 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
+
 module Vega.Util (
     seqAny2,
     zipWithSeqM,
     compose,
     unzip3Seq,
     mapAccumLM,
+    forAccumLM,
+    viaList,
+    constructorNames,
+    Untagged (..),
 ) where
 
 import Data.Sequence (Seq (..))
-import Relude
+import GHC.Exts (IsList (..))
+import GHC.Generics (C1, Generic (Rep), M1, Meta (..), (:+:))
+import GHC.TypeLits (KnownSymbol, symbolVal)
+import Relude hiding (toList)
 
 {- | Check if any two elements in two @Seq@s zipped together pairwise satisfy some predicate.
 
@@ -51,3 +60,23 @@ mapAccumLM f initial traversable =
 
 forAccumLM :: (Monad m, Traversable t) => s -> t a -> (s -> a -> m (s, b)) -> m (s, t b)
 forAccumLM initial traversable f = mapAccumLM f initial traversable
+
+constructorNames :: forall a. (ConstructorNamesG (Rep a)) => Seq Text
+constructorNames = constructorNamesG @(Rep a)
+
+viaList :: forall list1 list2. (IsList list1, IsList list2, Item list1 ~ Item list2) => list1 -> list2
+viaList = fromList . toList
+
+class ConstructorNamesG f where
+    constructorNamesG :: Seq Text
+
+instance {-# OVERLAPPING #-} (KnownSymbol name) => ConstructorNamesG (C1 (MetaCons name _fixity _strictness) _f) where
+    constructorNamesG = [fromString (symbolVal (Proxy :: Proxy name))]
+
+instance (ConstructorNamesG f, ConstructorNamesG g) => ConstructorNamesG (f :+: g) where
+    constructorNamesG = constructorNamesG @f <> constructorNamesG @g
+
+instance {-# OVERLAPPABLE #-} (ConstructorNamesG f) => ConstructorNamesG (M1 _i _c f) where
+    constructorNamesG = constructorNamesG @f
+
+newtype Untagged a = MkUntagged a

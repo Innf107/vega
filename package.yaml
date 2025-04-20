@@ -22,10 +22,17 @@ description:         Please see the README on GitHub at <https://github.com/gith
 dependencies:
 - base >= 4.7 && < 5
 - relude
+- containers
+- unordered-containers
 - effectful
+- effectful-th
 - hashtables
 - vector
 - megaparsec
+- optparse-applicative
+- filepath
+- time
+- prettyprinter
 
 ghc-options:
 - -Wall
@@ -83,3 +90,4 @@ default-extensions:
 - PatternSynonyms
 - ViewPatterns
 - ApplicativeDo
+- ImplicitParams

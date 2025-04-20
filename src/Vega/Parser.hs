@@ -1,6 +1,7 @@
+{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE NoOverloadedLists #-}
 
-module Vega.Parser (Parser, module_) where
+module Vega.Parser (Parser, AdditionalParseError (..), parse) where
 
 import Relude hiding (many)
 
@@ -8,21 +9,23 @@ import Vega.Syntax
 
 import Data.Sequence (Seq (..))
 import GHC.IsList (Item)
-import Text.Megaparsec hiding (Token, many, sepBy, sepBy1, single)
+import Text.Megaparsec hiding (Token, many, parse, sepBy, sepBy1, sepEndBy, single)
 import Text.Megaparsec qualified as MegaParsec
 import Vega.Lexer as Lexer (Token (..))
-import Vega.Loc (Loc (MkLoc), getLoc)
+import Vega.Loc (HasLoc, Loc (MkLoc, endColumn, endLine, file, startColumn, startLine), getLoc)
 import Vega.Syntax qualified as Syntax
 
 data AdditionalParseError
     = MismatchedFunctionName
-        { typeSignature :: Text
+        { loc :: Loc
+        , typeSignature :: Text
         , definition :: Text
         }
-    | UnknowNamedKind Text
-    | TupleKind (Seq (KindSyntax Parsed))
-    | NonVarInFunctionDefinition
+    | UnknowNamedKind Loc Text
+    | TupleKind Loc (Seq (KindSyntax Parsed))
+    | NonVarInFunctionDefinition Loc
     deriving stock (Eq, Ord, Generic)
+    deriving anyclass (HasLoc)
 
 newtype ParserEnv = MkParserEnv
     { moduleName :: Text
@@ -36,11 +39,12 @@ globalNameForCurrentModule name = do
     pure (MkGlobalName{moduleName, name})
 
 single :: Token -> Parser Loc
-single target = MegaParsec.token match (fromList [undefined])
+single target = MegaParsec.token match (fromList [Tokens (fromList [(target, dummyLoc)])])
   where
     match = \case
         (token, loc) | token == target -> Just loc
         _ -> Nothing
+    dummyLoc = MkLoc{startLine = 0, startColumn = 0, endLine = 0, endColumn = 0, file = "<<dummy>>"}
 
 stringLit :: Parser (Text, Loc)
 stringLit = MegaParsec.token match (fromList [Label (fromList "string literal")])
@@ -98,6 +102,10 @@ sepBy item separator = fromList <$> MegaParsec.sepBy item separator
 sepBy1 :: (MonadPlus m, IsList l, Item l ~ a) => m a -> m sep -> m l
 sepBy1 item separator = fromList <$> MegaParsec.sepBy1 item separator
 
+sepEndBy :: (MonadPlus m, IsList l, Item l ~ a) => m a -> m sep -> m l
+sepEndBy item separator = fromList <$> MegaParsec.sepEndBy item separator
+
+
 -- Why is this not in megaparsec?
 chainl1 :: (MonadPlus m) => m a -> m (a -> a -> a) -> m a
 chainl1 parser between = do
@@ -105,10 +113,15 @@ chainl1 parser between = do
     rest <- many @[_] (liftA2 (,) between parser)
     pure $ foldl' (\left (operator, right) -> left `operator` right) first rest
 
+parse :: Text -> FilePath -> [(Token, Loc)] -> Either (ParseErrorBundle [(Token, Loc)] AdditionalParseError) ParsedModule
+parse moduleName filePath tokens = do
+    let parserEnv = MkParserEnv{moduleName}
+    MegaParsec.parse (runReaderT (module_ <* single EOF) parserEnv) filePath tokens
+
 module_ :: Parser ParsedModule
 module_ = do
-    imports <- many import_
-    declarations <- many declaration
+    imports <- import_ `sepEndBy` (single Semicolon)
+    declarations <- declaration `sepEndBy` (single Semicolon) 
     pure (MkParsedModule{imports, declarations})
 
 declaration :: Parser (Declaration Parsed)
@@ -123,6 +136,7 @@ defineFunction = do
     (name, startLoc) <- identifierWithLoc
     _ <- single Colon
     typeSignature <- type_
+    _ <- single Semicolon
     definitionName <- identifier
 
     when (name /= definitionName) do
@@ -130,7 +144,8 @@ defineFunction = do
             ( fromList
                 [ ErrorCustom
                     ( MismatchedFunctionName
-                        { typeSignature = name
+                        { loc = startLoc
+                        , typeSignature = name
                         , definition = definitionName
                         }
                     )
@@ -275,7 +290,7 @@ kind = do
                 case namedKind of
                     "Type" -> pure $ TypeS loc
                     "Effect" -> pure $ EffectS loc
-                    _ -> customFailure (UnknowNamedKind namedKind)
+                    _ -> customFailure (UnknowNamedKind loc namedKind)
             , do
                 (parameterKinds, startLoc) <- argumentsWithLoc kind
 
@@ -286,7 +301,7 @@ kind = do
                         pure (ArrowKindS (startLoc <> getLoc result) parameterKinds result)
                     , case parameterKinds of
                         (kind :<| _) -> pure kind
-                        _ -> customFailure (TupleKind parameterKinds)
+                        _ -> customFailure (TupleKind startLoc parameterKinds)
                     ]
             ]
 
@@ -298,19 +313,18 @@ pattern_ = do
         Empty -> pure firstPattern
         (_ :|> lastPattern) -> pure (OrPattern (getLoc firstPattern <> getLoc lastPattern) (firstPattern :<| rest))
   where
-    pattern1 =
+    pattern1 = do
+        inner <- pattern2
         choice
             [ do
-                inner <- pattern2
                 _ <- single As
                 (name, endLoc) <- identifierWithLoc
                 pure (AsPattern (getLoc inner <> endLoc) inner name)
             , do
-                inner <- pattern2
                 _ <- single Colon
                 typeSignature <- type_
                 pure (TypePattern (getLoc inner <> getLoc typeSignature) inner typeSignature)
-            , pattern2
+            , pure inner
             ]
     pattern2 =
         choice
@@ -458,7 +472,7 @@ let_ = do
             rhs <- expr
             case boundPattern of
                 VarPattern _ varName -> pure $ Syntax.LetFunction (startLoc <> getLoc rhs) varName Nothing params rhs
-                _ -> customFailure NonVarInFunctionDefinition
+                _ -> customFailure (NonVarInFunctionDefinition (getLoc boundPattern))
         , -- let f : Int -> Int; let f(x) = x
           do
             _ <- single Lexer.Colon

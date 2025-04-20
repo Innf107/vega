@@ -1,7 +1,5 @@
 module Vega.TypeCheck where
 
-import Vega.Effect.Dependency
-import Vega.Effect.GlobalTypes
 import Vega.Syntax
 
 import Effectful hiding (Effect)
@@ -10,6 +8,9 @@ import Relude hiding (Type)
 import Relude.Extra
 
 import Vega.Util (compose, unzip3Seq, zipWithSeqM)
+
+import Vega.Effect.GraphPersistence (GraphPersistence)
+import Vega.Effect.GraphPersistence qualified as GraphPersistence
 
 import Data.Sequence qualified as Seq
 import Vega.Loc (HasLoc, Loc)
@@ -47,9 +48,9 @@ emptyEnv = MkEnv mempty
 bindVarType :: LocalName -> Type -> Env -> Env
 bindVarType name type_ env@MkEnv{localTypes} = env{localTypes = insert name type_ localTypes}
 
-type TypeCheck es = (GlobalTypes :> es, Writer (Seq TypeError) :> es)
+type TypeCheck es = (GraphPersistence :> es, Writer (Seq TypeError) :> es)
 
-checkDeclaration :: (GlobalTypes :> es) => Declaration Renamed -> Eff es (Declaration Typed)
+checkDeclaration :: (GraphPersistence :> es) => Declaration Renamed -> Eff es (Declaration Typed)
 checkDeclaration = undefined
 
 typeError :: (Writer (Seq TypeError) :> es) => TypeError -> Eff es ()
@@ -155,8 +156,10 @@ infer :: (TypeCheck es) => Env -> Expr Renamed -> Eff es (Type, Expr Typed, Effe
 infer env = \case
     Var loc name -> case name of
         Global globalName -> do
-            type_ <- getGlobalType globalName
-            pure (type_, Var loc name, Pure)
+            type_ <- GraphPersistence.getGlobalType globalName
+            case type_ of
+                Nothing -> error $ "infer: reference to unknown global declaration: " <> show name
+                Just type_ -> pure (type_, Var loc name, Pure)
         Local localName -> do
             undefined
     Application{loc, functionExpr, arguments} -> do
