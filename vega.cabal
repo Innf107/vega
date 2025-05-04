@@ -28,7 +28,9 @@ library
       Lib
       Vega.Compilation.LIR
       Vega.Compilation.MIR
+      Vega.Compilation.MIRToLIR
       Vega.Compilation.Shape
+      Vega.Compilation.VegaToMIR
       Vega.Diff
       Vega.Disambiguate
       Vega.Driver
