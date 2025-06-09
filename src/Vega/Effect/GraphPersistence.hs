@@ -10,12 +10,9 @@ import Effectful
 import Effectful.Dispatch.Dynamic (send)
 import Effectful.TH (makeEffect)
 
-import Data.Time (UTCTime)
 import Vega.Error (Error)
 
 data GraphPersistence :: Effect where
-    AddTrackedModule :: FilePath -> UTCTime -> GraphPersistence m ()
-    GetTrackedModules :: GraphPersistence m (Map FilePath UTCTime)
     LastKnownDeclarations :: FilePath -> GraphPersistence m (Maybe (HashMap GlobalName (Declaration Parsed)))
     SetKnownDeclarations :: FilePath -> HashMap GlobalName (Declaration Parsed) -> GraphPersistence m ()
     GetGlobalType :: GlobalName -> GraphPersistence m (Maybe Type)

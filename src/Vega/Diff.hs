@@ -1,6 +1,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 
-module Vega.Diff (DiffChange(..), diffDeclarations) where
+module Vega.Diff (DiffChange (..), diffDeclarations, reportNewModule) where
 
 import Relude hiding (Type, evalState, get, put)
 
@@ -9,18 +9,21 @@ import Vega.Syntax
 import Effectful
 import GHC.Generics
 
+import Data.HashMap.Strict qualified as HashMap
 import Effectful.Writer.Static.Local (execWriter, tell)
 import Vega.Loc (Loc)
-import Data.HashMap.Strict qualified as HashMap
 
 import Data.Sequence qualified as Seq
-import Vega.Util qualified as Util
 import Effectful.State.Static.Local (evalState, get, put)
+import Vega.Util qualified as Util
 
 data DiffChange
     = Added (Declaration Parsed)
     | Removed GlobalName
     | Changed (Declaration Parsed)
+
+reportNewModule :: ParsedModule -> Seq DiffChange
+reportNewModule MkParsedModule{declarations} = fmap Added declarations
 
 diffDeclarations :: Seq (Declaration Parsed) -> HashMap GlobalName (Declaration Parsed) -> Eff es (Seq DiffChange)
 diffDeclarations declarations allPreviousDeclarations = evalState allPreviousDeclarations $ execWriter @(Seq DiffChange) $ do
@@ -85,7 +88,7 @@ instance (Diff a) => Diff (Seq a) where
         (Seq.length seq1 /= Seq.length seq2)
             || Util.seqAny2 diff seq1 seq2
 
-deriving via Generically (Maybe a) instance Diff a => Diff (Maybe a)
+deriving via Generically (Maybe a) instance (Diff a) => Diff (Maybe a)
 deriving via Generically (Either a b) instance (Diff a, Diff b) => Diff (Either a b)
 deriving via Generically (a, b) instance (Diff a, Diff b) => Diff (a, b)
 

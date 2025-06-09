@@ -74,9 +74,9 @@ library
       ImplicitParams
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing
   build-depends:
-      base >=4.7 && <5
+      aeson
+    , base >=4.7 && <5
     , containers
-    , dhall
     , effectful
     , effectful-th
     , filepath
@@ -89,6 +89,7 @@ library
     , unordered-containers
     , vector
     , witherable
+    , yaml
   default-language: GHC2021
 
 executable vega
@@ -120,9 +121,9 @@ executable vega
       ImplicitParams
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      base >=4.7 && <5
+      aeson
+    , base >=4.7 && <5
     , containers
-    , dhall
     , effectful
     , effectful-th
     , filepath
@@ -136,6 +137,7 @@ executable vega
     , vector
     , vega
     , witherable
+    , yaml
   default-language: GHC2021
 
 test-suite vega-test
@@ -168,9 +170,9 @@ test-suite vega-test
       ImplicitParams
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -threaded -rtsopts -with-rtsopts=-N
   build-depends:
-      base >=4.7 && <5
+      aeson
+    , base >=4.7 && <5
     , containers
-    , dhall
     , effectful
     , effectful-th
     , filepath
@@ -184,4 +186,5 @@ test-suite vega-test
     , vector
     , vega
     , witherable
+    , yaml
   default-language: GHC2021

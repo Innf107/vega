@@ -5,8 +5,10 @@ import Relude hiding (Reader, runReader)
 import Options.Applicative
 import Vega.Driver qualified as Driver
 
+import Control.Exception (throw)
 import Data.Text qualified as Text
 import Effectful (Eff, IOE, runEff)
+import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.FileSystem (FileSystem, runFileSystem)
 import Effectful.Reader.Static (Reader, runReader)
 import Text.Read qualified as Read
@@ -54,15 +56,15 @@ execOptions = do
 parser :: Parser Options
 parser =
     asum @[]
-        [ hsubparser
-            $ command "build" (info buildOptions fullDesc)
-        , hsubparser
-            $ command "exec" (info execOptions fullDesc)
+        [ hsubparser $
+            command "build" (info buildOptions fullDesc)
+        , hsubparser $
+            command "exec" (info execOptions fullDesc)
         ]
 
-run :: PersistenceBackend -> Eff '[GraphPersistence, FileSystem, IOE] a -> IO a
+run :: PersistenceBackend -> Eff '[Concurrent, GraphPersistence, FileSystem, IOE] a -> IO a
 run persistence action = case persistence of
-    InMemory -> runEff $ runFileSystem $ runInMemory $ action
+    InMemory -> runEff $ runFileSystem $ runInMemory $ runConcurrent $ action
 
 main :: IO ()
 main = do
@@ -71,7 +73,7 @@ main = do
         Build{persistence} -> run persistence do
             findBuildConfig "." >>= \case
                 Missing -> undefined
-                Invalid _ -> undefined
+                Invalid err -> throw err -- TODO
                 Found config -> runReader config do
                     Driver.rebuild
         Exec{file, mainFunction} -> run InMemory do

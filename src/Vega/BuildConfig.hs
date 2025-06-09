@@ -1,6 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module Vega.BuildConfig (BuildConfig (..), BuildConfigPresence (..), buildConfigDecoder, findBuildConfig) where
+module Vega.BuildConfig (BuildConfigContents (..), BuildConfig (..), sourceDirectory, BuildConfigPresence (..), findBuildConfig) where
 
 import Relude
 
@@ -8,44 +8,54 @@ import Control.Exception
 import Effectful
 import Effectful.FileSystem (FileSystem, canonicalizePath, listDirectory)
 
-import Dhall qualified
-import Dhall.Marshal.Decode (Decoder, field, record)
-import Dhall.Src (Src)
+import Data.Aeson qualified as Aeson
+import Data.Yaml as Yaml hiding (object)
+
 import System.FilePath ((</>))
 
-data BuildConfig = MkBuildConfig
+data BuildConfigContents = MkBuildConfigContents
     { name :: Text
-    , projectRoot :: FilePath
-    , sourceDirectory :: FilePath
+    , sourceDirectory :: Maybe FilePath
     }
     deriving (Generic, Show)
 
-buildConfigDecoder :: FilePath -> Decoder BuildConfig
-buildConfigDecoder projectRoot =
-    record do
-        name <- field "name" Dhall.auto
-        -- TODO: Figure out how to make this optional or switch back to YAML
-        sourceDirectory <- (projectRoot </>) <$> field "source-directory" Dhall.auto
-        pure MkBuildConfig{..}
+instance FromJSON BuildConfigContents where
+    parseJSON =
+        Aeson.genericParseJSON
+            ( Aeson.defaultOptions
+                { Aeson.fieldLabelModifier = Aeson.camelTo2 '-'
+                , Aeson.rejectUnknownFields = True
+                }
+            )
+
+data BuildConfig = MkBuildConfig
+    { contents :: BuildConfigContents
+    , projectRoot :: FilePath
+    }
+    deriving stock (Generic, Show)
+
+sourceDirectory :: BuildConfig -> FilePath
+sourceDirectory config = case config.contents.sourceDirectory of
+    Nothing -> config.projectRoot </> "src"
+    Just sourceDirectory -> config.projectRoot </> sourceDirectory
 
 data BuildConfigPresence
     = Found BuildConfig
-    | Invalid (Dhall.ExtractErrors Src Void)
+    | Invalid Yaml.ParseException
     | Missing
 
 findBuildConfig :: (FileSystem :> es, IOE :> es) => FilePath -> Eff es BuildConfigPresence
 findBuildConfig directory = do
     files <- listDirectory directory
-    case "vega.dhall" `elem` files of
+    case "vega.yaml" `elem` files of
         True -> do
             projectRoot <- canonicalizePath $ directory
-            let foundPath = projectRoot </> "vega.dhall"
+            let foundPath = projectRoot </> "vega.yaml"
 
-            -- TODO: catch the remaining errors
-            configOrError <- liftIO $ try @(Dhall.ExtractErrors Src Void) $ Dhall.inputFile (buildConfigDecoder projectRoot) foundPath
+            configOrError <- liftIO $ Yaml.decodeFileEither foundPath
             case configOrError of
                 Left error -> pure (Invalid error)
-                Right config -> pure (Found config)
+                Right contents -> pure (Found (MkBuildConfig{contents, projectRoot}))
         False -> do
             parentDirectory <- canonicalizePath (directory </> "..")
             if parentDirectory == directory
