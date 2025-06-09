@@ -33,6 +33,8 @@ dependencies:
 - filepath
 - time
 - prettyprinter
+- dhall
+- witherable
 
 ghc-options:
 - -Wall

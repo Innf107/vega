@@ -121,7 +121,7 @@ parse moduleName filePath tokens = do
 module_ :: Parser ParsedModule
 module_ = do
     imports <- import_ `sepEndBy` (single Semicolon)
-    declarations <- declaration `sepEndBy` (single Semicolon) 
+    declarations <- declaration `sepEndBy` (single Semicolon)
     pure (MkParsedModule{imports, declarations})
 
 declaration :: Parser (Declaration Parsed)
