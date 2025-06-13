@@ -27,7 +27,7 @@ import Vega.Error qualified as Error
 import Vega.Lexer qualified as Lexer
 import Vega.Parser qualified as Parser
 import Vega.Syntax
-import Vega.Trace (Category (Driver), trace)
+import Vega.Trace (Category (Driver), trace, traceEnabled)
 import Witherable (wither)
 
 type Driver es = (Reader BuildConfig :> es, GraphPersistence :> es, IOE :> es, FileSystem :> es, Concurrent :> es)
@@ -68,8 +68,16 @@ moduleNameForPath path = toText path
 
 rebuild :: (Driver es) => Eff es ()
 rebuild = do
+    -- TODO: check file modifications to avoid having to diff every module every time
     sourceFiles <- findSourceFiles
     diffChanges <- fold <$> forConcurrently sourceFiles parseAndDiff
+
+    when (traceEnabled Driver) do
+        for_ diffChanges \case
+            Diff.Added decl -> trace Driver ("Declaration added: " <> show decl.name)
+            Diff.Removed decl -> trace Driver ("Declaration removed: " <> show decl.name)
+            Diff.Changed decl -> trace Driver ("Declaration changed: " <> show decl.name)
+
     undefined
 
 execute :: FilePath -> Text -> Eff es ()

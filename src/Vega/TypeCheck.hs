@@ -8,6 +8,7 @@ import Relude hiding (Type)
 import Relude.Extra
 
 import Vega.Util (compose, unzip3Seq, zipWithSeqM)
+import Vega.Error (TypeError(..))
 
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
@@ -15,28 +16,6 @@ import Vega.Effect.GraphPersistence qualified as GraphPersistence
 import Data.Sequence qualified as Seq
 import Vega.Loc (HasLoc, Loc)
 
-data TypeError
-    = FunctionDefinedWithIncorrectNumberOfArguments
-        { loc :: Loc
-        , functionName :: GlobalName
-        , expectedType :: Type
-        , expectedNumberOfArguments :: Int
-        , numberOfDefinedParameters :: Int
-        }
-    | LambdaDefinedWithIncorrectNumberOfArguments
-        { loc :: Loc
-        , expectedType :: Type
-        , expected :: Int
-        , actual :: Int
-        }
-    | FunctionAppliedToIncorrectNumberOfArgs
-        { loc :: Loc
-        , functionType :: Type
-        , expected :: Int
-        , actual :: Int
-        }
-    deriving stock (Generic)
-    deriving anyclass (HasLoc)
 
 newtype Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -97,6 +76,7 @@ checkPattern expectedType = \case
         subsumes innerType expectedType
         pure (TypePattern loc innerPattern innerTypeSyntax, innerTrans)
     OrPattern{} -> undefined
+    _ -> undefined
 
 inferPattern :: (TypeCheck es) => Pattern Renamed -> Eff es (Pattern Typed, Type, Env -> Env)
 inferPattern = \case

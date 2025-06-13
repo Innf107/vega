@@ -3,6 +3,7 @@ module Vega.Trace (
     traceIO,
     trace,
     tracePure,
+    traceEnabled
 ) where
 
 import Data.Text qualified as Text

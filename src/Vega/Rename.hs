@@ -1,5 +1,6 @@
 module Vega.Rename (rename) where
 
+
 import Relude
 import Relude.Extra
 
@@ -10,6 +11,7 @@ import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Effectful (Eff)
 import Vega.Util qualified as Util
+
 
 type Rename es = (() :: Constraint)
 

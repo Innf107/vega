@@ -47,6 +47,7 @@ ghc-options:
 - -Wmissing-home-modules
 - -Wredundant-constraints
 - -Wno-name-shadowing
+- -Werror=incomplete-patterns
 
 library:
   source-dirs: src

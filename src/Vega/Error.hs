@@ -1,8 +1,8 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module Vega.Error (Error (..), printParseErrors) where
+module Vega.Error (Error (..), RenameError (..), TypeError (..), printParseErrors) where
 
-import Relude
+import Relude hiding (Type)
 
 import Effectful
 
@@ -26,13 +26,39 @@ import Text.Megaparsec (
 import Text.Megaparsec.Error (ErrorItem (..), ParseErrorBundle (..))
 import Text.Megaparsec.Stream (TraversableStream (..))
 import Vega.Lexer (Token)
-import Vega.Loc (Loc (..), getLoc)
+import Vega.Loc (HasLoc, Loc (..), getLoc)
 import Vega.Parser (AdditionalParseError (MismatchedFunctionName))
 import Vega.Parser qualified as Parser
 import Vega.Pretty (Ann, Doc, defaultPrettyANSIIConfig, errorDoc, intercalateDoc, keyword, plain, pretty, prettyANSII, vsep, (<+>))
+import Vega.Syntax (GlobalName, Type)
 import Vega.Util (viaList)
 
 data Error
+
+data RenameError
+
+data TypeError
+    = FunctionDefinedWithIncorrectNumberOfArguments
+        { loc :: Loc
+        , functionName :: GlobalName
+        , expectedType :: Type
+        , expectedNumberOfArguments :: Int
+        , numberOfDefinedParameters :: Int
+        }
+    | LambdaDefinedWithIncorrectNumberOfArguments
+        { loc :: Loc
+        , expectedType :: Type
+        , expected :: Int
+        , actual :: Int
+        }
+    | FunctionAppliedToIncorrectNumberOfArgs
+        { loc :: Loc
+        , functionType :: Type
+        , expected :: Int
+        , actual :: Int
+        }
+    deriving stock (Generic)
+    deriving anyclass (HasLoc)
 
 data ErrorMessage = MkErrorMessage
     { location :: Loc
@@ -58,7 +84,7 @@ generateParseErrorMessage = \case
         [ MkErrorMessage
                 { location
                 , contents =
-                        "    Expected: "
+                    "    Expected: "
                         <> prettyExpected expected
                         <> "\n      Actual: "
                         <> prettyErrorItem actual
@@ -77,8 +103,8 @@ generateFancyParseErrorMessage = \case
             { location = getLoc error
             , contents =
                 "Parse Error:" <+> case error of
-                    MismatchedFunctionName{typeSignature, definition} ->
-                        "Function"
+                    MismatchedFunctionName{typeSignature, definition} -> undefined
+                    _ -> undefined
             }
 
 prettyErrorItem :: ErrorItem (Token, Loc) -> Doc Ann
@@ -102,14 +128,14 @@ errorItemLocation EndOfInput = undefined
 withErrorLocation :: (MonadIO io) => ErrorMessage -> io (Doc Ann)
 withErrorLocation MkErrorMessage{location, contents} = do
     code <- extractRange location
-    pure
-        $ pretty location
-        <> ": "
-        <> errorDoc "ERROR:"
-        <> "\n"
-        <> contents
-        <> "\n"
-        <> code
+    pure $
+        pretty location
+            <> ": "
+            <> errorDoc "ERROR:"
+            <> "\n"
+            <> contents
+            <> "\n"
+            <> code
 
 maxDisplayedLineCount :: Int
 maxDisplayedLineCount = 5
@@ -154,8 +180,8 @@ extractRange loc = do
 
     let separator = plain (Text.replicate linePadding " ") <> " " <> keyword "┃ "
 
-    pure
-        $ vsep @Vector
+    pure $
+        vsep @Vector
             [ separator
             , codeLines
             , separator <> underline
