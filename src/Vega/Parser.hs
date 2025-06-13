@@ -28,7 +28,7 @@ data AdditionalParseError
     deriving anyclass (HasLoc)
 
 newtype ParserEnv = MkParserEnv
-    { moduleName :: Text
+    { moduleName :: ModuleName
     }
 
 type Parser = ReaderT ParserEnv (Parsec AdditionalParseError [(Token, Loc)])
@@ -105,7 +105,6 @@ sepBy1 item separator = fromList <$> MegaParsec.sepBy1 item separator
 sepEndBy :: (MonadPlus m, IsList l, Item l ~ a) => m a -> m sep -> m l
 sepEndBy item separator = fromList <$> MegaParsec.sepEndBy item separator
 
-
 -- Why is this not in megaparsec?
 chainl1 :: (MonadPlus m) => m a -> m (a -> a -> a) -> m a
 chainl1 parser between = do
@@ -113,7 +112,7 @@ chainl1 parser between = do
     rest <- many @[_] (liftA2 (,) between parser)
     pure $ foldl' (\left (operator, right) -> left `operator` right) first rest
 
-parse :: Text -> FilePath -> [(Token, Loc)] -> Either (ParseErrorBundle [(Token, Loc)] AdditionalParseError) ParsedModule
+parse :: ModuleName -> FilePath -> [(Token, Loc)] -> Either (ParseErrorBundle [(Token, Loc)] AdditionalParseError) ParsedModule
 parse moduleName filePath tokens = do
     let parserEnv = MkParserEnv{moduleName}
     MegaParsec.parse (runReaderT (module_ <* single EOF) parserEnv) filePath tokens
@@ -211,8 +210,8 @@ type_ =
     type1 = do
         typeConstructor <- type2
         applications <- many @[_] $ argumentsWithLoc type_
-        pure
-            $ foldl'
+        pure $
+            foldl'
                 (\constr (arguments, endLoc) -> TypeApplicationS (getLoc typeConstructor <> endLoc) constr arguments)
                 typeConstructor
                 applications
@@ -223,8 +222,8 @@ type_ =
             , do
                 (name, loc) <- constructorWithLoc
                 applications <- many @[_] (argumentsWithLoc type_)
-                pure
-                    $ foldl'
+                pure $
+                    foldl'
                         (\constr (args, loc) -> TypeApplicationS (getLoc constr <> loc) constr args)
                         (TypeConstructorS loc name)
                         applications
@@ -491,8 +490,8 @@ functionApplication =
     choice
         [ do
             (partialArgs, endLoc) <-
-                argumentsWithLoc
-                    $ choice
+                argumentsWithLoc $
+                    choice
                         [ Just <$> expr
                         , single Underscore *> pure Nothing
                         ]
@@ -509,7 +508,28 @@ functionApplication =
 import_ :: Parser Import
 import_ = do
     startLoc <- single Lexer.Import
-    undefined
+    (module_, _loc) <- moduleName
+    choice
+        [ do
+            _ <- single As
+            (importedAs, endLoc) <- constructorWithLoc
+            pure
+                ( ImportQualified
+                    { loc = startLoc <> endLoc
+                    , moduleName = module_
+                    , importedAs
+                    }
+                )
+        , do
+            (identifiers, endLoc) <- argumentsWithLoc (identifier <|> constructor)
+            pure (ImportUnqualified (startLoc <> endLoc) module_ identifiers)
+        ]
+
+moduleName :: Parser (ModuleName, Loc)
+moduleName = do
+    -- TODO: do something sensible
+    (literal, loc) <- stringLit
+    pure (MkModuleName literal, loc)
 
 argumentsWithLoc :: Parser a -> Parser (Seq a, Loc)
 argumentsWithLoc parser = do

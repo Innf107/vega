@@ -1,19 +1,19 @@
 module Vega.Rename (rename) where
 
-
-import Relude
+import Relude hiding (Reader, ask, runReader)
 import Relude.Extra
 
 import Vega.Syntax
 
-import Data.Kind (Constraint)
+import Data.HashSet qualified as HashSet
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
-import Effectful (Eff)
+import Effectful (Eff, (:>))
+import Effectful.Reader.Static (Reader, ask, runReader)
+import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getModuleImportScope)
 import Vega.Util qualified as Util
 
-
-type Rename es = (() :: Constraint)
+type Rename es = (GraphPersistence :> es, Reader GlobalName :> es)
 
 data Env = MkEnv
     { localVariables :: Map Text LocalName
@@ -27,36 +27,66 @@ emptyEnv =
         , localTypeVariables = mempty
         }
 
-bindLocalVar :: Text -> Eff es (LocalName, Env -> Env)
+bindLocalVar :: (Rename es) => Text -> Eff es (LocalName, Env -> Env)
 bindLocalVar text = do
-    localName <- undefined text
+    parent <- ask @GlobalName
+    let count = 0
+    let localName = MkLocalName{parent, name = text, count}
     pure (localName, \env -> env{localVariables = insert text localName env.localVariables})
 
-bindTypeVariable :: Text -> Eff es (LocalName, Env -> Env)
+bindTypeVariable :: (Rename es) => Text -> Eff es (LocalName, Env -> Env)
 bindTypeVariable text = do
-    localName <- undefined text
+    parent <- ask @GlobalName
+    let count = 0 -- TODO
+    let localName = MkLocalName{parent, name = text, count}
     pure (localName, \env -> env{localTypeVariables = insert text localName env.localTypeVariables})
 
-findGlobalVariable :: (Rename es) => Text -> Eff es (Maybe GlobalName)
-findGlobalVariable = undefined
+data GlobalVariableOccurance
+    = Found GlobalName
+    | NotFound
+    | Ambiguous (Seq GlobalName)
+    | Inaccessible (Seq GlobalName)
 
-rename :: (Rename es) => Declaration Parsed -> Eff es (Declaration Renamed)
-rename (MkDeclaration loc name syntax) = do
+findGlobalVariable :: (Rename es) => Text -> Eff es GlobalVariableOccurance
+findGlobalVariable var = do
+    parent <- ask @GlobalName
+
+    importScope <- getModuleImportScope parent.moduleName
+    candidates <- findMatchingNames var
+
+    case Seq.filter (\name -> isInScope name importScope) candidates of
+        [] -> case candidates of
+            [] -> pure NotFound
+            _ -> pure $ Inaccessible candidates
+        [var] -> pure $ Found var
+        candidatesInScope -> pure $ Ambiguous candidatesInScope
+
+isInScope :: GlobalName -> ImportScope -> Bool
+isInScope name scope = do
+    case lookup name.moduleName scope.imports of
+        Nothing -> False
+        Just Qualified -> undefined
+        Just (Unqualified importedNames) -> HashSet.member name.name importedNames
+
+rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, Seq GlobalName)
+rename (MkDeclaration loc name syntax) = runReader name do
     -- TODO: graph stuff
     syntax <- renameDeclarationSyntax name syntax
-    pure (MkDeclaration loc name syntax)
+    pure (MkDeclaration loc name syntax, undefined)
 
-findVarName :: Env -> Text -> Eff es Name
+findVarName :: (Rename es) => Env -> Text -> Eff es Name
 findVarName env text = case lookup text env.localVariables of
     Just localName -> pure (Local localName)
     Nothing ->
         findGlobalVariable text >>= \case
-            Just globalName -> pure (Global globalName)
-            Nothing ->
+            Found globalName -> pure (Global globalName)
+            NotFound ->
                 -- TODO: error message. Ideally we don't want this to abort everything but that means we need to return some kind of
                 -- partial name standin and (somehow) propagate that to the next stage?
                 -- Since this runs per declaration, maybe failing wouldn't be *terrible* but it would still be nice to have x + y show two errors
                 undefined
+            Ambiguous names -> undefined
+            Inaccessible names -> undefined
 
 findTypeVariable :: Env -> Text -> Eff es LocalName
 findTypeVariable env text = case lookup text env.localTypeVariables of

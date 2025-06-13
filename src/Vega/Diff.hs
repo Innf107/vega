@@ -105,6 +105,7 @@ deriving via Generically (KindSyntax Parsed) instance Diff (KindSyntax Parsed)
 deriving via Generically LocalName instance Diff LocalName
 deriving via Generically GlobalName instance Diff GlobalName
 deriving via Generically Name instance Diff Name
+deriving via Generically ModuleName instance Diff ModuleName
 
 deriving via DiffFromEq Text instance Diff Text
 deriving via DiffFromEq Int instance Diff Int

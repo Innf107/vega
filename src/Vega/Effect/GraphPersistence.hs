@@ -7,7 +7,6 @@ import Relude hiding (Type)
 import Vega.Syntax hiding (Effect)
 
 import Effectful
-import Effectful.Dispatch.Dynamic (send)
 import Effectful.TH (makeEffect)
 
 import Vega.Error (Error, RenameError, TypeError)
@@ -17,16 +16,24 @@ data GraphData error a
     | Missing
     | Failed error
 
+data WorkItem
+    = Rename GlobalName
+    | TypeCheck GlobalName
+
 data GraphPersistence :: Effect where
-    -- File Data
+    -- Module Data
     LastKnownDeclarations :: FilePath -> GraphPersistence m (Maybe (HashMap GlobalName (Declaration Parsed)))
     SetKnownDeclarations :: FilePath -> HashMap GlobalName (Declaration Parsed) -> GraphPersistence m ()
-    -- New Declarations
+    GetModuleImportScope :: ModuleName -> GraphPersistence m ImportScope
+    SetModuleImportScope :: ModuleName -> ImportScope -> GraphPersistence m ()
+    -- Declarations
     AddDeclaration :: Declaration Parsed -> GraphPersistence m ()
-    -- Declaration Retrieval
     GetParsed :: GlobalName -> GraphPersistence m (Declaration Parsed)
+    SetParsed :: Declaration Parsed -> GraphPersistence m ()
     GetRenamed :: GlobalName -> GraphPersistence m (GraphData RenameError (Declaration Renamed))
+    SetRenamed :: Declaration Renamed -> GraphPersistence m ()
     GetTyped :: GlobalName -> GraphPersistence m (GraphData TypeError (Declaration Typed))
+    SetTyped :: Declaration Typed -> GraphPersistence m ()
     -- Invalidation
     RemoveDeclaration :: GlobalName -> GraphPersistence m ()
     Invalidate :: GlobalName -> GraphPersistence m ()
@@ -40,6 +47,10 @@ data GraphPersistence :: Effect where
     ------------------------------ | dependency
     -- Specific accesses
     GetGlobalType :: GlobalName -> GraphPersistence m (Maybe Type)
+    FindMatchingNames :: Text -> GraphPersistence m (Seq GlobalName)
+    GetErrors :: GlobalName -> GraphPersistence m (Seq Error)
+    -- Compilation
     GetCurrentErrors :: GraphPersistence m (Seq Error)
+    GetRemainingWork :: GraphPersistence m (Seq WorkItem)
 
 makeEffect ''GraphPersistence

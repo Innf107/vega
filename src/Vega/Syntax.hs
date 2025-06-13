@@ -6,11 +6,15 @@ import Data.Unique (Unique)
 import Relude hiding (Type)
 import Vega.Loc (HasLoc, Loc)
 
-data GlobalName = MkGlobalName {moduleName :: Text, name :: Text}
+newtype ModuleName = MkModuleName Text
+    deriving stock (Generic, Eq, Show)
+    deriving newtype (Hashable)
+
+data GlobalName = MkGlobalName {moduleName :: ModuleName, name :: Text}
     deriving stock (Generic, Eq, Show)
     deriving anyclass (Hashable)
 
-data LocalName = MkLocalName {parent :: Name, name :: Text, count :: Int}
+data LocalName = MkLocalName {parent :: GlobalName, name :: Text, count :: Int}
     deriving stock (Generic, Eq, Show)
     deriving anyclass (Hashable)
 
@@ -26,7 +30,7 @@ unqualifiedName = \case
     Local local -> local.name
 
 internalName :: Text -> GlobalName
-internalName name = MkGlobalName{name, moduleName = "<<internal>>"}
+internalName name = MkGlobalName{name, moduleName = MkModuleName "<<internal>>"}
 
 data Pass = Parsed | Renamed | Typed
 
@@ -168,12 +172,18 @@ data ParsedModule = MkParsedModule
     }
     deriving stock (Generic)
 
-data Import = ImportUnqualified
-    { -- TODO: really just Text?
-      loc :: Loc
-    , moduleName :: Text
-    , importedDeclarations :: Seq Text
-    }
+data Import
+    = ImportUnqualified
+        { -- TODO: really just Text?
+          loc :: Loc
+        , moduleName :: ModuleName
+        , importedDeclarations :: Seq Text
+        }
+    | ImportQualified
+        { loc :: Loc
+        , moduleName :: ModuleName
+        , importedAs :: Text
+        }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
 
@@ -236,3 +246,13 @@ data Kind
     | Effect
     | ArrowKind (Seq Kind) Kind
     deriving (Generic)
+
+data ImportScope
+    = ImportScope
+    { imports :: HashMap ModuleName ImportedItems
+    }
+
+data ImportedItems
+    = Qualified
+    | Unqualified (HashSet Text)
+

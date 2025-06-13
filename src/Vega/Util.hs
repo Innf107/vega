@@ -5,6 +5,7 @@ module Vega.Util (
     zipWithSeqM,
     compose,
     unzip3Seq,
+    findSeq,
     mapAccumLM,
     forAccumLM,
     viaList,
@@ -45,6 +46,12 @@ unzip3Seq Empty = (Empty, Empty, Empty)
 unzip3Seq ((a, b, c) :<| rest) = do
     let (as, bs, cs) = unzip3Seq rest
     (a :<| as, b :<| bs, c :<| cs)
+
+findSeq :: (a -> Bool) -> Seq a -> Maybe a
+findSeq _predicate Empty = Nothing
+findSeq predicate (x :<| rest)
+    | predicate x = Just x
+    | otherwise = findSeq predicate rest
 
 mapAccumLM :: (Monad m, Traversable t) => (s -> a -> m (s, b)) -> s -> t a -> m (s, t b)
 mapAccumLM f initial traversable =

@@ -3,6 +3,10 @@ module Vega.Driver (
     execute,
 ) where
 
+-- TODO: check that imports make sense somewhere
+-- TODO: diff imports and invalidate all declarations if they did
+-- TODO: check file modifications to avoid having to diff every module every time
+
 import Relude hiding (Driver, Reader, ask, trace)
 
 import Effectful
@@ -19,13 +23,14 @@ import Effectful.Concurrent (Concurrent)
 import Effectful.Concurrent.Async (forConcurrently)
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
-import Vega.Diff (DiffChange)
+import Vega.Diff (DiffChange (..))
 import Vega.Diff qualified as Diff
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 import Vega.Error qualified as Error
 import Vega.Lexer qualified as Lexer
 import Vega.Parser qualified as Parser
+import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.Trace (Category (Driver), trace, traceEnabled)
 import Witherable (wither)
@@ -50,12 +55,13 @@ findSourceFiles = do
 parseAndDiff :: (Driver es) => FilePath -> Eff es (Seq DiffChange)
 parseAndDiff filePath = do
     contents <- decodeUtf8 <$> readFileBS filePath
-    let tokens = case Lexer.run (toText filePath) contents of
+    tokens <- case Lexer.run (toText filePath) contents of
             Left errors -> undefined
-            Right tokens -> tokens
-    let parsedModule = case Parser.parse (moduleNameForPath filePath) filePath tokens of
-            Left errors -> undefined
-            Right parsedModule -> parsedModule
+            Right tokens -> pure tokens
+    parsedModule <- case Parser.parse (moduleNameForPath filePath) filePath tokens of
+            Left errors -> do
+                undefined
+            Right parsedModule -> pure parsedModule
 
     previousDeclarations <- GraphPersistence.lastKnownDeclarations filePath
     case previousDeclarations of
@@ -63,12 +69,18 @@ parseAndDiff filePath = do
         Just previous -> Diff.diffDeclarations parsedModule.declarations previous
 
 -- TODO: figure out something more reasonable here
-moduleNameForPath :: FilePath -> Text
-moduleNameForPath path = toText path
+moduleNameForPath :: FilePath -> ModuleName
+moduleNameForPath path = MkModuleName (toText path)
 
-rebuild :: (Driver es) => Eff es ()
-rebuild = do
-    -- TODO: check file modifications to avoid having to diff every module every time
+applyDiffChange :: (Driver es) => DiffChange -> Eff es ()
+applyDiffChange = \case
+    Added decl -> GraphPersistence.addDeclaration decl
+    Changed decl ->
+        GraphPersistence.setParsed decl
+    Removed decl -> GraphPersistence.removeDeclaration decl
+
+trackSourceChanges :: (Driver es) => Eff es ()
+trackSourceChanges = do
     sourceFiles <- findSourceFiles
     diffChanges <- fold <$> forConcurrently sourceFiles parseAndDiff
 
@@ -78,7 +90,31 @@ rebuild = do
             Diff.Removed decl -> trace Driver ("Declaration removed: " <> show decl.name)
             Diff.Changed decl -> trace Driver ("Declaration changed: " <> show decl.name)
 
-    undefined
+    for_ diffChanges applyDiffChange
+
+compileAllRemainingWork :: (Driver es) => Eff es ()
+compileAllRemainingWork = do
+    remainingWorkItems <- GraphPersistence.getRemainingWork
+    for_ remainingWorkItems \case
+        GraphPersistence.Rename name -> do
+            rename name
+            typecheck name
+        GraphPersistence.TypeCheck name ->
+            typecheck name
+
+rebuild :: (Driver es) => Eff es ()
+rebuild = do
+    trackSourceChanges
+    compileAllRemainingWork
 
 execute :: FilePath -> Text -> Eff es ()
 execute = undefined
+
+rename :: (Driver es) => GlobalName -> Eff es ()
+rename name = do
+    parsed <- GraphPersistence.getParsed name
+    (renamed, dependencies) <- Rename.rename parsed
+    undefined
+
+typecheck :: (Driver es) => GlobalName -> Eff es ()
+typecheck name = undefined
