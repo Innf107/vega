@@ -158,7 +158,12 @@ removeDeclaration name = do
                 else (Just remaining, ())
 
 invalidate :: (InMemory es) => GlobalName -> Eff es ()
-invalidate = undefined
+invalidate name = do
+    data_ <- declarationData name
+    resetDependencies name
+
+    writeIORef data_.renamed Missing
+    writeIORef data_.typed Missing
 
 invalidateRenamed :: (InMemory es) => Maybe RenameError -> GlobalName -> Eff es ()
 invalidateRenamed = undefined

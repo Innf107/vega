@@ -1,5 +1,7 @@
 module Vega.Rename (rename) where
 
+-- TODO: check imports (?)
+
 import Relude hiding (Reader, ask, runReader)
 import Relude.Extra
 
@@ -10,10 +12,11 @@ import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Effectful (Eff, (:>))
 import Effectful.Reader.Static (Reader, ask, runReader)
+import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getModuleImportScope)
 import Vega.Util qualified as Util
 
-type Rename es = (GraphPersistence :> es, Reader GlobalName :> es)
+type Rename es = (GraphPersistence :> es, Reader GlobalName :> es, Writer (Seq GlobalName) :> es)
 
 data Env = MkEnv
     { localVariables :: Map Text LocalName
@@ -47,8 +50,8 @@ data GlobalVariableOccurance
     | Ambiguous (HashSet GlobalName)
     | Inaccessible (HashSet GlobalName)
 
-findGlobalVariable :: (Rename es) => Text -> Eff es GlobalVariableOccurance
-findGlobalVariable var = do
+findGlobalVariableUnregistered :: (Rename es) => Text -> Eff es GlobalVariableOccurance
+findGlobalVariableUnregistered var = do
     parent <- ask @GlobalName
 
     importScope <- getModuleImportScope parent.moduleName
@@ -61,6 +64,16 @@ findGlobalVariable var = do
         [var] -> pure $ Found var
         candidatesInScope -> pure $ Ambiguous (fromList candidatesInScope)
 
+findGlobalVariable :: (Rename es) => Text -> Eff es GlobalVariableOccurance
+findGlobalVariable var = do
+    findGlobalVariableUnregistered var >>= \case
+        Found globalName -> do
+            tell @(Seq _) [globalName]
+            pure (Found globalName)
+        NotFound -> pure NotFound
+        Inaccessible candidates -> pure $ Inaccessible candidates
+        Ambiguous candidatesInScope -> pure $ Ambiguous candidatesInScope
+
 isInScope :: GlobalName -> ImportScope -> Bool
 isInScope name scope = do
     case lookup name.moduleName scope.imports of
@@ -72,8 +85,8 @@ isInScope name scope = do
 rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, Seq GlobalName)
 rename (MkDeclaration loc name syntax) = runReader name do
     -- TODO: graph stuff
-    syntax <- renameDeclarationSyntax name syntax
-    pure (MkDeclaration loc name syntax, undefined)
+    (syntax, dependencies) <- runWriter $ renameDeclarationSyntax name syntax
+    pure (MkDeclaration loc name syntax, dependencies)
 
 findVarName :: (Rename es) => Env -> Text -> Eff es Name
 findVarName env text = case lookup text env.localVariables of
