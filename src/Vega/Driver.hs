@@ -128,7 +128,7 @@ applyDiffChange = \case
 trackSourceChanges :: (Driver es) => Eff es ()
 trackSourceChanges = do
     sourceFiles <- findSourceFiles
-    diffChanges <- fold <$> forConcurrently sourceFiles parseAndDiff
+    diffChanges <- fold <$> for sourceFiles parseAndDiff
 
     when (traceEnabled Driver) do
         for_ diffChanges \case
