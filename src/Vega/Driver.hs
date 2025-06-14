@@ -160,6 +160,8 @@ rename :: (Driver es) => GlobalName -> Eff es ()
 rename name = do
     parsed <- GraphPersistence.getParsed name
     (renamed, dependencies) <- Rename.rename parsed
+    GraphPersistence.setRenamed renamed
+    -- TODO: set dependencies
     undefined
 
 typecheck :: (Driver es) => GlobalName -> Eff es ()

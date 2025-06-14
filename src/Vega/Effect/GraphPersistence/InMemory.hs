@@ -33,7 +33,7 @@ type DeclarationStore = CuckooHashTable GlobalName DeclarationData
 
 type LastKnownDeclarations = IORef (HashMap FilePath (HashMap GlobalName (Declaration Parsed)))
 
-type NameResolution = CuckooHashTable Text GlobalName
+type NameResolution = CuckooHashTable Text (HashSet GlobalName)
 
 type ImportScopes = CuckooHashTable ModuleName ImportScope
 
@@ -92,6 +92,7 @@ setModuleImportScope moduleName scope = do
 addDeclaration :: (InMemory es) => Declaration Parsed -> Eff es ()
 addDeclaration declaration = do
     declarations <- ask @DeclarationStore
+    nameResolution <- ask @NameResolution
 
     parsed <- newIORef declaration
     renamed <- newIORef Missing
@@ -102,6 +103,10 @@ addDeclaration declaration = do
     liftIO $ HashTable.mutate declarations declaration.name \case
         Nothing -> (Just data_, ())
         Just _ -> error $ "Trying to add declaration as new that already exists: '" <> show declaration.name <> "'"
+
+    liftIO $ HashTable.mutate nameResolution declaration.name.name \case
+        Nothing -> (Just [declaration.name], ())
+        Just entries -> (Just (HashSet.insert declaration.name entries), ())
 
 getParsed :: (InMemory es) => GlobalName -> Eff es (Declaration Parsed)
 getParsed name = do
@@ -132,16 +137,25 @@ getTyped name = do
 
 setTyped :: (InMemory es) => Declaration Typed -> Eff es ()
 setTyped declaration = do
-    invalidate declaration.name
+    invalidateTyped Nothing declaration.name
     data_ <- declarationData declaration.name
     writeIORef data_.typed (Ok declaration)
 
 removeDeclaration :: (InMemory es) => GlobalName -> Eff es ()
 removeDeclaration name = do
     dependencies <- ask @DeclarationStore
+    nameResolution <- ask @NameResolution
     resetDependencies name
     invalidateDependents name
     liftIO $ HashTable.delete dependencies name
+    liftIO $ HashTable.mutate nameResolution name.name \case
+        Nothing -> error $ "removing declaration with a name that was never tracked: " <> show name
+        Just entries -> do
+            let remaining = HashSet.delete name entries
+            if HashSet.null remaining
+                then
+                    (Nothing, ())
+                else (Just remaining, ())
 
 invalidate :: (InMemory es) => GlobalName -> Eff es ()
 invalidate = undefined
@@ -173,9 +187,13 @@ getGlobalType :: (InMemory es) => GlobalName -> Eff es (Maybe Type)
 getGlobalType name = do
     undefined
 
-findMatchingNames :: (InMemory es) => Text -> Eff es (Seq GlobalName)
-findMatchingNames = do
-    undefined
+findMatchingNames :: (InMemory es) => Text -> Eff es (HashSet GlobalName)
+findMatchingNames text = do
+    nameResolution <- ask @NameResolution
+
+    liftIO (HashTable.lookup nameResolution text) >>= \case
+        Just candidates -> pure candidates
+        Nothing -> mempty
 
 getErrors :: (InMemory es) => GlobalName -> Eff es (Seq Error)
 getErrors name = undefined

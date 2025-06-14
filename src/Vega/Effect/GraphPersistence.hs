@@ -47,7 +47,7 @@ data GraphPersistence :: Effect where
     ------------------------------ | dependency
     -- Specific accesses
     GetGlobalType :: GlobalName -> GraphPersistence m (Maybe Type)
-    FindMatchingNames :: Text -> GraphPersistence m (Seq GlobalName)
+    FindMatchingNames :: Text -> GraphPersistence m (HashSet GlobalName)
     GetErrors :: GlobalName -> GraphPersistence m (Seq Error)
     -- Compilation
     GetCurrentErrors :: GraphPersistence m (Seq Error)

@@ -44,8 +44,8 @@ bindTypeVariable text = do
 data GlobalVariableOccurance
     = Found GlobalName
     | NotFound
-    | Ambiguous (Seq GlobalName)
-    | Inaccessible (Seq GlobalName)
+    | Ambiguous (HashSet GlobalName)
+    | Inaccessible (HashSet GlobalName)
 
 findGlobalVariable :: (Rename es) => Text -> Eff es GlobalVariableOccurance
 findGlobalVariable var = do
@@ -54,12 +54,12 @@ findGlobalVariable var = do
     importScope <- getModuleImportScope parent.moduleName
     candidates <- findMatchingNames var
 
-    case Seq.filter (\name -> isInScope name importScope) candidates of
+    case filter (\name -> name.moduleName == parent.moduleName || isInScope name importScope) (toList candidates) of
         [] -> case candidates of
             [] -> pure NotFound
             _ -> pure $ Inaccessible candidates
         [var] -> pure $ Found var
-        candidatesInScope -> pure $ Ambiguous candidatesInScope
+        candidatesInScope -> pure $ Ambiguous (fromList candidatesInScope)
 
 isInScope :: GlobalName -> ImportScope -> Bool
 isInScope name scope = do
