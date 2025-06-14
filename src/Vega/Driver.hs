@@ -33,6 +33,7 @@ import Vega.Parser qualified as Parser
 import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.Trace (Category (Driver), trace, traceEnabled)
+import Vega.Util (viaList)
 import Witherable (wither)
 
 type Driver es = (Reader BuildConfig :> es, GraphPersistence :> es, IOE :> es, FileSystem :> es, Concurrent :> es)
@@ -52,21 +53,66 @@ findSourceFiles = do
                     | takeExtension file == ".vega" -> pure [filePath]
                     | otherwise -> pure []
 
+computeImportScope :: Seq Import -> ImportScope
+computeImportScope imports = foldMap importScope imports
+  where
+    importScope = \case
+        ImportUnqualified{moduleName, importedDeclarations} -> do
+            ImportScope
+                { imports =
+                    fromList
+                        [
+                            ( moduleName
+                            , MkImportedItems
+                                { qualifiedAliases = mempty
+                                , unqualifiedItems = viaList importedDeclarations
+                                }
+                            )
+                        ]
+                }
+        ImportQualified{moduleName, importedAs} -> do
+            ImportScope
+                { imports =
+                    fromList
+                        [
+                            ( moduleName
+                            , MkImportedItems
+                                { qualifiedAliases = [importedAs]
+                                , unqualifiedItems = mempty
+                                }
+                            )
+                        ]
+                }
+
 parseAndDiff :: (Driver es) => FilePath -> Eff es (Seq DiffChange)
 parseAndDiff filePath = do
+    let moduleName = moduleNameForPath filePath
+
     contents <- decodeUtf8 <$> readFileBS filePath
     tokens <- case Lexer.run (toText filePath) contents of
-            Left errors -> undefined
-            Right tokens -> pure tokens
-    parsedModule <- case Parser.parse (moduleNameForPath filePath) filePath tokens of
-            Left errors -> do
-                undefined
-            Right parsedModule -> pure parsedModule
+        Left errors -> undefined
+        Right tokens -> pure tokens
+    parsedModule <- case Parser.parse moduleName filePath tokens of
+        Left errors -> do
+            undefined
+        Right parsedModule -> pure parsedModule
+
+    let importScope = computeImportScope parsedModule.imports
 
     previousDeclarations <- GraphPersistence.lastKnownDeclarations filePath
     case previousDeclarations of
-        Nothing -> pure $ Diff.reportNewModule parsedModule
-        Just previous -> Diff.diffDeclarations parsedModule.declarations previous
+        Nothing -> do
+            GraphPersistence.setModuleImportScope moduleName importScope
+            pure $ Diff.reportNewModule parsedModule
+        Just previous -> do
+            previousImportScope <- GraphPersistence.getModuleImportScope moduleName
+            if importScope /= previousImportScope
+                then do
+                    GraphPersistence.setModuleImportScope moduleName importScope
+                    -- If imports changed, we simply invalidate every declaration in the module
+                    pure $ fmap (\decl -> Changed decl) parsedModule.declarations
+                else
+                    Diff.diffDeclarations parsedModule.declarations previous
 
 -- TODO: figure out something more reasonable here
 moduleNameForPath :: FilePath -> ModuleName

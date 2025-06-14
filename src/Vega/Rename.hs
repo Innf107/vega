@@ -65,8 +65,9 @@ isInScope :: GlobalName -> ImportScope -> Bool
 isInScope name scope = do
     case lookup name.moduleName scope.imports of
         Nothing -> False
-        Just Qualified -> undefined
-        Just (Unqualified importedNames) -> HashSet.member name.name importedNames
+        Just importedItems ->
+            -- TODO: qualified
+            HashSet.member name.name importedItems.unqualifiedItems
 
 rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, Seq GlobalName)
 rename (MkDeclaration loc name syntax) = runReader name do

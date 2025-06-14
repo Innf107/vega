@@ -6,6 +6,9 @@ import Data.Unique (Unique)
 import Relude hiding (Type)
 import Vega.Loc (HasLoc, Loc)
 
+import Data.HashSet qualified as HashSet
+import GHC.Generics (Generically (..))
+
 newtype ModuleName = MkModuleName Text
     deriving stock (Generic, Eq, Show)
     deriving newtype (Hashable)
@@ -247,12 +250,16 @@ data Kind
     | ArrowKind (Seq Kind) Kind
     deriving (Generic)
 
-data ImportScope
+newtype ImportScope
     = ImportScope
     { imports :: HashMap ModuleName ImportedItems
     }
+    deriving stock (Eq, Generic)
+    deriving newtype (Semigroup, Monoid)
 
-data ImportedItems
-    = Qualified
-    | Unqualified (HashSet Text)
-
+data ImportedItems = MkImportedItems
+    { qualifiedAliases :: HashSet Text
+    , unqualifiedItems :: HashSet Text
+    }
+    deriving (Eq, Generic)
+    deriving (Semigroup, Monoid) via Generically ImportedItems

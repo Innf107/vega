@@ -85,7 +85,9 @@ getModuleImportScope moduleName = do
         Just importScope -> pure importScope
 
 setModuleImportScope :: (InMemory es) => ModuleName -> ImportScope -> Eff es ()
-setModuleImportScope = undefined
+setModuleImportScope moduleName scope = do
+    importScopes <- ask @ImportScopes
+    liftIO $ HashTable.insert importScopes moduleName scope
 
 addDeclaration :: (InMemory es) => Declaration Parsed -> Eff es ()
 addDeclaration declaration = do
