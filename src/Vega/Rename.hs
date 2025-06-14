@@ -108,13 +108,19 @@ findTypeVariable env text = case lookup text env.localTypeVariables of
     Nothing -> undefined
 
 renameDeclarationSyntax :: (Rename es) => GlobalName -> DeclarationSyntax Parsed -> Eff es (DeclarationSyntax Renamed)
-renameDeclarationSyntax name = \case
-    DefineFunction{typeSignature, parameters, body} -> do
-        let env = emptyEnv
-        typeSignature <- renameTypeSyntax env typeSignature
+renameDeclarationSyntax _name = \case
+    DefineFunction{typeSignature, declaredTypeParameters, parameters, body} -> do
+        typeSignature <- renameTypeSyntax emptyEnv typeSignature
+
+        (declaredTypeParameters, env) <- case declaredTypeParameters of
+            Nothing -> pure (Nothing, emptyEnv)
+            Just declaredTypeParameters -> do
+                (declaredTypeParameters, envTransformers) <- Seq.unzip <$> traverse bindTypeVariable declaredTypeParameters
+                pure (Just declaredTypeParameters, Util.compose envTransformers emptyEnv)
+
         (parameters, transformers) <- Seq.unzip <$> traverse (renamePattern env) parameters
         body <- renameExpr (Util.compose transformers env) body
-        pure (DefineFunction{typeSignature, parameters, body})
+        pure (DefineFunction{typeSignature, declaredTypeParameters, parameters, body})
     DefineVariantType{typeParameters, constructors} -> do
         undefined
 

@@ -151,6 +151,12 @@ defineFunction = do
                 ]
             )
 
+    declaredTypeParameters <- optional do
+        _ <- single LBracket
+        parameters <- identifier `sepBy` (single Comma)
+        _ <- single RBracket
+        pure parameters
+
     _ <- single LParen
     parameters <- pattern_ `sepBy` (single Comma)
     _ <- single RParen
@@ -163,6 +169,7 @@ defineFunction = do
             , syntax =
                 DefineFunction
                     { typeSignature
+                    , declaredTypeParameters
                     , parameters
                     , body
                     }

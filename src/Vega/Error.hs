@@ -30,12 +30,12 @@ import Vega.Loc (HasLoc, Loc (..), getLoc)
 import Vega.Parser (AdditionalParseError (MismatchedFunctionName))
 import Vega.Parser qualified as Parser
 import Vega.Pretty (Ann, Doc, defaultPrettyANSIIConfig, errorDoc, intercalateDoc, keyword, plain, pretty, prettyANSII, vsep, (<+>))
-import Vega.Syntax (GlobalName, Type)
+import Vega.Syntax (GlobalName, Kind, Type)
 import Vega.Util (viaList)
 
 data Error
 
-data RenameError
+data RenameError = RenameError
 
 data TypeError
     = FunctionDefinedWithIncorrectNumberOfArguments
@@ -56,6 +56,16 @@ data TypeError
         , functionType :: Type
         , expected :: Int
         , actual :: Int
+        }
+    | KindMismatch
+        { loc :: Loc
+        , expectedKind :: Kind
+        , actualKind :: Kind
+        }
+    | UnableToUnify
+        { loc :: Loc
+        , expectedType :: Type
+        , actualType :: Type
         }
     deriving stock (Generic)
     deriving anyclass (HasLoc)

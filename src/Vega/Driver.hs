@@ -25,7 +25,7 @@ import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
 import Vega.Diff (DiffChange (..))
 import Vega.Diff qualified as Diff
-import Vega.Effect.GraphPersistence (GraphPersistence)
+import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 import Vega.Error qualified as Error
 import Vega.Lexer qualified as Lexer
@@ -33,6 +33,7 @@ import Vega.Parser qualified as Parser
 import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.Trace (Category (Driver), trace, traceEnabled)
+import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
 import Witherable (wither)
 
@@ -166,4 +167,12 @@ rename name = do
         GraphPersistence.addDependency name dependency
 
 typecheck :: (Driver es) => GlobalName -> Eff es ()
-typecheck name = undefined
+typecheck name = do
+    renamed <-
+        GraphPersistence.getRenamed name >>= \case
+            Ok renamed -> pure renamed
+            Missing -> error $ "missing renamed in typecheck (TODO: should this rename it then?)"
+            Failed _ -> error $ "trying to typecheck previously errored declaration"
+
+    typed <- TypeCheck.checkDeclaration renamed
+    undefined

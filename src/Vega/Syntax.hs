@@ -63,11 +63,12 @@ data Declaration p = MkDeclaration
 data DeclarationSyntax p
     = DefineFunction
         { typeSignature :: TypeSyntax p
+        , declaredTypeParameters :: Maybe (Seq (XLocalName p))
         , parameters :: Seq (Pattern p)
         , body :: Expr p
         }
     | DefineVariantType
-        { typeParameters :: Seq (XName p)
+        { typeParameters :: Seq (XLocalName p)
         , constructors :: Seq (XName p, Seq (TypeSyntax p))
         }
     deriving stock (Generic)
@@ -231,16 +232,25 @@ data Type
     | Pure
     deriving (Generic)
 
+-- TODO: don't meta variables need kinds?
+-- TODO: levels
 data MetaVar = MkMetaVar
     { underlying :: IORef (Maybe Type)
     , identity :: Unique
     , name :: Text
     }
 
+instance Eq MetaVar where
+    meta1 == meta2 = meta1.identity == meta2.identity
+
 data Skolem = MkSkolem
     { originalName :: LocalName
     , identity :: Unique
     }
+    deriving (Generic)
+
+instance Eq Skolem where
+    skolem1 == skolem2 = skolem1.identity == skolem2.identity
 
 type Effect = Type
 
