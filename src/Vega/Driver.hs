@@ -157,8 +157,24 @@ rebuild = do
 execute :: FilePath -> Text -> Eff es ()
 execute = undefined
 
+getLastKnownRenamed :: (Driver es) => GlobalName -> Eff es (Maybe (Declaration Renamed))
+getLastKnownRenamed name = do
+    GraphPersistence.getRenamed name >>= \case
+        Ok renamed -> pure $ Just renamed
+        Missing{previous} -> pure previous
+        Failed{previous} -> pure previous
+
+typeChanged :: Declaration Renamed -> Declaration Renamed -> Bool
+typeChanged old new = case old.syntax of
+    DefineFunction{typeSignature = oldTypeSignature} -> case new.syntax of
+        DefineFunction{typeSignature = newTypeSignature} -> Diff.diff oldTypeSignature newTypeSignature
+        DefineVariantType{} -> undefined
+    DefineVariantType{} -> undefined
+
 rename :: (Driver es) => GlobalName -> Eff es ()
 rename name = do
+    previous <- getLastKnownRenamed name
+
     parsed <- GraphPersistence.getParsed name
     (renamed, dependencies) <- Rename.rename parsed
 
@@ -166,13 +182,20 @@ rename name = do
     for_ dependencies \dependency -> do
         GraphPersistence.addDependency name dependency
 
+    case previous of
+        Just previous
+            | typeChanged previous renamed -> do
+                dependents <- GraphPersistence.getDependents name
+                for_ dependents (GraphPersistence.invalidateTyped Nothing)
+        _ -> pure ()
+
 typecheck :: (Driver es) => GlobalName -> Eff es ()
 typecheck name = do
     renamed <-
         GraphPersistence.getRenamed name >>= \case
             Ok renamed -> pure renamed
-            Missing -> error $ "missing renamed in typecheck (TODO: should this rename it then?)"
-            Failed _ -> error $ "trying to typecheck previously errored declaration"
+            Missing{} -> error $ "missing renamed in typecheck (TODO: should this rename it then?)"
+            Failed{} -> error $ "trying to typecheck previously errored declaration"
 
     typed <- TypeCheck.checkDeclaration renamed
     undefined

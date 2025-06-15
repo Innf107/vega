@@ -13,8 +13,8 @@ import Vega.Error (Error, RenameError, TypeError)
 
 data GraphData error a
     = Ok a
-    | Missing
-    | Failed error
+    | Missing {previous :: Maybe a}
+    | Failed {previous :: Maybe a, error :: error}
 
 data WorkItem
     = Rename GlobalName
@@ -46,7 +46,8 @@ data GraphPersistence :: Effect where
     ---------------- ^ dependent   ^
     ------------------------------ | dependency
     -- Specific accesses
-    GetGlobalType :: GlobalName -> GraphPersistence m (Maybe Type)
+    GetGlobalType :: GlobalName -> GraphPersistence m (Either Type (TypeSyntax Renamed))
+    CacheGlobalType :: GlobalName -> Type -> GraphPersistence m ()
     FindMatchingNames :: Text -> GraphPersistence m (HashSet GlobalName)
     GetErrors :: GlobalName -> GraphPersistence m (Seq Error)
     -- Compilation

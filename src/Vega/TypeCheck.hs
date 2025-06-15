@@ -66,6 +66,15 @@ typeError error = tell @(Seq _) [error]
 fatalTypeError :: (Error TypeError :> es) => TypeError -> Eff es a
 fatalTypeError error = throwError_ error
 
+getGlobalType :: (TypeCheck es) => GlobalName -> Eff es Type
+getGlobalType name =
+    GraphPersistence.getGlobalType name >>= \case
+        Left cachedType -> pure cachedType
+        Right syntax -> do
+            (type_, _) <- checkType emptyEnv Type syntax
+            GraphPersistence.cacheGlobalType name type_
+            pure type_
+
 checkDeclarationSyntax :: (TypeCheck es) => Loc -> GlobalName -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
 checkDeclarationSyntax loc name = \case
     DefineFunction{typeSignature, declaredTypeParameters, parameters, body} -> do
@@ -168,12 +177,8 @@ infer :: (TypeCheck es) => Env -> Expr Renamed -> Eff es (Type, Expr Typed, Effe
 infer env = \case
     Var loc name -> case name of
         Global globalName -> do
-            type_ <- GraphPersistence.getGlobalType globalName
-            case type_ of
-                Nothing -> error $ "infer: reference to unknown global declaration: " <> show name
-                Just type_ -> do
-                    type_ <- instantiate type_
-                    pure (type_, Var loc name, Pure)
+            type_ <- instantiate =<< getGlobalType globalName
+            pure (type_, Var loc name, Pure)
         Local localName -> do
             undefined
     Application{loc, functionExpr, arguments} -> do

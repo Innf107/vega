@@ -1,10 +1,27 @@
 {-# LANGUAGE UndecidableInstances #-}
 
-module Vega.Diff (DiffChange (..), diffDeclarations, reportNewModule) where
+module Vega.Diff (DiffChange (..), Diff (..), diffDeclarations, reportNewModule) where
 
 import Relude hiding (Type, evalState, get, put)
 
-import Vega.Syntax
+import Vega.Syntax (
+    BinaryOperator,
+    Declaration (name),
+    DeclarationSyntax,
+    Expr,
+    GlobalName,
+    KindSyntax,
+    LocalName,
+    MatchCase,
+    ModuleName (..),
+    Name,
+    ParsedModule (MkParsedModule, declarations),
+    Pass (..),
+    Pattern,
+    Statement,
+    TypeSyntax,
+    TypeVarBinderS,
+ )
 
 import Effectful
 import GHC.Generics
@@ -100,8 +117,11 @@ deriving via Generically (Pattern Parsed) instance Diff (Pattern Parsed)
 deriving via Generically (MatchCase Parsed) instance Diff (MatchCase Parsed)
 deriving via Generically BinaryOperator instance Diff BinaryOperator
 deriving via Generically (TypeVarBinderS Parsed) instance Diff (TypeVarBinderS Parsed)
+deriving via Generically (TypeVarBinderS Renamed) instance Diff (TypeVarBinderS Renamed)
 deriving via Generically (TypeSyntax Parsed) instance Diff (TypeSyntax Parsed)
+deriving via Generically (TypeSyntax Renamed) instance Diff (TypeSyntax Renamed)
 deriving via Generically (KindSyntax Parsed) instance Diff (KindSyntax Parsed)
+deriving via Generically (KindSyntax Renamed) instance Diff (KindSyntax Renamed)
 deriving via Generically LocalName instance Diff LocalName
 deriving via Generically GlobalName instance Diff GlobalName
 deriving via Generically Name instance Diff Name

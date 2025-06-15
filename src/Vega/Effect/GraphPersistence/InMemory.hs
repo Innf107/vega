@@ -7,7 +7,7 @@ import Relude.Extra
 
 import Data.HashSet qualified as HashSet
 
-import Vega.Effect.GraphPersistence hiding (addDeclaration, addDependency, findMatchingNames, getCurrentErrors, getDependencies, getDependents, getErrors, getGlobalType, getModuleImportScope, getParsed, getRemainingWork, getRenamed, getTyped, invalidate, invalidateRenamed, invalidateTyped, lastKnownDeclarations, removeDeclaration, setKnownDeclarations, setModuleImportScope, setParsed, setRenamed, setTyped)
+import Vega.Effect.GraphPersistence hiding (addDeclaration, addDependency, cacheGlobalType, findMatchingNames, getCurrentErrors, getDependencies, getDependents, getErrors, getGlobalType, getModuleImportScope, getParsed, getRemainingWork, getRenamed, getTyped, invalidate, invalidateRenamed, invalidateTyped, lastKnownDeclarations, removeDeclaration, setKnownDeclarations, setModuleImportScope, setParsed, setRenamed, setTyped)
 
 import Effectful
 import Effectful.Dispatch.Dynamic
@@ -27,6 +27,8 @@ data DeclarationData = MkDeclarationData
     , --
       dependencies :: IORef (HashSet GlobalName)
     , dependents :: IORef (HashSet GlobalName)
+    , --
+      cachedType :: IORef (Maybe Type)
     }
 
 type DeclarationStore = CuckooHashTable GlobalName DeclarationData
@@ -95,11 +97,12 @@ addDeclaration declaration = do
     nameResolution <- ask @NameResolution
 
     parsed <- newIORef declaration
-    renamed <- newIORef Missing
-    typed <- newIORef Missing
+    renamed <- newIORef Missing{previous = Nothing}
+    typed <- newIORef Missing{previous = Nothing}
     dependencies <- newIORef mempty
     dependents <- newIORef mempty
-    let data_ = MkDeclarationData{parsed, renamed, typed, dependencies, dependents}
+    cachedType <- newIORef Nothing
+    let data_ = MkDeclarationData{parsed, renamed, typed, dependencies, dependents, cachedType}
     liftIO $ HashTable.mutate declarations declaration.name \case
         Nothing -> (Just data_, ())
         Just _ -> error $ "Trying to add declaration as new that already exists: '" <> show declaration.name <> "'"
@@ -157,19 +160,38 @@ removeDeclaration name = do
                     (Nothing, ())
                 else (Just remaining, ())
 
+invalidateGraphData :: GraphData error a -> GraphData error a
+invalidateGraphData = \case
+    Ok a -> Missing{previous = Just a}
+    Missing{previous} -> Missing{previous}
+    Failed{previous, error = _} -> Missing{previous}
+
+failGraphData :: error -> GraphData error a -> GraphData error a
+failGraphData error = \case
+    Ok a -> Failed{error, previous = Just a}
+    Missing{previous} -> Failed{error, previous}
+    Failed{previous, error = _} -> Failed{error, previous}
+
 invalidate :: (InMemory es) => GlobalName -> Eff es ()
 invalidate name = do
     data_ <- declarationData name
     resetDependencies name
 
-    writeIORef data_.renamed Missing
-    writeIORef data_.typed Missing
+    modifyIORef' data_.renamed invalidateGraphData
+    invalidateTyped Nothing name
 
 invalidateRenamed :: (InMemory es) => Maybe RenameError -> GlobalName -> Eff es ()
 invalidateRenamed = undefined
 
 invalidateTyped :: (InMemory es) => Maybe TypeError -> GlobalName -> Eff es ()
-invalidateTyped = undefined
+invalidateTyped maybeError name = do
+    let invalidate = case maybeError of
+            Nothing -> invalidateGraphData
+            Just error -> failGraphData error
+
+    data_ <- declarationData name
+    modifyIORef' data_.typed invalidate
+    writeIORef data_.cachedType Nothing
 
 getDependencies :: (InMemory es) => GlobalName -> Eff es (HashSet GlobalName)
 getDependencies name = do
@@ -188,9 +210,22 @@ addDependency dependent dependency = do
     modifyIORef' dependentData.dependencies (HashSet.insert dependent)
     modifyIORef' dependencyData.dependents (HashSet.insert dependency)
 
-getGlobalType :: (InMemory es) => GlobalName -> Eff es (Maybe Type)
+getGlobalType :: (HasCallStack, InMemory es) => GlobalName -> Eff es (Either Type (TypeSyntax Renamed))
 getGlobalType name = do
-    undefined
+    data_ <- declarationData name
+    readIORef data_.cachedType >>= \case
+        Just type_ -> pure (Left type_)
+        Nothing ->
+            readIORef data_.renamed >>= \case
+                Ok renamed -> case renamed.syntax of
+                    DefineFunction{typeSignature} -> pure (Right typeSignature)
+                    _ -> error $ "trying to access type of non-function declaration: " <> show name
+                _ -> error $ "trying to access type of non-renamed declaration: " <> show name
+
+cacheGlobalType :: (InMemory es) => GlobalName -> Type -> Eff es ()
+cacheGlobalType name type_ = do
+    data_ <- declarationData name
+    writeIORef (data_.cachedType) (Just type_)
 
 findMatchingNames :: (InMemory es) => Text -> Eff es (HashSet GlobalName)
 findMatchingNames text = do
@@ -209,13 +244,13 @@ getCurrentErrors = undefined
 remainingWorkItems :: (InMemory es) => GlobalName -> DeclarationData -> Eff es (Seq WorkItem)
 remainingWorkItems name data_ = do
     readIORef data_.renamed >>= \case
-        Missing -> pure [Rename name]
+        Missing{} -> pure [Rename name]
         -- If compilation failed here, we can't do anything until something changes in the input (which will invalidate the renamed field)
-        Failed _ -> pure []
+        Failed{} -> pure []
         Ok _ -> do
             readIORef data_.typed >>= \case
-                Missing -> pure [TypeCheck name]
-                Failed _ -> pure []
+                Missing{} -> pure [TypeCheck name]
+                Failed{} -> pure []
                 Ok _ -> pure []
 
 getRemainingWork :: (InMemory es) => Eff es (Seq WorkItem)
@@ -261,6 +296,7 @@ runInMemory action = do
                 AddDependency dependent dependency -> addDependency dependent dependency
                 -- Specific accesses
                 GetGlobalType name -> getGlobalType name
+                CacheGlobalType name type_ -> cacheGlobalType name type_
                 FindMatchingNames name -> findMatchingNames name
                 GetErrors name -> getErrors name
                 -- Compilation
