@@ -139,15 +139,25 @@ trackSourceChanges = do
 
     for_ diffChanges applyDiffChange
 
-compileAllRemainingWork :: (Driver es) => Eff es ()
-compileAllRemainingWork = do
-    remainingWorkItems <- GraphPersistence.getRemainingWork
-    for_ remainingWorkItems \case
-        GraphPersistence.Rename name -> do
+-- | Returns true if it did progress and false if there was nothing left to do
+compileNextWorkItem :: (Driver es) => Eff es Bool
+compileNextWorkItem = do
+    GraphPersistence.getRemainingWork >>= \case
+        Nothing -> pure False
+        Just (GraphPersistence.Rename name) -> do
             rename name
             typecheck name
-        GraphPersistence.TypeCheck name ->
+            pure True
+        Just (GraphPersistence.TypeCheck name) -> do
             typecheck name
+            pure True
+
+compileAllRemainingWork :: (Driver es) => Eff es ()
+compileAllRemainingWork = do
+    progress <- compileNextWorkItem
+    if progress
+        then compileAllRemainingWork
+        else pure ()
 
 rebuild :: (Driver es) => Eff es ()
 rebuild = do

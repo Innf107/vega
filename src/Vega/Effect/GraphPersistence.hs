@@ -52,6 +52,6 @@ data GraphPersistence :: Effect where
     GetErrors :: GlobalName -> GraphPersistence m (Seq Error)
     -- Compilation
     GetCurrentErrors :: GraphPersistence m (Seq Error)
-    GetRemainingWork :: GraphPersistence m (Seq WorkItem)
+    GetRemainingWork :: GraphPersistence m (Maybe WorkItem)
 
 makeEffect ''GraphPersistence

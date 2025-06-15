@@ -47,6 +47,7 @@ library
       Vega.Trace
       Vega.TypeCheck
       Vega.Util
+      Vega.WorkQueue
   other-modules:
       Paths_vega
   autogen-modules:

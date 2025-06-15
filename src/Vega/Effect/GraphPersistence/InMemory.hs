@@ -17,6 +17,8 @@ import Vega.Syntax
 
 import Data.HashTable.IO (CuckooHashTable)
 import Data.HashTable.IO qualified as HashTable
+import Vega.WorkQueue (WorkQueue)
+import Vega.WorkQueue qualified as WorkQueue
 
 -- TODO: this currently isn't thread safe
 
@@ -39,12 +41,18 @@ type NameResolution = CuckooHashTable Text (HashSet GlobalName)
 
 type ImportScopes = CuckooHashTable ModuleName ImportScope
 
+data RemainingWork = MkRemainingWork
+    { toRename :: WorkQueue GlobalName
+    , toTypeCheck :: WorkQueue GlobalName
+    }
+
 type InMemory es =
     ( IOE :> es
     , Reader DeclarationStore :> es
     , Reader LastKnownDeclarations :> es
     , Reader NameResolution :> es
     , Reader ImportScopes :> es
+    , Reader RemainingWork :> es
     )
 
 declarationData :: (HasCallStack, InMemory es) => GlobalName -> Eff es DeclarationData
@@ -244,7 +252,7 @@ getCurrentErrors = undefined
 remainingWorkItems :: (InMemory es) => GlobalName -> DeclarationData -> Eff es (Seq WorkItem)
 remainingWorkItems name data_ = do
     readIORef data_.renamed >>= \case
-        Missing{} -> pure [Rename name]
+        Missing{} -> pure [Rename name, TypeCheck name]
         -- If compilation failed here, we can't do anything until something changes in the input (which will invalidate the renamed field)
         Failed{} -> pure []
         Ok _ -> do
@@ -253,10 +261,14 @@ remainingWorkItems name data_ = do
                 Failed{} -> pure []
                 Ok _ -> pure []
 
-getRemainingWork :: (InMemory es) => Eff es (Seq WorkItem)
+getRemainingWork :: (InMemory es) => Eff es (Maybe WorkItem)
 getRemainingWork = do
-    declarations <- liftIO . HashTable.toList =<< ask @DeclarationStore
-    mconcat <$> traverse (\(name, data_) -> remainingWorkItems name data_) declarations
+    remainingWork <- ask @RemainingWork
+    WorkQueue.popFirst remainingWork.toRename >>= \case
+        Just name -> pure (Just name)
+
+-- declarations <- liftIO . HashTable.toList =<< ask @DeclarationStore
+-- mconcat <$> traverse (\(name, data_) -> remainingWorkItems name data_) declarations
 
 runInMemory :: forall a es. (IOE :> es) => Eff (GraphPersistence : es) a -> Eff es a
 runInMemory action = do
@@ -268,11 +280,16 @@ runInMemory action = do
 
     importScopes :: ImportScopes <- liftIO HashTable.new
 
+    toRename <- newIORef Nothing
+    toTypeCheck <- newIORef Nothing
+    let remainingWork = MkRemainingWork{toRename, toTypeCheck}
+
     action & interpret \_ ->
         runReader lastKnownDeclarationsPerFile
             . runReader declarations
             . runReader nameResolution
             . runReader importScopes
+            . runReader remainingWork
             . \case
                 LastKnownDeclarations filePath -> lastKnownDeclarations filePath
                 SetKnownDeclarations filePath declarations -> setKnownDeclarations filePath declarations
