@@ -1,6 +1,6 @@
 {-# LANGUAGE RecursiveDo #-}
 
-module Vega.WorkQueue (WorkQueue (..), WorkQueueNode, new, append, popFirst, delete) where
+module Vega.WorkQueue (WorkQueue, WorkQueueNode, new, append, popFirst, delete) where
 
 import Relude
 
