@@ -52,6 +52,19 @@ type family XLocalName (p :: Pass) where
     XLocalName Renamed = LocalName
     XLocalName Typed = LocalName
 
+data NameKind
+    = VarKind
+    | TypeConstructorKind
+    | DataConstructorKind
+    deriving stock (Generic, Eq)
+    deriving anyclass (Hashable)
+
+-- TODO: This doesn't actually work since e.g. a variant definition defines several names. oops
+definedDeclarationKind :: DeclarationSyntax p -> NameKind
+definedDeclarationKind = \case
+    DefineFunction{} -> VarKind
+    DefineVariantType{} -> undefined
+
 data Declaration p = MkDeclaration
     { loc :: Loc
     , name :: GlobalName

@@ -7,6 +7,7 @@ import Relude.Extra
 
 import Vega.Syntax
 
+import Data.HashMap.Strict qualified as HashMap
 import Data.HashSet qualified as HashSet
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
@@ -55,12 +56,17 @@ findGlobalVariableUnregistered var = do
     parent <- ask @GlobalName
 
     importScope <- getModuleImportScope parent.moduleName
-    candidates <- findMatchingNames var
+    candidatesOfAllKinds <- findMatchingNames var
 
-    case filter (\name -> name.moduleName == parent.moduleName || isInScope name importScope) (toList candidates) of
+    let takeVarCandidate = \case
+            (name, VarKind) -> Just name
+            _ -> Nothing
+    let candidates = mapMaybe takeVarCandidate (HashMap.toList candidatesOfAllKinds)
+
+    case filter (\name -> name.moduleName == parent.moduleName || isInScope name importScope) candidates of
         [] -> case candidates of
             [] -> pure NotFound
-            _ -> pure $ Inaccessible candidates
+            _ -> pure $ Inaccessible (HashSet.fromList candidates)
         [var] -> pure $ Found var
         candidatesInScope -> pure $ Ambiguous (fromList candidatesInScope)
 

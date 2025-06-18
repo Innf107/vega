@@ -48,7 +48,7 @@ data GraphPersistence :: Effect where
     -- Specific accesses
     GetGlobalType :: GlobalName -> GraphPersistence m (Either Type (TypeSyntax Renamed))
     CacheGlobalType :: GlobalName -> Type -> GraphPersistence m ()
-    FindMatchingNames :: Text -> GraphPersistence m (HashSet GlobalName)
+    FindMatchingNames :: Text -> GraphPersistence m (HashMap GlobalName NameKind)
     GetErrors :: GlobalName -> GraphPersistence m (Seq Error)
     -- Compilation
     GetCurrentErrors :: GraphPersistence m (Seq Error)

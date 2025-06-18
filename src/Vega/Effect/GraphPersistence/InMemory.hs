@@ -15,6 +15,7 @@ import Effectful.Reader.Static
 import Vega.Error (Error, RenameError, TypeError)
 import Vega.Syntax
 
+import Data.HashMap.Strict qualified as HashMap
 import Data.HashTable.IO (CuckooHashTable)
 import Data.HashTable.IO qualified as HashTable
 
@@ -35,7 +36,7 @@ type DeclarationStore = CuckooHashTable GlobalName DeclarationData
 
 type LastKnownDeclarations = IORef (HashMap FilePath (HashMap GlobalName (Declaration Parsed)))
 
-type NameResolution = CuckooHashTable Text (HashSet GlobalName)
+type NameResolution = CuckooHashTable Text (HashMap GlobalName NameKind)
 
 type ImportScopes = CuckooHashTable ModuleName ImportScope
 
@@ -107,9 +108,11 @@ addDeclaration declaration = do
         Nothing -> (Just data_, ())
         Just _ -> error $ "Trying to add declaration as new that already exists: '" <> show declaration.name <> "'"
 
+    -- TODO: yeah no this totally doesn't work for anything other than variables oops
+
     liftIO $ HashTable.mutate nameResolution declaration.name.name \case
-        Nothing -> (Just [declaration.name], ())
-        Just entries -> (Just (HashSet.insert declaration.name entries), ())
+        Nothing -> (Just [(declaration.name, definedDeclarationKind declaration.syntax)], ())
+        Just entries -> (Just (insert declaration.name (definedDeclarationKind declaration.syntax) entries), ())
 
 getParsed :: (InMemory es) => GlobalName -> Eff es (Declaration Parsed)
 getParsed name = do
@@ -154,8 +157,8 @@ removeDeclaration name = do
     liftIO $ HashTable.mutate nameResolution name.name \case
         Nothing -> error $ "removing declaration with a name that was never tracked: " <> show name
         Just entries -> do
-            let remaining = HashSet.delete name entries
-            if HashSet.null remaining
+            let remaining = HashMap.delete name entries
+            if null remaining
                 then
                     (Nothing, ())
                 else (Just remaining, ())
@@ -227,7 +230,7 @@ cacheGlobalType name type_ = do
     data_ <- declarationData name
     writeIORef (data_.cachedType) (Just type_)
 
-findMatchingNames :: (InMemory es) => Text -> Eff es (HashSet GlobalName)
+findMatchingNames :: (InMemory es) => Text -> Eff es (HashMap GlobalName NameKind)
 findMatchingNames text = do
     nameResolution <- ask @NameResolution
 
