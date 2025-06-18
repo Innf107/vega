@@ -6,8 +6,9 @@ module Vega.Driver (
 -- TODO: check that imports make sense somewhere
 -- TODO: diff imports and invalidate all declarations if they did
 -- TODO: check file modifications to avoid having to diff every module every time
+-- TODO: remove modules if their files are deleted
 
-import Relude hiding (Driver, Reader, ask, trace)
+import Relude hiding (Reader, ask, trace)
 
 import Effectful
 import Effectful.FileSystem (FileSystem, doesDirectoryExist, doesFileExist, listDirectory, withCurrentDirectory)
@@ -99,8 +100,8 @@ parseAndDiff filePath = do
         Right parsedModule -> pure parsedModule
 
     let importScope = computeImportScope parsedModule.imports
-
     previousDeclarations <- GraphPersistence.lastKnownDeclarations filePath
+    GraphPersistence.setKnownDeclarations filePath (viaList (fmap (\decl -> (decl.name, decl)) parsedModule.declarations))
     case previousDeclarations of
         Nothing -> do
             GraphPersistence.setModuleImportScope moduleName importScope
