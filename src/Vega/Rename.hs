@@ -14,7 +14,7 @@ import Data.Sequence qualified as Seq
 import Effectful (Eff, (:>))
 import Effectful.Reader.Static (Reader, ask, runReader)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
-import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getModuleImportScope)
+import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getModuleImportScope, WorkItem (..))
 import Vega.Util qualified as Util
 
 type Rename es = (GraphPersistence :> es, Reader GlobalName :> es, Writer (Seq GlobalName) :> es)

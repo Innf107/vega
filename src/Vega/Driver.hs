@@ -205,6 +205,7 @@ rename name = do
 
     parsed <- GraphPersistence.getParsed name
     (renamed, dependencies) <- Rename.rename parsed
+    trace Dependencies (show name <> " --> " <> show dependencies)
 
     GraphPersistence.setRenamed renamed
     for_ dependencies \dependency -> do

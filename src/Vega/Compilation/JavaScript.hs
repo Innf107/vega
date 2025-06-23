@@ -131,6 +131,7 @@ includeDeclarationRecursively name = do
             tell (TextBuilder.fromLazyText code <> "\n\n")
 
             dependencies <- GraphPersistence.getDependencies name
+
             for_ dependencies \dependency ->
                 includeDeclarationRecursively dependency
 

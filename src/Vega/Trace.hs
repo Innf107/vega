@@ -14,16 +14,24 @@ data Category
     = Driver
     | WorkItems
     | AssembleJS
+    | Dependencies
     deriving (Show)
 
 data Traces = MkTraces
     { driver :: Bool
     , workItems :: Bool
     , assembleJS :: Bool
+    , dependencies :: Bool
     }
 
 defaultTraces :: Traces
-defaultTraces = MkTraces{driver = False, workItems = False, assembleJS = False}
+defaultTraces =
+    MkTraces
+        { driver = False
+        , workItems = False
+        , assembleJS = False
+        , dependencies = False
+        }
 
 getTraces :: IO Traces
 getTraces =
@@ -39,6 +47,7 @@ getTraces =
         ("driver" : rest) -> go (traces{driver = True}) rest
         ("work-items" : rest) -> go (traces{workItems = True}) rest
         ("assemble-js" : rest) -> go (traces{assembleJS = True}) rest
+        ("dependencies" : rest) -> go (traces{dependencies = True}) rest
         (trace_ : rest) -> do
             -- TODO: make the warning prettier
             putTextLn $ "WARNING: unrecognized trace category: " <> trace_
@@ -55,6 +64,7 @@ traceEnabled = \case
     Driver -> enabledTraces.driver
     WorkItems -> enabledTraces.workItems
     AssembleJS -> enabledTraces.assembleJS
+    Dependencies -> enabledTraces.dependencies
 
 -- TODO: Use a doc here
 traceIO :: Category -> Text -> IO ()

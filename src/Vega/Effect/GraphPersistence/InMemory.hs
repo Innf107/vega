@@ -262,8 +262,8 @@ addDependency :: (InMemory es) => GlobalName -> GlobalName -> Eff es ()
 addDependency dependent dependency = do
     dependentData <- declarationData dependent
     dependencyData <- declarationData dependency
-    modifyIORef' dependentData.dependencies (HashSet.insert dependent)
-    modifyIORef' dependencyData.dependents (HashSet.insert dependency)
+    modifyIORef' dependentData.dependencies (HashSet.insert dependency)
+    modifyIORef' dependencyData.dependents (HashSet.insert dependent)
 
 getGlobalType :: (HasCallStack, InMemory es) => GlobalName -> Eff es (Either Type (TypeSyntax Renamed))
 getGlobalType name = do
