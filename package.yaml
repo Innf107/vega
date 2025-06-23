@@ -36,6 +36,7 @@ dependencies:
 - aeson
 - yaml
 - witherable
+- text
 
 ghc-options:
 - -Wall

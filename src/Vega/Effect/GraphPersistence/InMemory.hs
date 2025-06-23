@@ -7,7 +7,35 @@ import Relude.Extra
 
 import Data.HashSet qualified as HashSet
 
-import Vega.Effect.GraphPersistence hiding (addDeclaration, addDependency, cacheGlobalType, findMatchingNames, getCurrentErrors, getDependencies, getDependents, getErrors, getGlobalType, getModuleImportScope, getParsed, getRemainingWork, getRenamed, getTyped, invalidate, invalidateRenamed, invalidateTyped, lastKnownDeclarations, removeDeclaration, setKnownDeclarations, setModuleImportScope, setParsed, setRenamed, setTyped)
+import Vega.Effect.GraphPersistence hiding (
+    addDeclaration,
+    addDependency,
+    cacheGlobalType,
+    doesDeclarationExist,
+    findMatchingNames,
+    getCompiledJS,
+    getCurrentErrors,
+    getDependencies,
+    getDependents,
+    getErrors,
+    getGlobalType,
+    getModuleImportScope,
+    getParsed,
+    getRemainingWork,
+    getRenamed,
+    getTyped,
+    invalidate,
+    invalidateRenamed,
+    invalidateTyped,
+    lastKnownDeclarations,
+    removeDeclaration,
+    setCompiledJS,
+    setKnownDeclarations,
+    setModuleImportScope,
+    setParsed,
+    setRenamed,
+    setTyped,
+ )
 
 import Effectful
 import Effectful.Dispatch.Dynamic
@@ -18,6 +46,9 @@ import Vega.Syntax
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashTable.IO (CuckooHashTable)
 import Data.HashTable.IO qualified as HashTable
+import Data.Sequence qualified as Seq
+import Data.Traversable (for)
+import Vega.BuildConfig (Backend (JavaScript))
 
 -- TODO: this currently isn't thread safe
 
@@ -25,6 +56,7 @@ data DeclarationData = MkDeclarationData
     { parsed :: IORef (Declaration Parsed)
     , renamed :: IORef (GraphData RenameError (Declaration Renamed))
     , typed :: IORef (GraphData TypeError (Declaration Typed))
+    , compiledJS :: IORef (GraphData Void LText)
     , --
       dependencies :: IORef (HashSet GlobalName)
     , dependents :: IORef (HashSet GlobalName)
@@ -92,6 +124,13 @@ setModuleImportScope moduleName scope = do
     importScopes <- ask @ImportScopes
     liftIO $ HashTable.insert importScopes moduleName scope
 
+doesDeclarationExist :: (InMemory es) => GlobalName -> Eff es Bool
+doesDeclarationExist name = do
+    declarations <- ask @DeclarationStore
+    liftIO (HashTable.lookup declarations name) >>= \case
+        Just _ -> pure True
+        Nothing -> pure False
+
 addDeclaration :: (InMemory es) => Declaration Parsed -> Eff es ()
 addDeclaration declaration = do
     declarations <- ask @DeclarationStore
@@ -100,10 +139,11 @@ addDeclaration declaration = do
     parsed <- newIORef declaration
     renamed <- newIORef Missing{previous = Nothing}
     typed <- newIORef Missing{previous = Nothing}
+    compiledJS <- newIORef Missing{previous = Nothing}
     dependencies <- newIORef mempty
     dependents <- newIORef mempty
     cachedType <- newIORef Nothing
-    let data_ = MkDeclarationData{parsed, renamed, typed, dependencies, dependents, cachedType}
+    let data_ = MkDeclarationData{parsed, renamed, typed, compiledJS, dependencies, dependents, cachedType}
     liftIO $ HashTable.mutate declarations declaration.name \case
         Nothing -> (Just data_, ())
         Just _ -> error $ "Trying to add declaration as new that already exists: '" <> show declaration.name <> "'"
@@ -139,13 +179,23 @@ setRenamed declaration = do
 getTyped :: (InMemory es) => GlobalName -> Eff es (GraphData TypeError (Declaration Typed))
 getTyped name = do
     data_ <- declarationData name
-    liftIO $ readIORef data_.typed
+    readIORef data_.typed
 
 setTyped :: (InMemory es) => Declaration Typed -> Eff es ()
 setTyped declaration = do
     invalidateTyped Nothing declaration.name
     data_ <- declarationData declaration.name
     writeIORef data_.typed (Ok declaration)
+
+getCompiledJS :: (InMemory es) => GlobalName -> Eff es (GraphData Void LText)
+getCompiledJS name = do
+    data_ <- declarationData name
+    readIORef data_.compiledJS
+
+setCompiledJS :: (InMemory es) => GlobalName -> LText -> Eff es ()
+setCompiledJS name js = do
+    data_ <- declarationData name
+    writeIORef data_.compiledJS (Ok js)
 
 removeDeclaration :: (InMemory es) => GlobalName -> Eff es ()
 removeDeclaration name = do
@@ -196,6 +246,8 @@ invalidateTyped maybeError name = do
     modifyIORef' data_.typed invalidate
     writeIORef data_.cachedType Nothing
 
+    modifyIORef' data_.compiledJS invalidateGraphData
+
 getDependencies :: (InMemory es) => GlobalName -> Eff es (HashSet GlobalName)
 getDependencies name = do
     data_ <- declarationData name
@@ -244,22 +296,41 @@ getErrors name = undefined
 getCurrentErrors :: (InMemory es) => Eff es (Seq Error)
 getCurrentErrors = undefined
 
-remainingWorkItems :: (InMemory es) => GlobalName -> DeclarationData -> Eff es (Seq WorkItem)
-remainingWorkItems name data_ = do
+remainingWorkItems :: (InMemory es) => Backend -> GlobalName -> DeclarationData -> Eff es (Seq WorkItem)
+remainingWorkItems backend name data_ = do
+    -- TODO: ughhhh i hope this gets better once we switch to the work queue API
+    let remainingCompilation = case backend of
+            JavaScript -> [CompileToJS name]
+            _ -> []
     readIORef data_.renamed >>= \case
-        Missing{} -> pure [Rename name]
+        Missing{} -> pure $ [Rename name, TypeCheck name] <> remainingCompilation
         -- If compilation failed here, we can't do anything until something changes in the input (which will invalidate the renamed field)
         Failed{} -> pure []
         Ok _ -> do
             readIORef data_.typed >>= \case
-                Missing{} -> pure [TypeCheck name]
+                Missing{} -> pure $ [TypeCheck name] <> remainingCompilation
                 Failed{} -> pure []
-                Ok _ -> pure []
+                Ok _ -> do
+                    case backend of
+                        JavaScript -> do
+                            readIORef data_.compiledJS >>= \case
+                                Missing{} -> pure [CompileToJS name]
+                                Ok{} -> pure []
+                        _ -> undefined
 
-getRemainingWork :: (InMemory es) => Eff es (Seq WorkItem)
-getRemainingWork = do
+getRemainingWork :: (InMemory es) => Backend -> Eff es (Seq WorkItem)
+getRemainingWork backend = do
     declarations <- liftIO . HashTable.toList =<< ask @DeclarationStore
-    mconcat <$> traverse (\(name, data_) -> remainingWorkItems name data_) declarations
+    remainingWork <-
+        mconcat <$> for declarations \(name, data_) -> do
+            remainingWorkItems backend name data_
+    pure (Seq.sortOn rankWorkItem remainingWork)
+  where
+    rankWorkItem :: WorkItem -> Int
+    rankWorkItem = \case
+        Rename{} -> 0
+        TypeCheck{} -> 1
+        CompileToJS{} -> 2
 
 runInMemory :: forall a es. (IOE :> es) => Eff (GraphPersistence : es) a -> Eff es a
 runInMemory action = do
@@ -281,6 +352,7 @@ runInMemory action = do
                 SetKnownDeclarations filePath declarations -> setKnownDeclarations filePath declarations
                 GetModuleImportScope moduleName -> getModuleImportScope moduleName
                 SetModuleImportScope moduleName scope -> setModuleImportScope moduleName scope
+                DoesDeclarationExist name -> doesDeclarationExist name
                 AddDeclaration declaration -> addDeclaration declaration
                 GetParsed name -> getParsed name
                 SetParsed name -> setParsed name
@@ -288,6 +360,8 @@ runInMemory action = do
                 SetRenamed name -> setRenamed name
                 GetTyped name -> getTyped name
                 SetTyped name -> setTyped name
+                GetCompiledJS name -> getCompiledJS name
+                SetCompiledJS name js -> setCompiledJS name js
                 -- Invalidation
                 RemoveDeclaration name -> removeDeclaration name
                 Invalidate name -> invalidate name
@@ -304,4 +378,4 @@ runInMemory action = do
                 GetErrors name -> getErrors name
                 -- Compilation
                 GetCurrentErrors -> getCurrentErrors
-                GetRemainingWork -> getRemainingWork
+                GetRemainingWork backend -> getRemainingWork backend

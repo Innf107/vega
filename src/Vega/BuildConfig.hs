@@ -1,6 +1,15 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module Vega.BuildConfig (BuildConfigContents (..), BuildConfig (..), sourceDirectory, BuildConfigPresence (..), findBuildConfig) where
+module Vega.BuildConfig (
+    BuildConfigPresence (..),
+    findBuildConfig,
+    BuildConfigContents (..),
+    BuildConfig (..),
+    sourceDirectory,
+    entryPoint,
+    backend,
+    Backend (..),
+) where
 
 import Relude
 
@@ -12,10 +21,13 @@ import Data.Aeson qualified as Aeson
 import Data.Yaml as Yaml hiding (object)
 
 import System.FilePath ((</>))
+import Vega.Syntax (GlobalName (..), ModuleName (..))
 
 data BuildConfigContents = MkBuildConfigContents
     { name :: Text
     , sourceDirectory :: Maybe FilePath
+    , entryPoint :: Maybe Text
+    , backend :: Maybe Backend
     }
     deriving (Generic, Show)
 
@@ -34,10 +46,35 @@ data BuildConfig = MkBuildConfig
     }
     deriving stock (Generic, Show)
 
+data Backend
+    = JavaScript
+    | NativeRelease
+    | NativeDebug
+    deriving (Generic, Show)
+
+instance FromJSON Backend where
+    parseJSON = \case
+        String "javascript" -> pure JavaScript
+        String "debug" -> pure NativeDebug
+        String "release" -> pure NativeRelease
+        _ -> undefined
+
 sourceDirectory :: BuildConfig -> FilePath
 sourceDirectory config = case config.contents.sourceDirectory of
     Nothing -> config.projectRoot </> "src"
     Just sourceDirectory -> config.projectRoot </> sourceDirectory
+
+entryPoint :: BuildConfig -> GlobalName
+entryPoint config = case config.contents.entryPoint of
+    -- TODO: change this once you make module names more sensible
+    Nothing -> MkGlobalName{moduleName = MkModuleName (toText (sourceDirectory config </> "Main.vega")), name = "main"}
+    -- TODO: figure out how exactly to parse declaration names here
+    Just name -> undefined
+
+backend :: BuildConfig -> Backend
+backend config = case config.contents.backend of
+    Nothing -> JavaScript
+    Just backend -> backend
 
 data BuildConfigPresence
     = Found BuildConfig

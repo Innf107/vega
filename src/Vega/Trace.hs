@@ -3,7 +3,7 @@ module Vega.Trace (
     traceIO,
     trace,
     tracePure,
-    traceEnabled
+    traceEnabled,
 ) where
 
 import Data.Text qualified as Text
@@ -12,14 +12,18 @@ import System.IO.Unsafe (unsafePerformIO)
 
 data Category
     = Driver
+    | WorkItems
+    | AssembleJS
     deriving (Show)
 
 data Traces = MkTraces
     { driver :: Bool
+    , workItems :: Bool
+    , assembleJS :: Bool
     }
 
 defaultTraces :: Traces
-defaultTraces = MkTraces{driver = False}
+defaultTraces = MkTraces{driver = False, workItems = False, assembleJS = False}
 
 getTraces :: IO Traces
 getTraces =
@@ -33,6 +37,8 @@ getTraces =
         [] -> pure traces
         ("" : rest) -> go traces rest
         ("driver" : rest) -> go (traces{driver = True}) rest
+        ("work-items" : rest) -> go (traces{workItems = True}) rest
+        ("assemble-js" : rest) -> go (traces{assembleJS = True}) rest
         (trace_ : rest) -> do
             -- TODO: make the warning prettier
             putTextLn $ "WARNING: unrecognized trace category: " <> trace_
@@ -47,6 +53,8 @@ enabledTraces = unsafePerformIO $ getTraces
 traceEnabled :: Category -> Bool
 traceEnabled = \case
     Driver -> enabledTraces.driver
+    WorkItems -> enabledTraces.workItems
+    AssembleJS -> enabledTraces.assembleJS
 
 -- TODO: Use a doc here
 traceIO :: Category -> Text -> IO ()

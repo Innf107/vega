@@ -13,6 +13,7 @@ import Vega.Util (compose, mapAccumLM, unzip3Seq, viaList, zipWithSeqM)
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 
+import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Unique (newUnique)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwError_)
@@ -80,7 +81,15 @@ checkDeclarationSyntax loc name = \case
     DefineFunction{typeSignature, declaredTypeParameters, parameters, body} -> do
         let env = emptyEnv
         (functionType, typeSignature) <- checkType env Type typeSignature
-        (parameterTypes, effect, returnType) <- splitFunctionType loc (length parameters) functionType
+
+        (parameterTypes, effect, returnType, env, declaredTypeParameters) <- case declaredTypeParameters of
+            Nothing -> do
+                -- TODO: i don't think this works correctly with foralls?
+                (parameterTypes, effect, returnType) <- splitFunctionType loc (length parameters) functionType
+                pure (parameterTypes, effect, returnType, env, Nothing)
+            Just typeParameters -> do
+                undefined
+
         when (length parameters /= length parameterTypes) $ do
             typeError
                 ( FunctionDefinedWithIncorrectNumberOfArguments
@@ -101,7 +110,7 @@ checkDeclarationSyntax loc name = \case
         (body, bodyEffect) <- check env returnType body
         subsumesEffect bodyEffect effect
 
-        pure DefineFunction{typeSignature, declaredTypeParameters = undefined, parameters, body}
+        pure DefineFunction{typeSignature, declaredTypeParameters, parameters, body}
     DefineVariantType{} -> undefined
 
 checkPattern :: (TypeCheck es) => Env -> Type -> Pattern Renamed -> Eff es (Pattern Typed, Env -> Env)
@@ -180,7 +189,9 @@ infer env = \case
             type_ <- instantiate =<< getGlobalType globalName
             pure (type_, Var loc name, Pure)
         Local localName -> do
-            undefined
+            case lookup localName env.localTypes of
+                Just type_ -> pure (type_, Var loc name, Pure)
+                Nothing -> undefined
     Application{loc, functionExpr, arguments} -> do
         (functionType, functionExpr, functionExprEffect) <- infer env functionExpr
         (argumentTypes, functionEffect, returnType) <- splitFunctionType loc (length arguments) functionType
@@ -437,10 +448,13 @@ occursAndAdjust meta type_ = do
             Pure -> pure ()
 
 subsumesEffect :: (TypeCheck es) => Effect -> Effect -> Eff es ()
-subsumesEffect = undefined
+subsumesEffect Pure _ = pure ()
+subsumesEffect _ _ = undefined
 
 union :: (TypeCheck es) => Effect -> Effect -> Eff es Effect
-union = undefined
+union Pure eff = pure eff
+union eff Pure = pure eff
+union _ _ = undefined
 
 unionM :: (TypeCheck es) => Eff es Effect -> Eff es Effect -> Eff es Effect
 unionM eff1M eff2M = do
@@ -449,7 +463,8 @@ unionM eff1M eff2M = do
     eff1 `union` eff2
 
 unionAll :: (TypeCheck es) => Seq Effect -> Eff es Effect
-unionAll = undefined
+unionAll Empty = pure Pure
+unionAll (eff :<| rest) = pure eff `unionM` unionAll rest
 
 freshMeta :: (TypeCheck es) => Text -> Eff es MetaVar
 freshMeta name = do

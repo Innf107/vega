@@ -9,6 +9,7 @@ import Vega.Syntax hiding (Effect)
 import Effectful
 import Effectful.TH (makeEffect)
 
+import Vega.BuildConfig (Backend)
 import Vega.Error (Error, RenameError, TypeError)
 
 data GraphData error a
@@ -19,6 +20,8 @@ data GraphData error a
 data WorkItem
     = Rename GlobalName
     | TypeCheck GlobalName
+    | CompileToJS GlobalName
+    deriving (Show)
 
 data GraphPersistence :: Effect where
     -- Module Data
@@ -27,6 +30,7 @@ data GraphPersistence :: Effect where
     GetModuleImportScope :: ModuleName -> GraphPersistence m ImportScope
     SetModuleImportScope :: ModuleName -> ImportScope -> GraphPersistence m ()
     -- Declarations
+    DoesDeclarationExist :: GlobalName -> GraphPersistence m Bool
     AddDeclaration :: Declaration Parsed -> GraphPersistence m ()
     GetParsed :: GlobalName -> GraphPersistence m (Declaration Parsed)
     SetParsed :: Declaration Parsed -> GraphPersistence m ()
@@ -34,6 +38,8 @@ data GraphPersistence :: Effect where
     SetRenamed :: Declaration Renamed -> GraphPersistence m ()
     GetTyped :: GlobalName -> GraphPersistence m (GraphData TypeError (Declaration Typed))
     SetTyped :: Declaration Typed -> GraphPersistence m ()
+    GetCompiledJS :: GlobalName -> GraphPersistence m (GraphData Void LText)
+    SetCompiledJS :: GlobalName -> LText -> GraphPersistence m ()
     -- Invalidation
     RemoveDeclaration :: GlobalName -> GraphPersistence m ()
     Invalidate :: GlobalName -> GraphPersistence m ()
@@ -52,6 +58,6 @@ data GraphPersistence :: Effect where
     GetErrors :: GlobalName -> GraphPersistence m (Seq Error)
     -- Compilation
     GetCurrentErrors :: GraphPersistence m (Seq Error)
-    GetRemainingWork :: GraphPersistence m (Seq WorkItem)
+    GetRemainingWork :: Backend -> GraphPersistence m (Seq WorkItem)
 
 makeEffect ''GraphPersistence
