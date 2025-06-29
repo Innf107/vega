@@ -40,7 +40,7 @@ import Vega.Effect.GraphPersistence hiding (
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.Reader.Static
-import Vega.Error (CompilationError, RenameError, TypeError, TypeErrorSet)
+import Vega.Error (CompilationError, RenameError, TypeError, TypeErrorSet, RenameErrorSet)
 import Vega.Syntax
 
 import Data.HashMap.Strict qualified as HashMap
@@ -233,7 +233,7 @@ invalidate name = do
     modifyIORef' data_.renamed invalidateGraphData
     invalidateTyped Nothing name
 
-invalidateRenamed :: (InMemory es) => Maybe RenameError -> GlobalName -> Eff es ()
+invalidateRenamed :: (InMemory es) => Maybe RenameErrorSet -> GlobalName -> Eff es ()
 invalidateRenamed = undefined
 
 invalidateTyped :: (InMemory es) => Maybe TypeErrorSet -> GlobalName -> Eff es ()

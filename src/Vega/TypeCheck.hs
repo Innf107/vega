@@ -3,7 +3,6 @@ module Vega.TypeCheck (checkDeclaration) where
 import Vega.Syntax
 
 import Effectful hiding (Effect)
-import Effectful.Writer.Static.Local (Writer, tell)
 import Relude hiding (Type)
 import Relude.Extra
 
@@ -17,8 +16,8 @@ import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Unique (newUnique)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwError_)
-import Effectful.Writer.Static.Local (runWriter)
 import Vega.Loc (HasLoc (getLoc), Loc)
+import Vega.Effect.Output.Static.Local (Output, output, runOutputSeq)
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -45,12 +44,12 @@ typeVariableKind name env =
         Just kind -> kind
 
 -- TODO: factor out the reference/unique bits so you don't need full IOE
-type TypeCheck es = (GraphPersistence :> es, Writer (Seq TypeError) :> es, Error TypeError :> es, IOE :> es)
+type TypeCheck es = (GraphPersistence :> es, Output TypeError :> es, Error TypeError :> es, IOE :> es)
 
 checkDeclaration :: (GraphPersistence :> es, IOE :> es) => Declaration Renamed -> Eff es (Either (Seq TypeError) (Declaration Typed))
 checkDeclaration (MkDeclaration{loc, name, syntax}) = do
     (syntaxOrFatalError, nonFatalErrors) <-
-        runWriter $
+        runOutputSeq $
             runErrorNoCallStack $
                 checkDeclarationSyntax loc name syntax
 
@@ -61,8 +60,8 @@ checkDeclaration (MkDeclaration{loc, name, syntax}) = do
                 [] -> pure (Right (MkDeclaration{loc, name, syntax}))
                 errors -> pure (Left errors)
 
-typeError :: (Writer (Seq TypeError) :> es) => TypeError -> Eff es ()
-typeError error = tell @(Seq _) [error]
+typeError :: (Output TypeError :> es) => TypeError -> Eff es ()
+typeError error = output error
 
 fatalTypeError :: (Error TypeError :> es) => TypeError -> Eff es a
 fatalTypeError error = throwError_ error

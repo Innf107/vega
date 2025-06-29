@@ -38,6 +38,7 @@ library
       Vega.Driver
       Vega.Effect.GraphPersistence
       Vega.Effect.GraphPersistence.InMemory
+      Vega.Effect.Output.Static.Local
       Vega.Error
       Vega.Lexer
       Vega.Loc

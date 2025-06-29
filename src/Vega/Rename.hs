@@ -13,11 +13,18 @@ import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Effectful (Eff, (:>))
 import Effectful.Reader.Static (Reader, ask, runReader)
-import Effectful.Writer.Static.Local (Writer, runWriter, tell)
-import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getModuleImportScope, WorkItem (..))
+import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getModuleImportScope)
+import Vega.Effect.Output.Static.Local (Output, output, runOutputSeq)
+import Vega.Error (RenameError (..), RenameErrorSet (..))
+import Vega.Loc (Loc)
 import Vega.Util qualified as Util
 
-type Rename es = (GraphPersistence :> es, Reader GlobalName :> es, Writer (Seq GlobalName) :> es)
+type Rename es =
+    ( GraphPersistence :> es
+    , Reader GlobalName :> es
+    , Output GlobalName :> es
+    , Output RenameError :> es
+    )
 
 data Env = MkEnv
     { localVariables :: Map Text LocalName
@@ -74,7 +81,7 @@ findGlobalVariable :: (Rename es) => Text -> Eff es GlobalVariableOccurance
 findGlobalVariable var = do
     findGlobalVariableUnregistered var >>= \case
         Found globalName -> do
-            tell @(Seq _) [globalName]
+            output globalName
             pure (Found globalName)
         NotFound -> pure NotFound
         Inaccessible candidates -> pure $ Inaccessible candidates
@@ -88,25 +95,44 @@ isInScope name scope = do
             -- TODO: qualified
             HashSet.member name.name importedItems.unqualifiedItems
 
-rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, Seq GlobalName)
+rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, RenameErrorSet, Seq GlobalName)
 rename (MkDeclaration loc name syntax) = runReader name do
     -- TODO: graph stuff
-    (syntax, dependencies) <- runWriter $ renameDeclarationSyntax name syntax
-    pure (MkDeclaration loc name syntax, dependencies)
+    ((syntax, errors), dependencies) <- runOutputSeq $ runOutputSeq @RenameError $ renameDeclarationSyntax name syntax
+    pure (MkDeclaration loc name syntax, (MkRenameErrorSet errors), dependencies)
 
-findVarName :: (Rename es) => Env -> Text -> Eff es Name
-findVarName env text = case lookup text env.localVariables of
+findVarName :: (Rename es) => Env -> Loc -> Text -> Eff es Name
+findVarName env loc text = case lookup text env.localVariables of
     Just localName -> pure (Local localName)
     Nothing ->
         findGlobalVariable text >>= \case
             Found globalName -> pure (Global globalName)
-            NotFound ->
-                -- TODO: error message. Ideally we don't want this to abort everything but that means we need to return some kind of
-                -- partial name standin and (somehow) propagate that to the next stage?
-                -- Since this runs per declaration, maybe failing wouldn't be *terrible* but it would still be nice to have x + y show two errors
-                undefined
-            Ambiguous names -> undefined
-            Inaccessible names -> undefined
+            NotFound -> do
+                output (VarNotFound{loc, var = text})
+
+                parent <- ask @GlobalName
+                pure (Local (dummyLocalName parent text))
+            Ambiguous candidates -> do
+                output (AmbiguousGlobalVariable{loc, var = text, candidates})
+
+                parent <- ask @GlobalName
+                pure (Local (dummyLocalName parent text))
+            Inaccessible candidates -> do
+                output (InaccessibleGlobalVariable{loc, var = text, candidates})
+
+                parent <- ask @GlobalName
+                pure (Local (dummyLocalName parent text))
+
+{- | This is returned if we cannot find a local name during renaming.
+
+This condition is an error, but we don't want to abort renaming just yet since we might find more
+errors in the same declaration.
+Instead, we return a new dummy name that is technically wrong and could cause issues if it got through to type checking,
+but since we already threw an error when using this function, the type checker is not going to run on
+the current declaration anyway and will not cause any issues.
+-}
+dummyLocalName :: GlobalName -> Text -> LocalName
+dummyLocalName parent name = MkLocalName{parent, name, count = -1}
 
 findTypeVariable :: Env -> Text -> Eff es LocalName
 findTypeVariable env text = case lookup text env.localTypeVariables of
@@ -201,7 +227,7 @@ renamePattern env = \case
 renameExpr :: (Rename es) => Env -> Expr Parsed -> Eff es (Expr Renamed)
 renameExpr env = \case
     Var loc name -> do
-        name <- findVarName env name
+        name <- findVarName env loc name
         pure (Var loc name)
     DataConstructor{} -> undefined
     Application{loc, functionExpr, arguments} -> do

@@ -27,11 +27,11 @@ import Effectful
 import GHC.Generics
 
 import Data.HashMap.Strict qualified as HashMap
-import Effectful.Writer.Static.Local (execWriter, tell)
 import Vega.Loc (Loc)
 
 import Data.Sequence qualified as Seq
 import Effectful.State.Static.Local (evalState, get, put)
+import Vega.Effect.Output.Static.Local (execOutputSeq, output, outputAll)
 import Vega.Util qualified as Util
 
 data DiffChange
@@ -43,21 +43,21 @@ reportNewModule :: ParsedModule -> Seq DiffChange
 reportNewModule MkParsedModule{declarations} = fmap Added declarations
 
 diffDeclarations :: Seq (Declaration Parsed) -> HashMap GlobalName (Declaration Parsed) -> Eff es (Seq DiffChange)
-diffDeclarations declarations allPreviousDeclarations = evalState allPreviousDeclarations $ execWriter @(Seq DiffChange) $ do
+diffDeclarations declarations allPreviousDeclarations = evalState allPreviousDeclarations $ execOutputSeq $ do
     for_ declarations \declaration -> do
         previousDeclarations :: HashMap GlobalName (Declaration Parsed) <- get
         case HashMap.lookup declaration.name previousDeclarations of
-            Nothing -> tell @(Seq _) [Added declaration]
+            Nothing -> output (Added declaration)
             Just previousDeclaration -> do
                 -- TODO: avoid the double traversal here
                 put (HashMap.delete declaration.name previousDeclarations)
                 case diff declaration previousDeclaration of
                     True -> do
-                        tell @(Seq _) [Changed declaration]
+                        output (Changed declaration)
                     False -> pure ()
     -- If there are any declarations left that we didn't hit in the new ones, these must have been removed
     remainingHashMap :: HashMap GlobalName (Declaration Parsed) <- get
-    tell (Seq.fromList (map Removed (HashMap.keys remainingHashMap)))
+    outputAll (Seq.fromList (map Removed (HashMap.keys remainingHashMap)))
 
 class DiffGen f where
     diffGen :: f x -> f x -> Bool

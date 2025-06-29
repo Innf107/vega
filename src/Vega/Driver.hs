@@ -25,7 +25,6 @@ import Data.Traversable (for)
 import Effectful.Concurrent (Concurrent)
 import Effectful.Concurrent.Async (forConcurrently)
 import Effectful.Error.Static (Error, runError, runErrorNoCallStack)
-import Effectful.Writer.Static.Local (runWriter)
 
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
@@ -34,7 +33,7 @@ import Vega.Diff (DiffChange (..))
 import Vega.Diff qualified as Diff
 import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
-import Vega.Error (CompilationError (..), TypeErrorSet (..))
+import Vega.Error (CompilationError (..), RenameErrorSet (..), TypeErrorSet (..))
 import Vega.Error qualified as Error
 import Vega.Lexer qualified as Lexer
 import Vega.Parser qualified as Parser
@@ -232,19 +231,24 @@ rename name = do
     previous <- getLastKnownRenamed name
 
     parsed <- GraphPersistence.getParsed name
-    (renamed, dependencies) <- Rename.rename parsed
+    (renamed, errors, dependencies) <- Rename.rename parsed
     trace Dependencies (show name <> " --> " <> show dependencies)
 
-    GraphPersistence.setRenamed renamed
     for_ dependencies \dependency -> do
         GraphPersistence.addDependency name dependency
 
-    case previous of
-        Just previous
-            | typeChanged previous renamed -> do
-                dependents <- GraphPersistence.getDependents name
-                for_ dependents (GraphPersistence.invalidateTyped Nothing)
-        _ -> pure ()
+    case errors of
+        MkRenameErrorSet (_ :|> _) -> do
+            GraphPersistence.invalidateRenamed (Just errors) name
+        MkRenameErrorSet Empty -> do
+            GraphPersistence.setRenamed renamed
+
+            case previous of
+                Just previous
+                    | typeChanged previous renamed -> do
+                        dependents <- GraphPersistence.getDependents name
+                        for_ dependents (GraphPersistence.invalidateTyped Nothing)
+                _ -> pure ()
 
 typecheck :: (Driver es) => GlobalName -> Eff es ()
 typecheck name =

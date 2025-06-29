@@ -3,9 +3,10 @@
 module Vega.Error (
     CompilationError (..),
     RenameError (..),
+    RenameErrorSet (..),
     TypeError (..),
-    DriverError(..),
     TypeErrorSet (..),
+    DriverError (..),
     printParseErrors,
 ) where
 
@@ -45,7 +46,23 @@ data CompilationError
     | TypeError TypeError
     | DriverError DriverError
 
-data RenameError = Placeholder
+data RenameError
+    = VarNotFound
+        { loc :: Loc
+        , var :: Text
+        }
+    | AmbiguousGlobalVariable
+        { loc :: Loc
+        , var :: Text
+        , candidates :: HashSet GlobalName
+        }
+    | InaccessibleGlobalVariable
+        { loc :: Loc
+        , var :: Text
+        , candidates :: HashSet GlobalName
+        }
+
+newtype RenameErrorSet = MkRenameErrorSet (Seq RenameError)
 
 data TypeError
     = FunctionDefinedWithIncorrectNumberOfArguments

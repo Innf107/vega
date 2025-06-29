@@ -10,7 +10,7 @@ import Effectful
 import Effectful.TH (makeEffect)
 
 import Vega.BuildConfig (Backend)
-import Vega.Error (CompilationError, RenameError, TypeError, TypeErrorSet)
+import Vega.Error (CompilationError, RenameError, RenameErrorSet, TypeError, TypeErrorSet)
 
 data GraphData error a
     = Ok a
@@ -43,7 +43,7 @@ data GraphPersistence :: Effect where
     -- Invalidation
     RemoveDeclaration :: GlobalName -> GraphPersistence m ()
     Invalidate :: GlobalName -> GraphPersistence m ()
-    InvalidateRenamed :: Maybe RenameError -> GlobalName -> GraphPersistence m ()
+    InvalidateRenamed :: Maybe RenameErrorSet -> GlobalName -> GraphPersistence m ()
     InvalidateTyped :: Maybe TypeErrorSet -> GlobalName -> GraphPersistence m ()
     -- Dependencies
     GetDependencies :: GlobalName -> GraphPersistence m (HashSet GlobalName)
