@@ -75,6 +75,7 @@ main = do
                 Missing -> undefined
                 Invalid err -> throw err -- TODO
                 Found config -> runReader config do
-                    Driver.rebuild
+                    result <- Driver.rebuild
+                    undefined
         Exec{file, mainFunction} -> run InMemory do
             Driver.execute file mainFunction

@@ -40,7 +40,7 @@ import Vega.Effect.GraphPersistence hiding (
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.Reader.Static
-import Vega.Error (Error, RenameError, TypeError)
+import Vega.Error (CompilationError, RenameError, TypeError, TypeErrorSet)
 import Vega.Syntax
 
 import Data.HashMap.Strict qualified as HashMap
@@ -55,7 +55,7 @@ import Vega.BuildConfig (Backend (JavaScript))
 data DeclarationData = MkDeclarationData
     { parsed :: IORef (Declaration Parsed)
     , renamed :: IORef (GraphData RenameError (Declaration Renamed))
-    , typed :: IORef (GraphData TypeError (Declaration Typed))
+    , typed :: IORef (GraphData TypeErrorSet (Declaration Typed))
     , compiledJS :: IORef (GraphData Void LText)
     , --
       dependencies :: IORef (HashSet GlobalName)
@@ -176,7 +176,7 @@ setRenamed declaration = do
     data_ <- declarationData declaration.name
     writeIORef data_.renamed (Ok declaration)
 
-getTyped :: (InMemory es) => GlobalName -> Eff es (GraphData TypeError (Declaration Typed))
+getTyped :: (InMemory es) => GlobalName -> Eff es (GraphData TypeErrorSet (Declaration Typed))
 getTyped name = do
     data_ <- declarationData name
     readIORef data_.typed
@@ -236,7 +236,7 @@ invalidate name = do
 invalidateRenamed :: (InMemory es) => Maybe RenameError -> GlobalName -> Eff es ()
 invalidateRenamed = undefined
 
-invalidateTyped :: (InMemory es) => Maybe TypeError -> GlobalName -> Eff es ()
+invalidateTyped :: (InMemory es) => Maybe TypeErrorSet -> GlobalName -> Eff es ()
 invalidateTyped maybeError name = do
     let invalidate = case maybeError of
             Nothing -> invalidateGraphData
@@ -290,10 +290,10 @@ findMatchingNames text = do
         Just candidates -> pure candidates
         Nothing -> mempty
 
-getErrors :: (InMemory es) => GlobalName -> Eff es (Seq Error)
+getErrors :: (InMemory es) => GlobalName -> Eff es (Seq CompilationError)
 getErrors name = undefined
 
-getCurrentErrors :: (InMemory es) => Eff es (Seq Error)
+getCurrentErrors :: (InMemory es) => Eff es (Seq CompilationError)
 getCurrentErrors = undefined
 
 remainingWorkItems :: (InMemory es) => Backend -> GlobalName -> DeclarationData -> Eff es (Seq WorkItem)

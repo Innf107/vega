@@ -17,13 +17,16 @@ import System.FilePath (takeExtension, (</>))
 
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map qualified as Map
+import Data.Sequence (Seq (..))
 import Data.Text qualified as Text
 import Data.Text.Lazy.Builder qualified as TextBuilder
 import Data.Time (getCurrentTime)
 import Data.Traversable (for)
 import Effectful.Concurrent (Concurrent)
 import Effectful.Concurrent.Async (forConcurrently)
+import Effectful.Error.Static (Error, runError, runErrorNoCallStack)
 import Effectful.Writer.Static.Local (runWriter)
+
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
 import Vega.Compilation.JavaScript qualified as JavaScript
@@ -31,6 +34,7 @@ import Vega.Diff (DiffChange (..))
 import Vega.Diff qualified as Diff
 import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
+import Vega.Error (CompilationError (..), TypeErrorSet (..))
 import Vega.Error qualified as Error
 import Vega.Lexer qualified as Lexer
 import Vega.Parser qualified as Parser
@@ -39,9 +43,22 @@ import Vega.Syntax
 import Vega.Trace (Category (..), trace, traceEnabled)
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
-import Witherable (wither)
 
-type Driver es = (Reader BuildConfig :> es, GraphPersistence :> es, IOE :> es, FileSystem :> es, Concurrent :> es)
+data CompilationResult
+    = CompilationSuccessful
+    | CompilationFailed
+        {errors :: Seq CompilationError}
+
+-- TODO: distinguish between new and previous errors
+
+type InfallibleDriver es =
+    ( Reader BuildConfig :> es
+    , GraphPersistence :> es
+    , IOE :> es
+    , FileSystem :> es
+    , Concurrent :> es
+    )
+type Driver es = (InfallibleDriver es, Error Error.DriverError :> es)
 
 findSourceFiles :: (Driver es) => Eff es (Seq FilePath)
 findSourceFiles = do
@@ -150,7 +167,7 @@ performAllRemainingWork = do
     remainingWorkItems <- GraphPersistence.getRemainingWork (BuildConfig.backend config)
     for_ remainingWorkItems \workItem -> do
         trace WorkItems ("Processing work item: " <> show workItem)
-        case workItem of 
+        case workItem of
             GraphPersistence.Rename name -> do
                 rename name
             GraphPersistence.TypeCheck name -> do
@@ -158,13 +175,25 @@ performAllRemainingWork = do
             GraphPersistence.CompileToJS name -> do
                 compileToJS name
 
-rebuild :: (Driver es) => Eff es ()
-rebuild = do
-    trackSourceChanges
-    performAllRemainingWork
-    compileBackend
+rebuild :: (InfallibleDriver es) => Eff es CompilationResult
+rebuild =
+    runErrorNoCallStack frontend >>= \case
+        Left error -> do
+            remainingErrors <- GraphPersistence.getCurrentErrors
+            pure (CompilationFailed{errors = DriverError error :<| remainingErrors})
+        Right () -> do
+            GraphPersistence.getCurrentErrors >>= \case
+                [] -> do
+                    compileBackend
+                    pure CompilationSuccessful
+                errors -> do
+                    pure (CompilationFailed{errors = errors})
+  where
+    frontend = do
+        trackSourceChanges
+        performAllRemainingWork
 
-compileBackend :: (Driver es) => Eff es ()
+compileBackend :: (InfallibleDriver es) => Eff es ()
 compileBackend = do
     -- TODO: select the backend, etc.
     config <- ask @BuildConfig
@@ -173,7 +202,6 @@ compileBackend = do
     GraphPersistence.doesDeclarationExist (BuildConfig.entryPoint config) >>= \case
         True -> pure ()
         False -> undefined -- TODO: error message
-
     case BuildConfig.backend config of
         BuildConfig.JavaScript -> do
             jsCode <- JavaScript.assembleFromEntryPoint (BuildConfig.entryPoint config)
@@ -219,25 +247,23 @@ rename name = do
         _ -> pure ()
 
 typecheck :: (Driver es) => GlobalName -> Eff es ()
-typecheck name = do
-    renamed <-
-        GraphPersistence.getRenamed name >>= \case
-            Ok renamed -> pure renamed
-            Missing{} -> error $ "missing renamed in typecheck (TODO: should this rename it then?)"
-            Failed{} -> error $ "trying to typecheck previously errored declaration"
-
-    typedOrErrors <- TypeCheck.checkDeclaration renamed
-    case typedOrErrors of
-        Left errors -> undefined
-        Right typed -> do
-            GraphPersistence.setTyped typed
+typecheck name =
+    GraphPersistence.getRenamed name >>= \case
+        Missing{} -> error $ "missing renamed in typecheck: " <> show name
+        Failed{} -> pure ()
+        Ok renamed -> do
+            typedOrErrors <- TypeCheck.checkDeclaration renamed
+            case typedOrErrors of
+                Left errors -> do
+                    GraphPersistence.invalidateTyped (Just (MkTypeErrorSet errors)) name
+                Right typed -> do
+                    GraphPersistence.setTyped typed
 
 compileToJS :: (Driver es) => GlobalName -> Eff es ()
-compileToJS name = do
-    typedDeclaration <-
-        GraphPersistence.getTyped name >>= \case
-            Ok typed -> pure typed
-            Missing{} -> error $ "missing typed in compilation to JS"
-            Failed{} -> error $ "trying to compile errored declaration"
-    compiled <- JavaScript.compileDeclaration typedDeclaration
-    GraphPersistence.setCompiledJS name compiled
+compileToJS name =
+    GraphPersistence.getTyped name >>= \case
+        Missing{} -> error $ "missing typed in compilation to JS: " <> show name
+        Failed{} -> pure () -- If the previous stage errored, we won't try to compile it
+        Ok typedDeclaration -> do
+            compiled <- JavaScript.compileDeclaration typedDeclaration
+            GraphPersistence.setCompiledJS name compiled

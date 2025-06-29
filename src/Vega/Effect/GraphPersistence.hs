@@ -10,7 +10,7 @@ import Effectful
 import Effectful.TH (makeEffect)
 
 import Vega.BuildConfig (Backend)
-import Vega.Error (Error, RenameError, TypeError)
+import Vega.Error (CompilationError, RenameError, TypeError, TypeErrorSet)
 
 data GraphData error a
     = Ok a
@@ -36,7 +36,7 @@ data GraphPersistence :: Effect where
     SetParsed :: Declaration Parsed -> GraphPersistence m ()
     GetRenamed :: GlobalName -> GraphPersistence m (GraphData RenameError (Declaration Renamed))
     SetRenamed :: Declaration Renamed -> GraphPersistence m ()
-    GetTyped :: GlobalName -> GraphPersistence m (GraphData TypeError (Declaration Typed))
+    GetTyped :: GlobalName -> GraphPersistence m (GraphData TypeErrorSet (Declaration Typed))
     SetTyped :: Declaration Typed -> GraphPersistence m ()
     GetCompiledJS :: GlobalName -> GraphPersistence m (GraphData Void LText)
     SetCompiledJS :: GlobalName -> LText -> GraphPersistence m ()
@@ -44,7 +44,7 @@ data GraphPersistence :: Effect where
     RemoveDeclaration :: GlobalName -> GraphPersistence m ()
     Invalidate :: GlobalName -> GraphPersistence m ()
     InvalidateRenamed :: Maybe RenameError -> GlobalName -> GraphPersistence m ()
-    InvalidateTyped :: Maybe TypeError -> GlobalName -> GraphPersistence m ()
+    InvalidateTyped :: Maybe TypeErrorSet -> GlobalName -> GraphPersistence m ()
     -- Dependencies
     GetDependencies :: GlobalName -> GraphPersistence m (HashSet GlobalName)
     GetDependents :: GlobalName -> GraphPersistence m (HashSet GlobalName)
@@ -55,9 +55,9 @@ data GraphPersistence :: Effect where
     GetGlobalType :: GlobalName -> GraphPersistence m (Either Type (TypeSyntax Renamed))
     CacheGlobalType :: GlobalName -> Type -> GraphPersistence m ()
     FindMatchingNames :: Text -> GraphPersistence m (HashMap GlobalName NameKind)
-    GetErrors :: GlobalName -> GraphPersistence m (Seq Error)
+    GetErrors :: GlobalName -> GraphPersistence m (Seq CompilationError)
     -- Compilation
-    GetCurrentErrors :: GraphPersistence m (Seq Error)
+    GetCurrentErrors :: GraphPersistence m (Seq CompilationError)
     GetRemainingWork :: Backend -> GraphPersistence m (Seq WorkItem)
 
 makeEffect ''GraphPersistence

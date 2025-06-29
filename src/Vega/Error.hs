@@ -1,6 +1,13 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module Vega.Error (Error (..), RenameError (..), TypeError (..), printParseErrors) where
+module Vega.Error (
+    CompilationError (..),
+    RenameError (..),
+    TypeError (..),
+    DriverError(..),
+    TypeErrorSet (..),
+    printParseErrors,
+) where
 
 import Relude hiding (Type)
 
@@ -33,9 +40,12 @@ import Vega.Pretty (Ann, Doc, defaultPrettyANSIIConfig, errorDoc, intercalateDoc
 import Vega.Syntax (GlobalName, Kind, Type)
 import Vega.Util (viaList)
 
-data Error
+data CompilationError
+    = RenameError RenameError
+    | TypeError TypeError
+    | DriverError DriverError
 
-data RenameError = RenameError
+data RenameError = Placeholder
 
 data TypeError
     = FunctionDefinedWithIncorrectNumberOfArguments
@@ -69,6 +79,11 @@ data TypeError
         }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
+
+newtype TypeErrorSet = MkTypeErrorSet (Seq TypeError)
+
+data DriverError
+    = EntryPointNotFound
 
 data ErrorMessage = MkErrorMessage
     { location :: Loc
