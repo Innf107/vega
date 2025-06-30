@@ -34,7 +34,7 @@ data GraphPersistence :: Effect where
     AddDeclaration :: Declaration Parsed -> GraphPersistence m ()
     GetParsed :: GlobalName -> GraphPersistence m (Declaration Parsed)
     SetParsed :: Declaration Parsed -> GraphPersistence m ()
-    GetRenamed :: GlobalName -> GraphPersistence m (GraphData RenameError (Declaration Renamed))
+    GetRenamed :: GlobalName -> GraphPersistence m (GraphData RenameErrorSet (Declaration Renamed))
     SetRenamed :: Declaration Renamed -> GraphPersistence m ()
     GetTyped :: GlobalName -> GraphPersistence m (GraphData TypeErrorSet (Declaration Typed))
     SetTyped :: Declaration Typed -> GraphPersistence m ()

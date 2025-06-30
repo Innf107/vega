@@ -15,6 +15,7 @@ data Category
     | WorkItems
     | AssembleJS
     | Dependencies
+    | TypeCheck
     deriving (Show)
 
 data Traces = MkTraces
@@ -22,6 +23,7 @@ data Traces = MkTraces
     , workItems :: Bool
     , assembleJS :: Bool
     , dependencies :: Bool
+    , typeCheck :: Bool
     }
 
 defaultTraces :: Traces
@@ -31,6 +33,7 @@ defaultTraces =
         , workItems = False
         , assembleJS = False
         , dependencies = False
+        , typeCheck = False
         }
 
 getTraces :: IO Traces
@@ -48,6 +51,7 @@ getTraces =
         ("work-items" : rest) -> go (traces{workItems = True}) rest
         ("assemble-js" : rest) -> go (traces{assembleJS = True}) rest
         ("dependencies" : rest) -> go (traces{dependencies = True}) rest
+        ("types" : rest) -> go (traces{typeCheck = True}) rest
         (trace_ : rest) -> do
             -- TODO: make the warning prettier
             putTextLn $ "WARNING: unrecognized trace category: " <> trace_
@@ -65,6 +69,7 @@ traceEnabled = \case
     WorkItems -> enabledTraces.workItems
     AssembleJS -> enabledTraces.assembleJS
     Dependencies -> enabledTraces.dependencies
+    TypeCheck -> enabledTraces.typeCheck
 
 -- TODO: Use a doc here
 traceIO :: Category -> Text -> IO ()

@@ -40,6 +40,7 @@ library
       Vega.Effect.GraphPersistence.InMemory
       Vega.Effect.Output.Static.Local
       Vega.Error
+      Vega.Error.ParseError
       Vega.Lexer
       Vega.Loc
       Vega.Parser

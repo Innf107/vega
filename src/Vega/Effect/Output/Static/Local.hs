@@ -14,10 +14,8 @@ import Effectful (Dispatch (Static), DispatchOf, Eff, Effect, (:>))
 import Effectful.Dispatch.Static (
     StaticRep,
     execStaticRep,
-    getStaticRep,
     runStaticRep,
     stateStaticRep,
-    unsafeEff_,
     pattern NoSideEffects,
  )
 import GHC.IsList (IsList (..))

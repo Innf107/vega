@@ -7,14 +7,19 @@ import Vega.Driver qualified as Driver
 
 import Control.Exception (throw)
 import Data.Text qualified as Text
+import Data.Yaml (prettyPrintParseException)
 import Effectful (Eff, IOE, runEff)
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.FileSystem (FileSystem, runFileSystem)
 import Effectful.Reader.Static (Reader, runReader)
 import Text.Read qualified as Read
 import Vega.BuildConfig (BuildConfig, BuildConfigPresence (..), findBuildConfig)
+import Vega.Driver (CompilationResult (..))
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence.InMemory (runInMemory)
+import Vega.Error (ErrorMessageWithLoc (..), PlainErrorMessage (..), renderCompilationError, prettyErrorWithLoc, ErrorMessage (..))
+import Vega.Loc (HasLoc (..))
+import Vega.Pretty (PrettyANSIIConfig (MkPrettyANSIIConfig, includeUnique), align, emphasis, eprintANSII, errorText, keyword, pretty, (<+>))
 import Vega.Util (constructorNames)
 
 data PersistenceBackend
@@ -68,14 +73,34 @@ run persistence action = case persistence of
 
 main :: IO ()
 main = do
+    let ?config =
+            MkPrettyANSIIConfig
+                { includeUnique = False
+                }
     options <- execParser (info (parser <**> helper) fullDesc)
     case options of
         Build{persistence} -> run persistence do
             findBuildConfig "." >>= \case
-                Missing -> undefined
-                Invalid err -> throw err -- TODO
+                Missing -> do
+                    eprintANSII $ pretty $ MkPlainErrorMessage $ emphasis "Missing" <+> keyword "vega.yaml" <+> emphasis "file"
+                    exitFailure
+                Invalid parseException -> do
+                    -- TODO: format these yourself so they're actually human readable
+                    eprintANSII $ pretty $
+                        MkPlainErrorMessage $
+                            emphasis "Malformed" <+> keyword "vega.yaml" <+> emphasis "file:"
+                                <> "\n    "
+                                <> align (fromString (prettyPrintParseException parseException))
+                    exitFailure
                 Found config -> runReader config do
                     result <- Driver.rebuild
-                    undefined
+                    case result of
+                        CompilationSuccessful -> pure ()
+                        CompilationFailed errors -> do
+                            for_ errors \error -> do
+                                doc <- case renderCompilationError error of
+                                    ErrorWithLoc errorWithLoc -> prettyErrorWithLoc errorWithLoc
+                                    PlainError plainError -> pure $ pretty plainError
+                                eprintANSII doc
         Exec{file, mainFunction} -> run InMemory do
             Driver.execute file mainFunction

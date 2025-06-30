@@ -7,44 +7,27 @@ module Vega.Error (
     TypeError (..),
     TypeErrorSet (..),
     DriverError (..),
-    printParseErrors,
+    renderCompilationError,
+    ErrorMessage(..),
+    ErrorMessageWithLoc (..),
+    PlainErrorMessage(..),
+    prettyErrorWithLoc,
 ) where
 
 import Relude hiding (Type)
 
-import Effectful
-
-import Data.Sequence (Seq (..))
-import Data.Sequence qualified as Seq
 import Data.Text qualified as Text
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import GHC.Show (ShowS)
-import Relude.List.NonEmpty qualified as NonEmpty
-import Text.Megaparsec (
-    ErrorFancy (ErrorCustom, ErrorFail, ErrorIndentation),
-    ParseError (FancyError, TrivialError),
-    ParseErrorBundle (ParseErrorBundle),
-    PosState (pstateSourcePos),
-    SourcePos,
-    TraversableStream,
-    VisualStream,
-    errorOffset,
- )
-import Text.Megaparsec.Error (ErrorItem (..), ParseErrorBundle (..))
-import Text.Megaparsec.Stream (TraversableStream (..))
-import Vega.Lexer (Token)
-import Vega.Loc (HasLoc, Loc (..), getLoc)
-import Vega.Parser (AdditionalParseError (MismatchedFunctionName))
-import Vega.Parser qualified as Parser
-import Vega.Pretty (Ann, Doc, defaultPrettyANSIIConfig, errorDoc, intercalateDoc, keyword, plain, pretty, prettyANSII, vsep, (<+>))
+import Vega.Loc (HasLoc, Loc (..))
+import Vega.Pretty (Ann, Doc, Pretty (pretty), errorText, keyword, plain, vsep, (<+>))
 import Vega.Syntax (GlobalName, Kind, Type)
-import Vega.Util (viaList)
 
 data CompilationError
     = RenameError RenameError
     | TypeError TypeError
     | DriverError DriverError
+    deriving stock (Generic)
 
 data RenameError
     = VarNotFound
@@ -61,6 +44,8 @@ data RenameError
         , var :: Text
         , candidates :: HashSet GlobalName
         }
+    deriving stock (Generic)
+    deriving anyclass (HasLoc)
 
 newtype RenameErrorSet = MkRenameErrorSet (Seq RenameError)
 
@@ -101,83 +86,20 @@ newtype TypeErrorSet = MkTypeErrorSet (Seq TypeError)
 
 data DriverError
     = EntryPointNotFound
+    deriving stock (Generic)
 
-data ErrorMessage = MkErrorMessage
+data ErrorMessageWithLoc = MkErrorMessageWithLoc
     { location :: Loc
     , contents :: Doc Ann
     }
 
-printParseErrors :: (IOE :> es) => ParseErrorBundle [(Token, Loc)] Parser.AdditionalParseError -> Eff es ()
-printParseErrors errors = do
-    let ?config = defaultPrettyANSIIConfig
-    let messages = generateParseErrorMessages errors
-    for_ messages \message -> do
-        doc <- withErrorLocation message
-        putTextLn $ prettyANSII $ doc
+data PlainErrorMessage = MkPlainErrorMessage
+    { contents :: Doc Ann
+    } deriving stock Generic
 
-generateParseErrorMessages :: ParseErrorBundle [(Token, Loc)] Parser.AdditionalParseError -> Seq ErrorMessage
-generateParseErrorMessages (ParseErrorBundle{bundleErrors, bundlePosState = _bundlePosState}) =
-    foldMap generateParseErrorMessage (viaList @_ @(Seq _) bundleErrors)
-
-generateParseErrorMessage :: ParseError [(Token, Loc)] Parser.AdditionalParseError -> Seq ErrorMessage
-generateParseErrorMessage = \case
-    TrivialError _offset (Just actual) expected -> do
-        let location = errorItemLocation actual
-        [ MkErrorMessage
-                { location
-                , contents =
-                    "    Expected: "
-                        <> prettyExpected expected
-                        <> "\n      Actual: "
-                        <> prettyErrorItem actual
-                }
-            ]
-    TrivialError _offset Nothing expected -> error $ "trivial parse error without actual tokens"
-    FancyError _offset errors ->
-        fromList $ map generateFancyParseErrorMessage (toList errors)
-
-generateFancyParseErrorMessage :: ErrorFancy Parser.AdditionalParseError -> ErrorMessage
-generateFancyParseErrorMessage = \case
-    ErrorFail message -> error $ "fail called in parser: " <> toText message
-    ErrorIndentation{} -> error $ "ErrorIndentation arising from parser"
-    ErrorCustom error ->
-        MkErrorMessage
-            { location = getLoc error
-            , contents =
-                "Parse Error:" <+> case error of
-                    MismatchedFunctionName{typeSignature, definition} -> undefined
-                    _ -> undefined
-            }
-
-prettyErrorItem :: ErrorItem (Token, Loc) -> Doc Ann
-prettyErrorItem (Tokens tokens) = foldMap (pretty . fst) tokens
-prettyErrorItem (Label chars) = plain (viaList chars)
-prettyErrorItem EndOfInput = plain "end of input"
-
-prettyExpected :: Set (ErrorItem (Token, Loc)) -> Doc Ann
-prettyExpected tokens = go (viaList @_ @(Seq _) tokens)
-  where
-    go Empty = ""
-    go (Empty :|> last) = prettyErrorItem last
-    go (rest :|> last) =
-        intercalateDoc ", " (fmap prettyErrorItem rest) <> ", or " <> prettyErrorItem last
-
-errorItemLocation :: ErrorItem (Token, Loc) -> Loc
-errorItemLocation (Tokens tokens) = snd (NonEmpty.head tokens) <> snd (NonEmpty.last tokens)
-errorItemLocation (Label _) = error $ "'Label' in actual part of parse error"
-errorItemLocation EndOfInput = undefined
-
-withErrorLocation :: (MonadIO io) => ErrorMessage -> io (Doc Ann)
-withErrorLocation MkErrorMessage{location, contents} = do
-    code <- extractRange location
-    pure $
-        pretty location
-            <> ": "
-            <> errorDoc "ERROR:"
-            <> "\n"
-            <> contents
-            <> "\n"
-            <> code
+data ErrorMessage
+    = ErrorWithLoc ErrorMessageWithLoc
+    | PlainError PlainErrorMessage
 
 maxDisplayedLineCount :: Int
 maxDisplayedLineCount = 5
@@ -209,15 +131,15 @@ extractRange loc = do
                         else (rest, "")
             separatorWithLine (lineIndex + loc.startLine)
                 <> plain nonHighlightedStart
-                <> errorDoc highlighted
+                <> errorText highlighted
                 <> plain nonHighlightedEnd
 
     let codeLines = vsep $ Vector.imap highlightLine extractedLines
 
     -- we only show an underline if there is a single line
     let underline = case lineCount of
-            1 -> plain (Text.replicate (loc.startColumn - 1) " ") <> errorDoc (Text.replicate (loc.endColumn - loc.startColumn) "▔")
-            _ | isTooLong -> errorDoc "..."
+            1 -> plain (Text.replicate (loc.startColumn - 1) " ") <> errorText (Text.replicate (loc.endColumn - loc.startColumn) "▔")
+            _ | isTooLong -> errorText "..."
             _ -> ""
 
     let separator = plain (Text.replicate linePadding " ") <> " " <> keyword "┃ "
@@ -228,3 +150,23 @@ extractRange loc = do
             , codeLines
             , separator <> underline
             ]
+
+instance Pretty PlainErrorMessage where
+    pretty message = errorText "ERROR:" <+> message.contents
+
+prettyErrorWithLoc :: (MonadIO io) => ErrorMessageWithLoc -> io (Doc Ann)
+prettyErrorWithLoc MkErrorMessageWithLoc{location, contents} = do
+    code <- extractRange location
+    pure $
+        pretty location
+            <> ": "
+            <> errorText "ERROR:"
+            <> "\n"
+            <> contents
+            <> "\n"
+            <> code
+
+
+renderCompilationError :: CompilationError -> ErrorMessage
+renderCompilationError = \case
+    _ -> undefined

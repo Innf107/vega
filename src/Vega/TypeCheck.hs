@@ -3,10 +3,10 @@ module Vega.TypeCheck (checkDeclaration) where
 import Vega.Syntax
 
 import Effectful hiding (Effect)
-import Relude hiding (Type)
+import Relude hiding (Type, trace)
 import Relude.Extra
 
-import Vega.Error (TypeError (..))
+import Vega.Error (TypeError (..), TypeErrorSet (MkTypeErrorSet))
 import Vega.Util (compose, mapAccumLM, unzip3Seq, viaList, zipWithSeqM)
 
 import Vega.Effect.GraphPersistence (GraphPersistence)
@@ -16,8 +16,9 @@ import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Unique (newUnique)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwError_)
-import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputSeq)
+import Vega.Loc (HasLoc (getLoc), Loc)
+import Vega.Trace (trace, Category(..))
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -46,7 +47,7 @@ typeVariableKind name env =
 -- TODO: factor out the reference/unique bits so you don't need full IOE
 type TypeCheck es = (GraphPersistence :> es, Output TypeError :> es, Error TypeError :> es, IOE :> es)
 
-checkDeclaration :: (GraphPersistence :> es, IOE :> es) => Declaration Renamed -> Eff es (Either (Seq TypeError) (Declaration Typed))
+checkDeclaration :: (GraphPersistence :> es, IOE :> es) => Declaration Renamed -> Eff es (Either TypeErrorSet (Declaration Typed))
 checkDeclaration (MkDeclaration{loc, name, syntax}) = do
     (syntaxOrFatalError, nonFatalErrors) <-
         runOutputSeq $
@@ -54,11 +55,11 @@ checkDeclaration (MkDeclaration{loc, name, syntax}) = do
                 checkDeclarationSyntax loc name syntax
 
     case syntaxOrFatalError of
-        Left fatalError -> pure (Left (nonFatalErrors <> [fatalError]))
+        Left fatalError -> pure (Left (MkTypeErrorSet (nonFatalErrors <> [fatalError])))
         Right syntax ->
             case nonFatalErrors of
                 [] -> pure (Right (MkDeclaration{loc, name, syntax}))
-                errors -> pure (Left errors)
+                errors -> pure (Left (MkTypeErrorSet errors))
 
 typeError :: (Output TypeError :> es) => TypeError -> Eff es ()
 typeError error = output error

@@ -40,7 +40,7 @@ import Vega.Effect.GraphPersistence hiding (
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.Reader.Static
-import Vega.Error (CompilationError, RenameError, TypeError, TypeErrorSet, RenameErrorSet)
+import Vega.Error (CompilationError (..), RenameError, RenameErrorSet (..), TypeError, TypeErrorSet (..))
 import Vega.Syntax
 
 import Data.HashMap.Strict qualified as HashMap
@@ -48,13 +48,14 @@ import Data.HashTable.IO (CuckooHashTable)
 import Data.HashTable.IO qualified as HashTable
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
+import Effectful.Concurrent.Async (forConcurrently, runConcurrent)
 import Vega.BuildConfig (Backend (JavaScript))
 
 -- TODO: this currently isn't thread safe
 
 data DeclarationData = MkDeclarationData
     { parsed :: IORef (Declaration Parsed)
-    , renamed :: IORef (GraphData RenameError (Declaration Renamed))
+    , renamed :: IORef (GraphData RenameErrorSet (Declaration Renamed))
     , typed :: IORef (GraphData TypeErrorSet (Declaration Typed))
     , compiledJS :: IORef (GraphData Void LText)
     , --
@@ -165,7 +166,7 @@ setParsed declaration = do
     data_ <- declarationData declaration.name
     writeIORef data_.parsed declaration
 
-getRenamed :: (InMemory es) => GlobalName -> Eff es (GraphData RenameError (Declaration Renamed))
+getRenamed :: (InMemory es) => GlobalName -> Eff es (GraphData RenameErrorSet (Declaration Renamed))
 getRenamed name = do
     data_ <- declarationData name
     liftIO $ readIORef data_.renamed
@@ -233,7 +234,7 @@ invalidate name = do
     modifyIORef' data_.renamed invalidateGraphData
     invalidateTyped Nothing name
 
-invalidateRenamed :: (InMemory es) => Maybe RenameErrorSet -> GlobalName -> Eff es ()
+invalidateRenamed :: (InMemory es, HasCallStack) => Maybe RenameErrorSet -> GlobalName -> Eff es ()
 invalidateRenamed = undefined
 
 invalidateTyped :: (InMemory es) => Maybe TypeErrorSet -> GlobalName -> Eff es ()
@@ -291,10 +292,35 @@ findMatchingNames text = do
         Nothing -> mempty
 
 getErrors :: (InMemory es) => GlobalName -> Eff es (Seq CompilationError)
-getErrors name = undefined
+getErrors name = do
+    data_ <- declarationData name
+    getErrorsFromData data_
+
+getErrorsFromData :: forall es. (InMemory es) => DeclarationData -> Eff es (Seq CompilationError)
+getErrorsFromData data_ = do
+    let getError :: (err -> Seq CompilationError) -> IORef (GraphData err a) -> Eff es (Seq CompilationError)
+        getError toCompilationErrors ioRef =
+            readIORef ioRef >>= \case
+                Ok _ -> pure []
+                Missing{} -> pure []
+                Failed{error} -> pure (toCompilationErrors error)
+
+    fold @Seq
+        <$> sequence
+            [ getError (fmap RenameError . coerce) data_.renamed
+            , getError (fmap TypeError . coerce) data_.typed
+            , -- This is technically unreachable, but if that ever changes, this makes sure we update the error code here
+              getError absurd data_.compiledJS
+            ]
 
 getCurrentErrors :: (InMemory es) => Eff es (Seq CompilationError)
-getCurrentErrors = undefined
+getCurrentErrors = runConcurrent do
+    declarations <- liftIO . HashTable.toList =<< ask @DeclarationStore
+    -- This should be safe to do concurrently since even though declaration data isn't synchronized (yet),
+    -- we never alias any references between declaration data entries.
+    -- Let's hope I won't regret this (again)
+    fold <$> forConcurrently declarations \(_, data_) -> do
+        getErrorsFromData data_
 
 remainingWorkItems :: (InMemory es) => Backend -> GlobalName -> DeclarationData -> Eff es (Seq WorkItem)
 remainingWorkItems backend name data_ = do

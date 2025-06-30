@@ -55,3 +55,4 @@ instance (HasLoc c) => HasLocGeneric (K1 i c) where
 
 instance (HasLocGeneric f) => HasLocGeneric (M1 i t f) where
     getLocG (M1 x) = getLocG x
+

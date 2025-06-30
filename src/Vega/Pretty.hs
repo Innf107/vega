@@ -14,7 +14,7 @@ module Vega.Pretty (
     number,
     numberDoc,
     emphasis,
-    errorDoc,
+    errorText,
     warning,
     quote,
     note,
@@ -32,6 +32,7 @@ module Vega.Pretty (
     renderANSII,
     prettyPlain,
     prettyANSII,
+    eprintANSII,
     showPlain,
     intercalateDoc,
     -- Utility reexports
@@ -57,6 +58,7 @@ import Prettyprinter qualified as PP
 import Prettyprinter.Render.Util.SimpleDocTree qualified as PP
 
 import Control.Monad.ST.Strict (runST)
+import Data.Text.IO qualified as Text
 import Data.Unique (Unique, hashUnique, newUnique)
 import Data.Vector ((!))
 import GHC.Generics
@@ -113,8 +115,8 @@ numberDoc = PP.annotate Number
 emphasis :: Text -> Doc Ann
 emphasis = PP.annotate Emphasis . PP.pretty
 
-errorDoc :: Text -> Doc Ann
-errorDoc = PP.annotate Error . PP.pretty
+errorText :: Text -> Doc Ann
+errorText = PP.annotate Error . PP.pretty
 
 warning :: Text -> Doc Ann
 warning = PP.annotate Warning . PP.pretty
@@ -186,39 +188,40 @@ renderANSII tree = runST do
     constructors <- Disambiguate.new
     skolems <- Disambiguate.new
     metas <- Disambiguate.new
-    flip evalStateT 0 $ tree & PP.renderSimplyDecoratedA pure \ann textA -> do
-        text <- textA
-        case ann of
-            Ident name unique -> lift do
-                text <- disambiguate idents name unique
-                pure $ "\ESC[38;5;159m\STX" <> text <> "\ESC[0m\STX"
-            Constructor name unique -> lift do
-                text <- disambiguate constructors name unique
-                pure $ "\ESC[96m\STX" <> text <> "\ESC[0m\STX"
-            Skolem name unique -> lift do
-                text <- disambiguate skolems name unique
-                pure $ "\ESC[38;5;159m\STX" <> text <> "\ESC[0m\STX"
-            Number -> pure $ "\ESC[1m\ESC[93m\STX" <> text <> "\ESC[0m\STX"
-            Literal -> pure $ "\ESC[32m\STX" <> text <> "\ESC[0m\STX"
-            Emphasis -> pure $ "\ESC[1m\STX" <> text <> "\ESC[0m\STX"
-            Error -> pure $ "\ESC[1m\ESC[31m\STX" <> text <> "\ESC[0m\STX"
-            Warning -> pure $ "\ESC[1m\ESC[93m\STX" <> text <> "\ESC[0m\STX"
-            Note -> pure $ "\ESC[38;5;8m\STX" <> text <> "\ESC[0m\STX"
-            Keyword -> pure $ "\ESC[94m\STX" <> text <> "\ESC[0m\STX"
-            Quote -> pure text
-            LParen -> do
-                colorIndex <- state (\i -> (i, (i + 1) `mod` (length parenColors)))
-                pure $ parenColors ! colorIndex <> text <> "\ESC[0m\STX"
-            RParen -> do
-                colorIndex <- state (\i -> ((i - 1) `mod` (length parenColors), (i - 1) `mod` (length parenColors)))
-                pure $ parenColors ! colorIndex <> text <> "\ESC[0m\STX"
-            Meta name unique -> lift do
-                text <- disambiguate metas name unique
-                pure $ "\ESC[38;5;195m\STX" <> text <> "\ESC[0m\STX"
-            Unique unique
-                | ?config.includeUnique ->
-                    pure $ text <> "\ESC[38;5;159m\STX_" <> show (hashUnique unique) <> "\ESC[0m\STX"
-                | otherwise -> pure text
+    flip evalStateT 0 $
+        tree & PP.renderSimplyDecoratedA pure \ann textA -> do
+            text <- textA
+            case ann of
+                Ident name unique -> lift do
+                    text <- disambiguate idents name unique
+                    pure $ "\ESC[38;5;159m\STX" <> text <> "\ESC[0m\STX"
+                Constructor name unique -> lift do
+                    text <- disambiguate constructors name unique
+                    pure $ "\ESC[96m\STX" <> text <> "\ESC[0m\STX"
+                Skolem name unique -> lift do
+                    text <- disambiguate skolems name unique
+                    pure $ "\ESC[38;5;159m\STX" <> text <> "\ESC[0m\STX"
+                Number -> pure $ "\ESC[1m\ESC[93m\STX" <> text <> "\ESC[0m\STX"
+                Literal -> pure $ "\ESC[32m\STX" <> text <> "\ESC[0m\STX"
+                Emphasis -> pure $ "\ESC[1m\STX" <> text <> "\ESC[0m\STX"
+                Error -> pure $ "\ESC[1m\ESC[31m\STX" <> text <> "\ESC[0m\STX"
+                Warning -> pure $ "\ESC[1m\ESC[93m\STX" <> text <> "\ESC[0m\STX"
+                Note -> pure $ "\ESC[38;5;8m\STX" <> text <> "\ESC[0m\STX"
+                Keyword -> pure $ "\ESC[94m\STX" <> text <> "\ESC[0m\STX"
+                Quote -> pure text
+                LParen -> do
+                    colorIndex <- state (\i -> (i, (i + 1) `mod` (length parenColors)))
+                    pure $ parenColors ! colorIndex <> text <> "\ESC[0m\STX"
+                RParen -> do
+                    colorIndex <- state (\i -> ((i - 1) `mod` (length parenColors), (i - 1) `mod` (length parenColors)))
+                    pure $ parenColors ! colorIndex <> text <> "\ESC[0m\STX"
+                Meta name unique -> lift do
+                    text <- disambiguate metas name unique
+                    pure $ "\ESC[38;5;195m\STX" <> text <> "\ESC[0m\STX"
+                Unique unique
+                    | ?config.includeUnique ->
+                        pure $ text <> "\ESC[38;5;159m\STX_" <> show (hashUnique unique) <> "\ESC[0m\STX"
+                    | otherwise -> pure text
   where
     parenColors = ["\ESC[38;5;46m\STX", "\ESC[38;5;50m\STX", "\ESC[38;5;191m\STX"]
 
@@ -227,6 +230,9 @@ prettyPlain doc = renderPlain (PP.treeForm (PP.layoutSmart (PP.defaultLayoutOpti
 
 prettyANSII :: (?config :: PrettyANSIIConfig) => Doc Ann -> Text
 prettyANSII doc = renderANSII (PP.treeForm (PP.layoutSmart (PP.defaultLayoutOptions{PP.layoutPageWidth = PP.Unbounded}) doc))
+
+eprintANSII :: (?config :: PrettyANSIIConfig, MonadIO io) => Doc Ann -> io ()
+eprintANSII doc = liftIO $ Text.hPutStrLn stderr (prettyANSII doc)
 
 showPlain :: (Pretty a) => a -> Text
 showPlain = prettyPlain . pretty

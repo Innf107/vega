@@ -1,6 +1,7 @@
 module Vega.Driver (
     rebuild,
     execute,
+    CompilationResult (..),
 ) where
 
 -- TODO: check that imports make sense somewhere
@@ -11,20 +12,15 @@ module Vega.Driver (
 import Relude hiding (Reader, ask, trace)
 
 import Effectful
-import Effectful.FileSystem (FileSystem, doesDirectoryExist, doesFileExist, listDirectory, withCurrentDirectory)
+import Effectful.FileSystem (FileSystem, doesDirectoryExist, listDirectory)
 import Effectful.Reader.Static
 import System.FilePath (takeExtension, (</>))
 
-import Data.HashMap.Strict qualified as HashMap
-import Data.Map qualified as Map
 import Data.Sequence (Seq (..))
-import Data.Text qualified as Text
 import Data.Text.Lazy.Builder qualified as TextBuilder
-import Data.Time (getCurrentTime)
 import Data.Traversable (for)
 import Effectful.Concurrent (Concurrent)
-import Effectful.Concurrent.Async (forConcurrently)
-import Effectful.Error.Static (Error, runError, runErrorNoCallStack)
+import Effectful.Error.Static (Error, runErrorNoCallStack)
 
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
@@ -259,7 +255,7 @@ typecheck name =
             typedOrErrors <- TypeCheck.checkDeclaration renamed
             case typedOrErrors of
                 Left errors -> do
-                    GraphPersistence.invalidateTyped (Just (MkTypeErrorSet errors)) name
+                    GraphPersistence.invalidateTyped (Just errors) name
                 Right typed -> do
                     GraphPersistence.setTyped typed
 
