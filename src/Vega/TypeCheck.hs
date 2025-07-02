@@ -18,7 +18,7 @@ import Data.Unique (newUnique)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwError_)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputSeq)
 import Vega.Loc (HasLoc (getLoc), Loc)
-import Vega.Trace (trace, Category(..))
+import Vega.Effect.Trace (trace, Category(..))
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type

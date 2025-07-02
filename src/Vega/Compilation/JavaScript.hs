@@ -20,8 +20,8 @@ import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 
 import Data.HashSet qualified as HashSet
 import Data.Text qualified as Text
+import Vega.Effect.Trace (Category (..), Trace, trace)
 import Vega.Syntax
-import Vega.Trace (trace, Category(..))
 
 -- In this module, we want string literals to default to text builders.
 -- This does *not* influence any other modules, however it does remove defaulting of other
@@ -32,9 +32,10 @@ default (TextBuilder.Builder)
 type Compile es =
     ( GraphPersistence :> es
     , Writer TextBuilder.Builder :> es
+    , Trace :> es
     )
 
-compileDeclaration :: (GraphPersistence :> es) => Declaration Typed -> Eff es LText
+compileDeclaration :: (GraphPersistence :> es, Trace :> es) => Declaration Typed -> Eff es LText
 compileDeclaration declaration = fmap (TextBuilder.toLazyText . snd) $ runWriter @TextBuilder.Builder do
     compileDeclarationSyntax declaration.name declaration.syntax
 
@@ -102,14 +103,14 @@ compileExpr = \case
         , cases
         } -> undefined
 
-assembleFromEntryPoint :: (GraphPersistence :> es) => GlobalName -> Eff es TextBuilder.Builder
+assembleFromEntryPoint :: (GraphPersistence :> es, Trace :> es) => GlobalName -> Eff es TextBuilder.Builder
 assembleFromEntryPoint entryPoint = fmap snd $ runWriter $ evalState @(HashSet GlobalName) mempty do
     includeDeclarationRecursively entryPoint
 
     tell (renderGlobalName entryPoint <> "()")
 
 includeDeclarationRecursively ::
-    (GraphPersistence :> es, Writer TextBuilder.Builder :> es, State (HashSet GlobalName) :> es) =>
+    (GraphPersistence :> es, Trace :> es, Writer TextBuilder.Builder :> es, State (HashSet GlobalName) :> es) =>
     GlobalName ->
     Eff es ()
 includeDeclarationRecursively name = do

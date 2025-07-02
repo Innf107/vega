@@ -39,6 +39,7 @@ library
       Vega.Effect.GraphPersistence
       Vega.Effect.GraphPersistence.InMemory
       Vega.Effect.Output.Static.Local
+      Vega.Effect.Trace
       Vega.Error
       Vega.Error.ParseError
       Vega.Lexer
@@ -47,7 +48,6 @@ library
       Vega.Pretty
       Vega.Rename
       Vega.Syntax
-      Vega.Trace
       Vega.TypeCheck
       Vega.Util
   other-modules:

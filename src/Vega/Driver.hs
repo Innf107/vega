@@ -29,13 +29,13 @@ import Vega.Diff (DiffChange (..))
 import Vega.Diff qualified as Diff
 import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
+import Vega.Effect.Trace (Category (..), Trace, trace, traceEnabled, whenTraceEnabled)
 import Vega.Error (CompilationError (..), RenameErrorSet (..), TypeErrorSet (..))
 import Vega.Error qualified as Error
 import Vega.Lexer qualified as Lexer
 import Vega.Parser qualified as Parser
 import Vega.Rename qualified as Rename
 import Vega.Syntax
-import Vega.Trace (Category (..), trace, traceEnabled)
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
 
@@ -52,6 +52,7 @@ type InfallibleDriver es =
     , IOE :> es
     , FileSystem :> es
     , Concurrent :> es
+    , Trace :> es
     )
 type Driver es = (InfallibleDriver es, Error Error.DriverError :> es)
 
@@ -147,7 +148,7 @@ trackSourceChanges = do
     sourceFiles <- findSourceFiles
     diffChanges <- fold <$> for sourceFiles parseAndDiff
 
-    when (traceEnabled Driver) do
+    whenTraceEnabled Driver do
         for_ diffChanges \case
             Diff.Added decl -> trace Driver ("Declaration added: " <> show decl.name)
             Diff.Removed decl -> trace Driver ("Declaration removed: " <> show decl.name)

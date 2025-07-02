@@ -21,6 +21,7 @@ import Vega.Error (ErrorMessageWithLoc (..), PlainErrorMessage (..), renderCompi
 import Vega.Loc (HasLoc (..))
 import Vega.Pretty (PrettyANSIIConfig (MkPrettyANSIIConfig, includeUnique), align, emphasis, eprintANSII, errorText, keyword, pretty, (<+>))
 import Vega.Util (constructorNames)
+import Vega.Effect.Trace (runTrace, Trace)
 
 data PersistenceBackend
     = InMemory
@@ -67,9 +68,9 @@ parser =
             command "exec" (info execOptions fullDesc)
         ]
 
-run :: PersistenceBackend -> Eff '[Concurrent, GraphPersistence, FileSystem, IOE] a -> IO a
+run :: PersistenceBackend -> Eff '[Concurrent, GraphPersistence, FileSystem, Trace, IOE] a -> IO a
 run persistence action = case persistence of
-    InMemory -> runEff $ runFileSystem $ runInMemory $ runConcurrent $ action
+    InMemory -> runEff $ runTrace $ runFileSystem $ runInMemory $ runConcurrent $ action
 
 main :: IO ()
 main = do
