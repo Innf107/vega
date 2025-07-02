@@ -33,6 +33,7 @@ library
       Vega.Compilation.MIRToLIR
       Vega.Compilation.Shape
       Vega.Compilation.VegaToMIR
+      Vega.Debug
       Vega.Diff
       Vega.Disambiguate
       Vega.Driver

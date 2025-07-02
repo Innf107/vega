@@ -8,10 +8,14 @@ import Vega.Loc (HasLoc, Loc)
 
 import Data.HashSet qualified as HashSet
 import GHC.Generics (Generically (..))
+import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, localConstructorText, localIdentText, lparen, meta, rparen, skolem, (<+>))
 
 newtype ModuleName = MkModuleName Text
     deriving stock (Generic, Eq, Show)
     deriving newtype (Hashable)
+
+renderModuleName :: ModuleName -> Text
+renderModuleName (MkModuleName name) = name
 
 data GlobalName = MkGlobalName {moduleName :: ModuleName, name :: Text}
     deriving stock (Generic, Eq, Show)
@@ -20,6 +24,11 @@ data GlobalName = MkGlobalName {moduleName :: ModuleName, name :: Text}
 data LocalName = MkLocalName {parent :: GlobalName, name :: Text, count :: Int}
     deriving stock (Generic, Eq, Show)
     deriving anyclass (Hashable)
+
+renderLocalName :: LocalName -> Text
+renderLocalName MkLocalName{parent = _, name, count} = case count of
+    0 -> name
+    _ -> name <> "@" <> show count
 
 data Name
     = Global GlobalName
@@ -286,3 +295,62 @@ data ImportedItems = MkImportedItems
     }
     deriving (Eq, Generic)
     deriving (Semigroup, Monoid) via Generically ImportedItems
+
+instance Pretty Type where
+    pretty = \case
+        TypeConstructor name -> prettyConstructor name
+        TypeApplication typeConstructor argTypes ->
+            pretty typeConstructor <> prettyArguments argTypes
+        TypeVar name -> prettyLocalIdent name
+        Forall binders body -> keyword "forall" <+> intercalateDoc " " (fmap prettyTypeVarBinder binders) <> "." <+> pretty body
+        Function arguments Pure result ->
+            prettyArguments arguments <+> keyword "->" <+> pretty result
+        Function arguments effect result ->
+            prettyArguments arguments <+> keyword "-{" <> pretty effect <> "}>" <+> pretty result
+        Tuple elements -> prettyArguments elements
+        MetaVar meta -> pretty meta
+        Skolem skolem -> pretty skolem
+        Pure -> keyword "Pure"
+
+prettyTypeVarBinder :: (LocalName, Kind) -> Doc Ann
+prettyTypeVarBinder = \case
+    (name, Type) -> prettyLocalIdent name
+    (name, kind) -> lparen "(" <> prettyLocalIdent name <+> keyword ":" <+> pretty kind <> ")"
+
+instance Pretty Kind where
+    pretty = \case
+        Type -> keyword "Type"
+        Effect -> keyword "Effect"
+        ArrowKind params result ->
+            prettyArguments params <+> keyword "->" <+> pretty result
+
+instance Pretty MetaVar where
+    pretty (MkMetaVar{identity, name}) = meta identity name
+
+instance Pretty Skolem where
+    pretty (MkSkolem{identity, originalName}) = skolem identity (renderLocalName originalName)
+
+prettyConstructor :: Name -> Doc Ann
+prettyConstructor = \case
+    Local name -> prettyLocalConstructor name
+    Global name -> prettyGlobalConstructor name
+
+prettyIdent :: Name -> Doc Ann
+prettyIdent = \case
+    Local name -> prettyLocalIdent name
+    Global name -> prettyGlobalIdent name
+
+prettyLocalIdent :: LocalName -> Doc Ann
+prettyLocalIdent name = localIdentText $ renderLocalName name
+
+prettyLocalConstructor :: LocalName -> Doc Ann
+prettyLocalConstructor name = localConstructorText $ renderLocalName name
+
+prettyGlobalIdent :: GlobalName -> Doc Ann
+prettyGlobalIdent MkGlobalName{moduleName, name} = globalIdentText (renderModuleName moduleName <> ":" <> name)
+
+prettyGlobalConstructor :: GlobalName -> Doc Ann
+prettyGlobalConstructor MkGlobalName{moduleName, name} = globalConstructorText (renderModuleName moduleName <> ":" <> name)
+
+prettyArguments :: (Foldable list, Functor list, Pretty a) => list a -> Doc Ann
+prettyArguments list = lparen "(" <> intercalateDoc (keyword ",") (fmap pretty list) <> rparen ")"

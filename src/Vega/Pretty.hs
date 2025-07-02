@@ -5,12 +5,11 @@
 module Vega.Pretty (
     Ann,
     plain,
-    identText,
-    identTextWith,
-    constructorText,
-    constructorTextWith,
-    skolemText,
-    skolemTextWith,
+    localIdentText,
+    globalIdentText,
+    localConstructorText,
+    globalConstructorText,
+    skolem,
     number,
     numberDoc,
     emphasis,
@@ -65,8 +64,10 @@ import GHC.Generics
 import System.IO.Unsafe (unsafePerformIO)
 
 data Ann
-    = Ident Text Unique
-    | Constructor Text Unique
+    = LocalIdent
+    | GlobalIdent
+    | LocalConstructor
+    | GlobalConstructor
     | Skolem Text Unique
     | Number
     | Literal
@@ -84,27 +85,20 @@ data Ann
 plain :: Text -> Doc Ann
 plain = PP.pretty
 
-{-# NOINLINE textUnique #-}
-textUnique :: Unique
-textUnique = unsafePerformIO newUnique
+localIdentText :: Text -> Doc Ann
+localIdentText name = PP.annotate LocalIdent (PP.pretty name)
 
-identTextWith :: Unique -> Text -> Doc Ann
-identTextWith unique name = PP.annotate (Ident name unique) (PP.pretty name)
+globalIdentText :: Text -> Doc Ann
+globalIdentText name = PP.annotate GlobalIdent (PP.pretty name)
 
-identText :: Text -> Doc Ann
-identText = identTextWith textUnique
+localConstructorText :: Text -> Doc Ann
+localConstructorText name = PP.annotate LocalConstructor (PP.pretty name)
 
-constructorTextWith :: Unique -> Text -> Doc Ann
-constructorTextWith unique name = PP.annotate (Constructor name unique) (PP.pretty name)
+globalConstructorText :: Text -> Doc Ann
+globalConstructorText name = PP.annotate GlobalConstructor (PP.pretty name)
 
-constructorText :: Text -> Doc Ann
-constructorText = constructorTextWith textUnique
-
-skolemTextWith :: Unique -> Text -> Doc Ann
-skolemTextWith unique name = PP.annotate (Skolem name unique) (PP.pretty name)
-
-skolemText :: Text -> Doc Ann
-skolemText = skolemTextWith textUnique
+skolem :: Unique -> Text -> Doc Ann
+skolem unique name = PP.annotate (Skolem name unique) (PP.pretty name)
 
 number :: (Num a, Show a) => a -> Doc Ann
 number = PP.annotate Number . PP.pretty . show @Text
@@ -150,15 +144,15 @@ class Pretty a where
 
 renderPlain :: PP.SimpleDocTree Ann -> Text
 renderPlain tree = runST do
-    idents <- Disambiguate.new
-    constructors <- Disambiguate.new
     skolems <- Disambiguate.new
     metas <- Disambiguate.new
     tree & PP.renderSimplyDecoratedA pure \ann textA -> do
         text <- textA
         case ann of
-            Ident name unique -> disambiguate idents name unique
-            Constructor name unique -> disambiguate constructors name unique
+            LocalIdent -> pure text
+            GlobalIdent -> pure text
+            LocalConstructor -> pure text
+            GlobalConstructor -> pure text
             Skolem name unique -> disambiguate skolems name unique
             Number -> pure text
             Literal -> pure text
@@ -192,12 +186,14 @@ renderANSII tree = runST do
         tree & PP.renderSimplyDecoratedA pure \ann textA -> do
             text <- textA
             case ann of
-                Ident name unique -> lift do
-                    text <- disambiguate idents name unique
+                LocalIdent -> lift do
                     pure $ "\ESC[38;5;159m\STX" <> text <> "\ESC[0m\STX"
-                Constructor name unique -> lift do
-                    text <- disambiguate constructors name unique
+                GlobalIdent -> lift do
                     pure $ "\ESC[96m\STX" <> text <> "\ESC[0m\STX"
+                LocalConstructor -> lift do
+                    pure $ "\ESC[223m\STX" <> text <> "\ESC[0m\STX"
+                GlobalConstructor -> lift do
+                    pure $ "\ESC[220m\STX" <> text <> "\ESC[0m\STX"
                 Skolem name unique -> lift do
                     text <- disambiguate skolems name unique
                     pure $ "\ESC[38;5;159m\STX" <> text <> "\ESC[0m\STX"

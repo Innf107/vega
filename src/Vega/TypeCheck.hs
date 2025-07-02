@@ -16,9 +16,11 @@ import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Unique (newUnique)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwError_)
+import Vega.Debug (showHeadConstructor)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputSeq)
+import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
-import Vega.Effect.Trace (trace, Category(..))
+import Vega.Pretty (keyword, pretty, (<+>))
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -45,10 +47,10 @@ typeVariableKind name env =
         Just kind -> kind
 
 -- TODO: factor out the reference/unique bits so you don't need full IOE
-type TypeCheck es = (GraphPersistence :> es, Output TypeError :> es, Error TypeError :> es, IOE :> es)
+type TypeCheck es = (GraphPersistence :> es, Output TypeError :> es, Error TypeError :> es, Trace :> es, IOE :> es)
 
-checkDeclaration :: (GraphPersistence :> es, IOE :> es) => Declaration Renamed -> Eff es (Either TypeErrorSet (Declaration Typed))
-checkDeclaration (MkDeclaration{loc, name, syntax}) = do
+checkDeclaration :: (GraphPersistence :> es, Trace :> es, IOE :> es) => Declaration Renamed -> Eff es (Either TypeErrorSet (Declaration Typed))
+checkDeclaration (MkDeclaration{loc, name, syntax}) = withTrace TypeCheck ("Declaration: " <> prettyGlobalIdent name) do
     (syntaxOrFatalError, nonFatalErrors) <-
         runOutputSeq $
             runErrorNoCallStack $
@@ -141,6 +143,8 @@ inferPattern = \case
 
 check :: (TypeCheck es) => Env -> Type -> Expr Renamed -> Eff es (Expr Typed, Effect)
 check env expectedType expr = do
+    trace TypeCheck ("check:" <+> showHeadConstructor expr <+> keyword "<=" <+> pretty expectedType)
+
     let deferToInference = do
             (actualType, expr, effect) <- infer env expr
             subsumes (getLoc expr) actualType expectedType

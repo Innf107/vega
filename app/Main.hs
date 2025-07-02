@@ -5,21 +5,18 @@ import Relude hiding (Reader, runReader)
 import Options.Applicative
 import Vega.Driver qualified as Driver
 
-import Control.Exception (throw)
 import Data.Text qualified as Text
 import Data.Yaml (prettyPrintParseException)
 import Effectful (Eff, IOE, runEff)
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.FileSystem (FileSystem, runFileSystem)
-import Effectful.Reader.Static (Reader, runReader)
-import Text.Read qualified as Read
-import Vega.BuildConfig (BuildConfig, BuildConfigPresence (..), findBuildConfig)
+import Effectful.Reader.Static (runReader)
+import Vega.BuildConfig (BuildConfigPresence (..), findBuildConfig)
 import Vega.Driver (CompilationResult (..))
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence.InMemory (runInMemory)
-import Vega.Error (ErrorMessageWithLoc (..), PlainErrorMessage (..), renderCompilationError, prettyErrorWithLoc, ErrorMessage (..))
-import Vega.Loc (HasLoc (..))
-import Vega.Pretty (PrettyANSIIConfig (MkPrettyANSIIConfig, includeUnique), align, emphasis, eprintANSII, errorText, keyword, pretty, (<+>))
+import Vega.Error (PlainErrorMessage (..), renderCompilationError, prettyErrorWithLoc, ErrorMessage (..))
+import Vega.Pretty (PrettyANSIIConfig (MkPrettyANSIIConfig, includeUnique), align, emphasis, eprintANSII, keyword, pretty, (<+>))
 import Vega.Util (constructorNames)
 import Vega.Effect.Trace (runTrace, Trace)
 

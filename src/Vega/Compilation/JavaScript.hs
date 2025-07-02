@@ -47,10 +47,10 @@ compileDeclarationSyntax name = \case
         , parameters
         , body
         } -> do
-            tell ("const " <> renderGlobalName name <> " = " <> "(")
+            tell ("const " <> compileGlobalName name <> " = " <> "(")
             -- TODO: we need to support actual decision tree compilation for non-variable patterns
             for_ parameters \case
-                VarPattern _ localName -> tell (renderLocalName localName)
+                VarPattern _ localName -> tell (compileLocalName localName)
                 _ -> undefined
             tell ") => "
             compileExpr body
@@ -58,8 +58,8 @@ compileDeclarationSyntax name = \case
 
 compileExpr :: (Compile es) => Expr Typed -> Eff es ()
 compileExpr = \case
-    Var _loc name -> tell (renderName name)
-    DataConstructor _loc name -> tell (renderName name)
+    Var _loc name -> tell (compileName name)
+    DataConstructor _loc name -> tell (compileName name)
     Application
         { functionExpr
         , arguments
@@ -107,7 +107,7 @@ assembleFromEntryPoint :: (GraphPersistence :> es, Trace :> es) => GlobalName ->
 assembleFromEntryPoint entryPoint = fmap snd $ runWriter $ evalState @(HashSet GlobalName) mempty do
     includeDeclarationRecursively entryPoint
 
-    tell (renderGlobalName entryPoint <> "()")
+    tell (compileGlobalName entryPoint <> "()")
 
 includeDeclarationRecursively ::
     (GraphPersistence :> es, Trace :> es, Writer TextBuilder.Builder :> es, State (HashSet GlobalName) :> es) =>
@@ -137,19 +137,19 @@ includeDeclarationRecursively name = do
                 includeDeclarationRecursively dependency
 
 -- | Render global names into a format suitable for JS names
-renderGlobalName :: GlobalName -> TextBuilder.Builder
-renderGlobalName (MkGlobalName{moduleName = MkModuleName moduleName, name}) = do
+compileGlobalName :: GlobalName -> TextBuilder.Builder
+compileGlobalName (MkGlobalName{moduleName = MkModuleName moduleName, name}) = do
     -- TODO: update this when module names are more sensible (and do something less naive)
     let escapedModuleName = Text.replace "-" "____" $ Text.replace "." "___" $ Text.replace "/" "__" moduleName
     TextBuilder.fromText escapedModuleName <> "$" <> TextBuilder.fromText name
 
-renderLocalName :: LocalName -> TextBuilder.Builder
-renderLocalName (MkLocalName{parent = _, name, count}) =
+compileLocalName :: LocalName -> TextBuilder.Builder
+compileLocalName (MkLocalName{parent = _, name, count}) =
     case count of
         0 -> TextBuilder.fromText name
         _ -> TextBuilder.fromText name <> "$$" <> show count
 
-renderName :: Name -> TextBuilder.Builder
-renderName = \case
-    Local localName -> renderLocalName localName
-    Global globalName -> renderGlobalName globalName
+compileName :: Name -> TextBuilder.Builder
+compileName = \case
+    Local localName -> compileLocalName localName
+    Global globalName -> compileGlobalName globalName

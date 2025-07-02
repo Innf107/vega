@@ -82,8 +82,8 @@ data Token
 instance Pretty Token where
     pretty = \case 
         EOF -> Pretty.plain "end of input"
-        Ident ident -> Pretty.identText ident
-        Constructor constr -> Pretty.constructorText constr
+        Ident ident -> Pretty.localIdentText ident
+        Constructor constr -> Pretty.localConstructorText constr
         StringLiteral literal -> Pretty.literal ("\"" <> literal <> "\"")
         IntLiteral int -> Pretty.number int
         FloatLiteral rational -> undefined 
