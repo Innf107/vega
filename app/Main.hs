@@ -15,10 +15,10 @@ import Vega.BuildConfig (BuildConfigPresence (..), findBuildConfig)
 import Vega.Driver (CompilationResult (..))
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence.InMemory (runInMemory)
-import Vega.Error (PlainErrorMessage (..), renderCompilationError, prettyErrorWithLoc, ErrorMessage (..))
+import Vega.Effect.Trace (Trace, runTrace)
+import Vega.Error (ErrorMessage (..), PlainErrorMessage (..), prettyErrorWithLoc, renderCompilationError)
 import Vega.Pretty (PrettyANSIIConfig (MkPrettyANSIIConfig, includeUnique), align, emphasis, eprintANSII, keyword, pretty, (<+>))
 import Vega.Util (constructorNames)
-import Vega.Effect.Trace (runTrace, Trace)
 
 data PersistenceBackend
     = InMemory
@@ -27,6 +27,7 @@ data PersistenceBackend
 data Options
     = Build
         { persistence :: PersistenceBackend
+        , includeUnique :: Bool
         }
     | Exec
         { file :: FilePath
@@ -48,7 +49,16 @@ buildOptions = do
                         <> toString (Text.intercalate ", " (toList $ constructorNames @PersistenceBackend))
                     )
             )
-    pure Build{persistence}
+    includeUnique <-
+        option
+            auto
+            ( long "include-uniques"
+                <> value False
+                <> showDefault
+                <> help
+                    ("Show unique identifiers in diagnostics where applicable")
+            )
+    pure Build{persistence, includeUnique}
 
 execOptions :: Parser Options
 execOptions = do
@@ -71,24 +81,25 @@ run persistence action = case persistence of
 
 main :: IO ()
 main = do
-    let ?config =
-            MkPrettyANSIIConfig
-                { includeUnique = False
-                }
     options <- execParser (info (parser <**> helper) fullDesc)
     case options of
         Build{persistence} -> run persistence do
+            let ?config =
+                    MkPrettyANSIIConfig
+                        { includeUnique = options.includeUnique
+                        }
             findBuildConfig "." >>= \case
                 Missing -> do
                     eprintANSII $ pretty $ MkPlainErrorMessage $ emphasis "Missing" <+> keyword "vega.yaml" <+> emphasis "file"
                     exitFailure
                 Invalid parseException -> do
                     -- TODO: format these yourself so they're actually human readable
-                    eprintANSII $ pretty $
-                        MkPlainErrorMessage $
-                            emphasis "Malformed" <+> keyword "vega.yaml" <+> emphasis "file:"
-                                <> "\n    "
-                                <> align (fromString (prettyPrintParseException parseException))
+                    eprintANSII $
+                        pretty $
+                            MkPlainErrorMessage $
+                                emphasis "Malformed" <+> keyword "vega.yaml" <+> emphasis "file:"
+                                    <> "\n    "
+                                    <> align (fromString (prettyPrintParseException parseException))
                     exitFailure
                 Found config -> runReader config do
                     result <- Driver.rebuild

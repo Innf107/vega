@@ -6,7 +6,6 @@ import Data.Unique (Unique)
 import Relude hiding (Type)
 import Vega.Loc (HasLoc, Loc)
 
-import Data.HashSet qualified as HashSet
 import GHC.Generics (Generically (..))
 import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, localConstructorText, localIdentText, lparen, meta, rparen, skolem, (<+>))
 
@@ -306,7 +305,7 @@ instance Pretty Type where
         Function arguments Pure result ->
             prettyArguments arguments <+> keyword "->" <+> pretty result
         Function arguments effect result ->
-            prettyArguments arguments <+> keyword "-{" <> pretty effect <> "}>" <+> pretty result
+            prettyArguments arguments <+> keyword "-{" <> pretty effect <> keyword "}>" <+> pretty result
         Tuple elements -> prettyArguments elements
         MetaVar meta -> pretty meta
         Skolem skolem -> pretty skolem
@@ -325,7 +324,7 @@ instance Pretty Kind where
             prettyArguments params <+> keyword "->" <+> pretty result
 
 instance Pretty MetaVar where
-    pretty (MkMetaVar{identity, name}) = meta identity name
+    pretty (MkMetaVar{identity, name}) = meta identity ("?" <> name)
 
 instance Pretty Skolem where
     pretty (MkSkolem{identity, originalName}) = skolem identity (renderLocalName originalName)

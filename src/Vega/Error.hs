@@ -8,9 +8,9 @@ module Vega.Error (
     TypeErrorSet (..),
     DriverError (..),
     renderCompilationError,
-    ErrorMessage(..),
+    ErrorMessage (..),
     ErrorMessageWithLoc (..),
-    PlainErrorMessage(..),
+    PlainErrorMessage (..),
     prettyErrorWithLoc,
 ) where
 
@@ -19,9 +19,9 @@ import Relude hiding (Type)
 import Data.Text qualified as Text
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import Vega.Loc (HasLoc, Loc (..))
-import Vega.Pretty (Ann, Doc, Pretty (pretty), errorText, keyword, plain, vsep, (<+>))
-import Vega.Syntax (GlobalName, Kind, Type)
+import Vega.Loc (HasLoc, Loc (..), getLoc)
+import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, keyword, note, number, plain, vsep, (<+>), localIdentText)
+import Vega.Syntax (GlobalName (..), Kind, Type, prettyGlobalIdent)
 
 data CompilationError
     = RenameError RenameError
@@ -85,7 +85,7 @@ data TypeError
 newtype TypeErrorSet = MkTypeErrorSet (Seq TypeError)
 
 data DriverError
-    = EntryPointNotFound
+    = EntryPointNotFound GlobalName
     deriving stock (Generic)
 
 data ErrorMessageWithLoc = MkErrorMessageWithLoc
@@ -95,7 +95,8 @@ data ErrorMessageWithLoc = MkErrorMessageWithLoc
 
 data PlainErrorMessage = MkPlainErrorMessage
     { contents :: Doc Ann
-    } deriving stock Generic
+    }
+    deriving stock (Generic)
 
 data ErrorMessage
     = ErrorWithLoc ErrorMessageWithLoc
@@ -166,7 +167,82 @@ prettyErrorWithLoc MkErrorMessageWithLoc{location, contents} = do
             <> "\n"
             <> code
 
-
 renderCompilationError :: CompilationError -> ErrorMessage
 renderCompilationError = \case
-    _ -> undefined
+    RenameError error -> undefined
+    TypeError error -> ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
+        FunctionDefinedWithIncorrectNumberOfArguments
+            { loc = _
+            , functionName
+            , expectedType
+            , expectedNumberOfArguments
+            , numberOfDefinedParameters
+            } ->
+                align $
+                    emphasis "Function defined with incorrect number of parameters\n"
+                        <> "  "
+                        <> align
+                            ( "The function "
+                                <> globalIdentText functionName.name
+                                <> " is declared with"
+                                <> "  "
+                                <> number numberOfDefinedParameters
+                                <> "parameters\n"
+                                <> "  but its type suggests that it should have "
+                                <> number expectedNumberOfArguments
+                                <> "\n"
+                                <> "    Expected type: "
+                                <> pretty expectedType
+                            )
+        LambdaDefinedWithIncorrectNumberOfArguments
+            { loc = _
+            , expectedType
+            , expected
+            , actual
+            } -> undefined
+        FunctionAppliedToIncorrectNumberOfArgs
+            { loc = _
+            , functionType
+            , expected
+            , actual
+            } -> undefined
+        -- TODO: special case this a little and provide some nicer error messages
+        KindMismatch
+            { loc = _
+            , expectedKind
+            , actualKind
+            } ->
+                align $
+                    emphasis "Kind Mismatch\n"
+                        <> "  Unable to unify\n"
+                        <> "    "
+                        <> emphasis "expected" <+> "kind    "
+                        <> pretty expectedKind
+                        <> "\n"
+                        <> "    with" <+> emphasis "actual" <+> "kind "
+                        <> pretty actualKind
+        UnableToUnify
+            { loc = _
+            , expectedType
+            , actualType
+            } ->
+                align $
+                    emphasis "Type Mismatch\n"
+                        <> "  Unable to unify\n"
+                        <> "    "
+                        <> emphasis "expected" <+> "type    "
+                        <> pretty expectedType
+                        <> "\n"
+                        <> "    with" <+> emphasis "actual" <+> "type "
+                        <> pretty actualType
+    DriverError error -> case error of
+        EntryPointNotFound entryPoint ->
+            PlainError $
+                MkPlainErrorMessage $
+                    align $
+                        emphasis "Missing entry point "
+                            <> prettyGlobalIdent entryPoint
+                            <> "\n"
+                            <> note "  Note: To change the entry point, set the" <+> localIdentText "entry-point" <+> note "field in your "
+                            <> keyword "vega.yaml"
+                            <> note " file"

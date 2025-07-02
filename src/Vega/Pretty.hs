@@ -98,7 +98,7 @@ globalConstructorText :: Text -> Doc Ann
 globalConstructorText name = PP.annotate GlobalConstructor (PP.pretty name)
 
 skolem :: Unique -> Text -> Doc Ann
-skolem unique name = PP.annotate (Skolem name unique) (PP.pretty name)
+skolem unique name = PP.annotate (Unique unique) $ PP.annotate (Skolem name unique) (PP.pretty name)
 
 number :: (Num a, Show a) => a -> Doc Ann
 number = PP.annotate Number . PP.pretty . show @Text
@@ -134,7 +134,7 @@ rparen :: Text -> Doc Ann
 rparen = PP.annotate RParen . PP.pretty
 
 meta :: Unique -> Text -> Doc Ann
-meta unique name = PP.annotate (Meta name unique) (PP.pretty name)
+meta unique name = PP.annotate (Unique unique) $ PP.annotate (Meta name unique) (PP.pretty name)
 
 literal :: Text -> Doc Ann
 literal = PP.annotate Literal . PP.pretty
@@ -178,8 +178,6 @@ defaultPrettyANSIIConfig =
 
 renderANSII :: (?config :: PrettyANSIIConfig) => PP.SimpleDocTree Ann -> Text
 renderANSII tree = runST do
-    idents <- Disambiguate.new
-    constructors <- Disambiguate.new
     skolems <- Disambiguate.new
     metas <- Disambiguate.new
     flip evalStateT 0 $
@@ -191,12 +189,15 @@ renderANSII tree = runST do
                 GlobalIdent -> lift do
                     pure $ "\ESC[96m\STX" <> text <> "\ESC[0m\STX"
                 LocalConstructor -> lift do
-                    pure $ "\ESC[223m\STX" <> text <> "\ESC[0m\STX"
+                    pure $ "\ESC[38;5;223m\STX" <> text <> "\ESC[0m\STX"
                 GlobalConstructor -> lift do
-                    pure $ "\ESC[220m\STX" <> text <> "\ESC[0m\STX"
+                    pure $ "\ESC[38;5;225m\STX" <> text <> "\ESC[0m\STX"
                 Skolem name unique -> lift do
-                    text <- disambiguate skolems name unique
-                    pure $ "\ESC[38;5;159m\STX" <> text <> "\ESC[0m\STX"
+                    text <- case ?config.includeUnique of
+                        -- If we include the unique anyway, we don't need to disambiguate
+                        True -> pure name
+                        False -> disambiguate skolems name unique
+                    pure $ "\ESC[38;5;227m\STX" <> text <> "\ESC[0m\STX"
                 Number -> pure $ "\ESC[1m\ESC[93m\STX" <> text <> "\ESC[0m\STX"
                 Literal -> pure $ "\ESC[32m\STX" <> text <> "\ESC[0m\STX"
                 Emphasis -> pure $ "\ESC[1m\STX" <> text <> "\ESC[0m\STX"
@@ -212,11 +213,14 @@ renderANSII tree = runST do
                     colorIndex <- state (\i -> ((i - 1) `mod` (length parenColors), (i - 1) `mod` (length parenColors)))
                     pure $ parenColors ! colorIndex <> text <> "\ESC[0m\STX"
                 Meta name unique -> lift do
-                    text <- disambiguate metas name unique
+                    text <- case ?config.includeUnique of
+                        -- If we include the unique anyway, we don't need to disambiguate
+                        True -> pure name
+                        False -> disambiguate metas name unique
                     pure $ "\ESC[38;5;195m\STX" <> text <> "\ESC[0m\STX"
                 Unique unique
                     | ?config.includeUnique ->
-                        pure $ text <> "\ESC[38;5;159m\STX_" <> show (hashUnique unique) <> "\ESC[0m\STX"
+                        pure $ text <> "\ESC[38;5;8m\STX#" <> show (hashUnique unique) <> "\ESC[0m\STX"
                     | otherwise -> pure text
   where
     parenColors = ["\ESC[38;5;46m\STX", "\ESC[38;5;50m\STX", "\ESC[38;5;191m\STX"]

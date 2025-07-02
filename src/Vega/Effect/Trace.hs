@@ -20,10 +20,10 @@ import Effectful
 import Data.List (maximum)
 import Data.Text qualified as Text
 import Data.Text.IO (hPutStrLn)
-import Effectful.Dispatch.Dynamic (EffectHandler, impose, interpose, interpret, localSeqUnlift, localSeqUnliftIO, reinterpret)
+import Effectful.Dispatch.Dynamic (EffectHandler, localSeqUnlift, reinterpret)
 import Effectful.Reader.Dynamic (Reader, ask, local, runReader)
 import Effectful.TH (makeEffect)
-import Vega.Pretty (Ann, Doc, defaultPrettyANSIIConfig, prettyANSII)
+import Vega.Pretty (Ann, Doc, defaultPrettyANSIIConfig, prettyANSII, PrettyANSIIConfig (includeUnique))
 
 data Category
     = Driver
@@ -31,6 +31,8 @@ data Category
     | AssembleJS
     | Dependencies
     | TypeCheck
+    | KindCheck
+    | Unify
     deriving (Generic, Show, Enum, Bounded)
 
 data Trace :: Effect where
@@ -51,7 +53,21 @@ data Traces = MkTraces
     , assembleJS :: Bool
     , dependencies :: Bool
     , typeCheck :: Bool
+    , kindCheck :: Bool
+    , unify :: Bool
     }
+
+defaultTraces :: Traces
+defaultTraces =
+    MkTraces
+        { driver = False
+        , workItems = False
+        , assembleJS = False
+        , dependencies = False
+        , typeCheck = False
+        , kindCheck = False
+        , unify = False
+        }
 
 categoryWidth :: Traces -> Int
 categoryWidth traces =
@@ -64,7 +80,10 @@ runTrace :: forall es a. (IOE :> es) => Eff (Trace : es) a -> Eff es a
 runTrace eff = do
     enabledTraces <- getTraces
     let width = categoryWidth enabledTraces
-    let ?config = defaultPrettyANSIIConfig
+    -- We cannot disambiguate uniques across trace messages so
+    -- keeping includeUniques off would make it basically impossible to track
+    -- unification variables and skolems
+    let ?config = defaultPrettyANSIIConfig {includeUnique = True}
     let trace category message = do
             depth <- ask @Int
             when (traceEnabledIn category enabledTraces) do
@@ -87,6 +106,8 @@ traceEnabledIn category enabledTraces = case category of
     AssembleJS -> enabledTraces.assembleJS
     Dependencies -> enabledTraces.dependencies
     TypeCheck -> enabledTraces.typeCheck
+    KindCheck -> enabledTraces.kindCheck
+    Unify -> enabledTraces.unify
 
 getTraces :: (MonadIO io) => io Traces
 getTraces =
@@ -104,17 +125,9 @@ getTraces =
         ("assemble-js" : rest) -> go (traces{assembleJS = True}) rest
         ("dependencies" : rest) -> go (traces{dependencies = True}) rest
         ("types" : rest) -> go (traces{typeCheck = True}) rest
+        ("kinds" : rest) -> go (traces{kindCheck = True}) rest
+        ("unify" : rest) -> go (traces{unify = True}) rest
         (trace_ : rest) -> do
             -- TODO: make the warning prettier
             putTextLn $ "WARNING: unrecognized trace category: " <> trace_
             go traces rest
-
-defaultTraces :: Traces
-defaultTraces =
-    MkTraces
-        { driver = False
-        , workItems = False
-        , assembleJS = False
-        , dependencies = False
-        , typeCheck = False
-        }

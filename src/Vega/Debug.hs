@@ -6,10 +6,12 @@ import Vega.Pretty
 import GHC.Generics
 import GHC.TypeLits (KnownSymbol, symbolVal)
 
-import Data.Sequence ( Seq((:<|)) ) 
+import Data.Sequence (Seq ((:<|)))
+import Vega.Syntax (GlobalName, LocalName, prettyGlobalIdent, prettyLocalIdent, Name, prettyIdent)
 
--- | Pretty-print the first constructor of a data type that implements 'Generic' for debugging purposes.
--- This will include every argument that implements 'HeadConstructorArg' and display everything else as @_@.
+{- | Pretty-print the first constructor of a data type that implements 'Generic' for debugging purposes.
+This will include every argument that implements 'HeadConstructorArg' and display everything else as @_@.
+-}
 showHeadConstructor :: (Generic a, ShowHeadConstructorGen (Rep a)) => a -> Doc Ann
 showHeadConstructor x = showHeadConstructorGen (from x)
 
@@ -61,9 +63,18 @@ class HeadConstructorArg a where
 instance {-# OVERLAPPABLE #-} HeadConstructorArg a where
     headConstructorArg _ = defaultHeadConstructorArg
 
-instance HeadConstructorArg a => HeadConstructorArg (Maybe a) where
+instance (HeadConstructorArg a) => HeadConstructorArg (Maybe a) where
     headConstructorArg Nothing = keyword "Nothing"
     headConstructorArg (Just x) = headConstructorArg x
+
+instance HeadConstructorArg LocalName where
+    headConstructorArg x = prettyLocalIdent x
+
+instance HeadConstructorArg GlobalName where
+    headConstructorArg x = prettyGlobalIdent x
+
+instance HeadConstructorArg Name where
+    headConstructorArg x = prettyIdent x
 
 defaultHeadConstructorArg :: Doc Ann
 defaultHeadConstructorArg = "_"

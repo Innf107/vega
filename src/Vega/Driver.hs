@@ -20,7 +20,7 @@ import Data.Sequence (Seq (..))
 import Data.Text.Lazy.Builder qualified as TextBuilder
 import Data.Traversable (for)
 import Effectful.Concurrent (Concurrent)
-import Effectful.Error.Static (Error, runErrorNoCallStack)
+import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
 
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
@@ -46,7 +46,7 @@ data CompilationResult
 
 -- TODO: distinguish between new and previous errors
 
-type InfallibleDriver es =
+type Driver es =
     ( Reader BuildConfig :> es
     , GraphPersistence :> es
     , IOE :> es
@@ -54,7 +54,6 @@ type InfallibleDriver es =
     , Concurrent :> es
     , Trace :> es
     )
-type Driver es = (InfallibleDriver es, Error Error.DriverError :> es)
 
 findSourceFiles :: (Driver es) => Eff es (Seq FilePath)
 findSourceFiles = do
@@ -171,36 +170,32 @@ performAllRemainingWork = do
             GraphPersistence.CompileToJS name -> do
                 compileToJS name
 
-rebuild :: (InfallibleDriver es) => Eff es CompilationResult
-rebuild =
-    runErrorNoCallStack frontend >>= \case
-        Left error -> do
-            remainingErrors <- GraphPersistence.getCurrentErrors
-            pure (CompilationFailed{errors = DriverError error :<| remainingErrors})
-        Right () -> do
-            GraphPersistence.getCurrentErrors >>= \case
-                [] -> do
-                    compileBackend
-                    pure CompilationSuccessful
-                errors -> do
-                    pure (CompilationFailed{errors = errors})
-  where
-    frontend = do
-        trackSourceChanges
-        performAllRemainingWork
+rebuild :: (Driver es) => Eff es CompilationResult
+rebuild = do
+    trackSourceChanges
+    performAllRemainingWork
 
-compileBackend :: (InfallibleDriver es) => Eff es ()
+    GraphPersistence.getCurrentErrors >>= \case
+        [] -> do 
+            runErrorNoCallStack compileBackend >>= \case
+                Left error -> do
+                    pure (CompilationFailed{errors = [DriverError error]})
+                Right () -> pure CompilationSuccessful
+        errors -> pure (CompilationFailed{errors = errors})
+  where
+
+compileBackend :: (Error Error.DriverError :> es, Driver es) => Eff es ()
 compileBackend = do
-    -- TODO: select the backend, etc.
     config <- ask @BuildConfig
 
+    let entryPoint = BuildConfig.entryPoint config
     -- TODO: check that the entry point has the correct type (`Unit -{IO}> Unit` probably?)
-    GraphPersistence.doesDeclarationExist (BuildConfig.entryPoint config) >>= \case
+    GraphPersistence.doesDeclarationExist entryPoint >>= \case
         True -> pure ()
-        False -> undefined -- TODO: error message
+        False -> throwError_ (Error.EntryPointNotFound entryPoint)
     case BuildConfig.backend config of
         BuildConfig.JavaScript -> do
-            jsCode <- JavaScript.assembleFromEntryPoint (BuildConfig.entryPoint config)
+            jsCode <- JavaScript.assembleFromEntryPoint entryPoint
 
             -- TODO: make this configurable and make the path absolute
             writeFileLBS (toString $ config.contents.name <> ".js") (encodeUtf8 (TextBuilder.toLazyText jsCode))
