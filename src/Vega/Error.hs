@@ -213,7 +213,7 @@ renderCompilationError = \case
             , actualKind
             } ->
                 align $
-                    emphasis "Kind Mismatch\n"
+                    emphasis "Kind mismatch\n"
                         <> "  Unable to unify\n"
                         <> "    "
                         <> emphasis "expected" <+> "kind    "
@@ -227,14 +227,14 @@ renderCompilationError = \case
             , actualType
             } ->
                 align $
-                    emphasis "Type Mismatch\n"
+                    emphasis "Type mismatch\n"
                         <> "  Unable to unify\n"
                         <> "    "
-                        <> emphasis "expected" <+> "type    "
-                        <> pretty expectedType
+                        <> emphasis "expected" <+> "type"
+                        <+> pretty expectedType
                         <> "\n"
-                        <> "    with" <+> emphasis "actual" <+> "type "
-                        <> pretty actualType
+                        <> "      " <> emphasis "actual" <+> "type"
+                        <+> pretty actualType
     DriverError error -> case error of
         EntryPointNotFound entryPoint ->
             PlainError $
