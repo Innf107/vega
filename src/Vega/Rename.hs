@@ -13,7 +13,7 @@ import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Effectful (Eff, (:>))
 import Effectful.Reader.Static (Reader, ask, runReader)
-import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getModuleImportScope)
+import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getModuleImportScope, getDefiningDeclaration)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputSeq)
 import Vega.Error (RenameError (..), RenameErrorSet (..))
 import Vega.Loc (Loc)
@@ -21,8 +21,8 @@ import Vega.Util qualified as Util
 
 type Rename es =
     ( GraphPersistence :> es
-    , Reader GlobalName :> es
-    , Output GlobalName :> es
+    , Reader DeclarationName :> es
+    , Output DeclarationName :> es
     , Output RenameError :> es
     )
 
@@ -40,14 +40,14 @@ emptyEnv =
 
 bindLocalVar :: (Rename es) => Text -> Eff es (LocalName, Env -> Env)
 bindLocalVar text = do
-    parent <- ask @GlobalName
+    parent <- ask @DeclarationName
     let count = 0
     let localName = MkLocalName{parent, name = text, count}
     pure (localName, \env -> env{localVariables = insert text localName env.localVariables})
 
 bindTypeVariable :: (Rename es) => Text -> Eff es (LocalName, Env -> Env)
 bindTypeVariable text = do
-    parent <- ask @GlobalName
+    parent <- ask @DeclarationName
     let count = 0 -- TODO
     let localName = MkLocalName{parent, name = text, count}
     pure (localName, \env -> env{localTypeVariables = insert text localName env.localTypeVariables})
@@ -60,7 +60,7 @@ data GlobalVariableOccurance
 
 findGlobalVariableUnregistered :: (Rename es) => Text -> Eff es GlobalVariableOccurance
 findGlobalVariableUnregistered var = do
-    parent <- ask @GlobalName
+    parent <- ask @DeclarationName
 
     importScope <- getModuleImportScope parent.moduleName
     candidatesOfAllKinds <- findMatchingNames var
@@ -81,7 +81,11 @@ findGlobalVariable :: (Rename es) => Text -> Eff es GlobalVariableOccurance
 findGlobalVariable var = do
     findGlobalVariableUnregistered var >>= \case
         Found globalName -> do
-            output globalName
+            dependencyDeclarationName <- getDefiningDeclaration globalName >>= \case
+                Nothing -> error $ "declaration of name not found: " <> show globalName
+                Just name -> pure name
+
+            output dependencyDeclarationName
             pure (Found globalName)
         NotFound -> pure NotFound
         Inaccessible candidates -> pure $ Inaccessible candidates
@@ -95,10 +99,9 @@ isInScope name scope = do
             -- TODO: qualified
             HashSet.member name.name importedItems.unqualifiedItems
 
-rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, RenameErrorSet, Seq GlobalName)
+rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, RenameErrorSet, Seq DeclarationName)
 rename (MkDeclaration loc name syntax) = runReader name do
-    -- TODO: graph stuff
-    ((syntax, errors), dependencies) <- runOutputSeq $ runOutputSeq @RenameError $ renameDeclarationSyntax name syntax
+    ((syntax, errors), dependencies) <- runOutputSeq $ runOutputSeq @RenameError $ renameDeclarationSyntax syntax
     pure (MkDeclaration loc name syntax, (MkRenameErrorSet errors), dependencies)
 
 findVarName :: (Rename es) => Env -> Loc -> Text -> Eff es Name
@@ -110,17 +113,17 @@ findVarName env loc text = case lookup text env.localVariables of
             NotFound -> do
                 output (VarNotFound{loc, var = text})
 
-                parent <- ask @GlobalName
+                parent <- ask @DeclarationName
                 pure (Local (dummyLocalName parent text))
             Ambiguous candidates -> do
                 output (AmbiguousGlobalVariable{loc, var = text, candidates})
 
-                parent <- ask @GlobalName
+                parent <- ask @DeclarationName
                 pure (Local (dummyLocalName parent text))
             Inaccessible candidates -> do
                 output (InaccessibleGlobalVariable{loc, var = text, candidates})
 
-                parent <- ask @GlobalName
+                parent <- ask @DeclarationName
                 pure (Local (dummyLocalName parent text))
 
 {- | This is returned if we cannot find a local name during renaming.
@@ -131,7 +134,7 @@ Instead, we return a new dummy name that is technically wrong and could cause is
 but since we already threw an error when using this function, the type checker is not going to run on
 the current declaration anyway and will not cause any issues.
 -}
-dummyLocalName :: GlobalName -> Text -> LocalName
+dummyLocalName :: DeclarationName -> Text -> LocalName
 dummyLocalName parent name = MkLocalName{parent, name, count = -1}
 
 findTypeVariable :: Env -> Text -> Eff es LocalName
@@ -139,9 +142,9 @@ findTypeVariable env text = case lookup text env.localTypeVariables of
     Just localName -> pure localName
     Nothing -> undefined
 
-renameDeclarationSyntax :: (Rename es) => GlobalName -> DeclarationSyntax Parsed -> Eff es (DeclarationSyntax Renamed)
-renameDeclarationSyntax _name = \case
-    DefineFunction{typeSignature, declaredTypeParameters, parameters, body} -> do
+renameDeclarationSyntax :: (Rename es) => DeclarationSyntax Parsed -> Eff es (DeclarationSyntax Renamed)
+renameDeclarationSyntax = \case
+    DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body} -> do
         typeSignature <- renameTypeSyntax emptyEnv typeSignature
 
         (declaredTypeParameters, env) <- case declaredTypeParameters of
@@ -152,7 +155,7 @@ renameDeclarationSyntax _name = \case
 
         (parameters, transformers) <- Seq.unzip <$> traverse (renamePattern env) parameters
         body <- renameExpr (Util.compose transformers env) body
-        pure (DefineFunction{typeSignature, declaredTypeParameters, parameters, body})
+        pure (DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body})
     DefineVariantType{typeParameters, constructors} -> do
         undefined
 

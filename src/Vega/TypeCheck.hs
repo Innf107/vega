@@ -21,7 +21,7 @@ import Vega.Debug (showHeadConstructor)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputSeq)
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
-import Vega.Pretty (keyword, pretty, (<+>), errorText)
+import Vega.Pretty (errorText, keyword, pretty, (<+>))
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -51,11 +51,11 @@ typeVariableKind name env =
 type TypeCheck es = (GraphPersistence :> es, Output TypeError :> es, Error TypeError :> es, Trace :> es, IOE :> es)
 
 checkDeclaration :: (GraphPersistence :> es, Trace :> es, IOE :> es) => Declaration Renamed -> Eff es (Either TypeErrorSet (Declaration Typed))
-checkDeclaration (MkDeclaration{loc, name, syntax}) = withTrace TypeCheck ("Declaration: " <> prettyGlobalIdent name) do
+checkDeclaration (MkDeclaration{loc, name, syntax}) = withTrace TypeCheck ("Declaration: " <> pretty name) do
     (syntaxOrFatalError, nonFatalErrors) <-
         runOutputSeq $
             runErrorNoCallStack $
-                checkDeclarationSyntax loc name syntax
+                checkDeclarationSyntax loc syntax
 
     case syntaxOrFatalError of
         Left fatalError -> pure (Left (MkTypeErrorSet (nonFatalErrors <> [fatalError])))
@@ -85,9 +85,9 @@ getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobalIdent 
             GraphPersistence.cacheGlobalType name type_
             pure type_
 
-checkDeclarationSyntax :: (TypeCheck es) => Loc -> GlobalName -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
-checkDeclarationSyntax loc name = \case
-    DefineFunction{typeSignature, declaredTypeParameters, parameters, body} -> do
+checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
+checkDeclarationSyntax loc = \case
+    DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body} -> do
         let env = emptyEnv
         (functionType, typeSignature) <- checkType env Type typeSignature
 
@@ -120,7 +120,7 @@ checkDeclarationSyntax loc name = \case
         (body, bodyEffect) <- check env returnType body
         subsumesEffect bodyEffect effect
 
-        pure DefineFunction{typeSignature, declaredTypeParameters, parameters, body}
+        pure DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body}
     DefineVariantType{} -> undefined
 
 checkPattern :: (TypeCheck es) => Env -> Type -> Pattern Renamed -> Eff es (Pattern Typed, Env -> Env)

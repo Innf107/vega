@@ -33,10 +33,10 @@ newtype ParserEnv = MkParserEnv
 
 type Parser = ReaderT ParserEnv (Parsec AdditionalParseError [(Token, Loc)])
 
-globalNameForCurrentModule :: Text -> Parser GlobalName
-globalNameForCurrentModule name = do
+globalNamesForCurrentModule :: Text -> Parser (DeclarationName, GlobalName)
+globalNamesForCurrentModule name = do
     MkParserEnv{moduleName} <- ask
-    pure (MkGlobalName{moduleName, name})
+    pure (MkDeclarationName{moduleName, name}, MkGlobalName{moduleName, name})
 
 single :: Token -> Parser Loc
 single target = MegaParsec.token match (fromList [Tokens (fromList [(target, dummyLoc)])])
@@ -162,13 +162,15 @@ defineFunction = do
     _ <- single RParen
     _ <- single Equals
     body <- expr
-    name <- globalNameForCurrentModule name
+    (declarationName, name) <- globalNamesForCurrentModule name
+
     pure
         ( MkDeclaration
-            { name
+            { name = declarationName
             , syntax =
                 DefineFunction
-                    { typeSignature
+                    { name
+                    , typeSignature
                     , declaredTypeParameters
                     , parameters
                     , body
@@ -181,7 +183,7 @@ defineVariantType :: Parser (Declaration Parsed)
 defineVariantType = do
     startLoc <- single Data
     name <- constructor
-    typeParameters <- option (fromList []) (arguments identifier)
+    typeParameters <- option (fromList []) (arguments typeVarBinder)
     _ <- single Equals
     _ <- optional (single Pipe)
     constructors <- constructorDefinition `sepBy1` (single Pipe)
@@ -189,14 +191,15 @@ defineVariantType = do
             Empty -> error "sepBy returned empty?"
             (_ :|> (_, _, endLoc)) -> endLoc
 
-    name <- globalNameForCurrentModule name
+    (declarationName, name) <- globalNamesForCurrentModule name
     pure
         ( MkDeclaration
-            { name = name
+            { name = declarationName
             , syntax =
                 DefineVariantType
-                    { typeParameters
-                    , constructors = fmap (\(name, arguments, _) -> (name, arguments)) constructors
+                    { name
+                    , typeParameters
+                    , constructors = fmap (\(name, arguments, loc) -> (loc, name, arguments)) constructors
                     }
             , loc = startLoc <> endLoc
             }
@@ -204,8 +207,10 @@ defineVariantType = do
   where
     constructorDefinition = do
         (name, startLoc) <- constructorWithLoc
+        (_, globalName) <- globalNamesForCurrentModule name
+
         (dataArguments, endLoc) <- option (fromList [], startLoc) (argumentsWithLoc type_)
-        pure (name, dataArguments, startLoc <> endLoc)
+        pure (globalName, dataArguments, startLoc <> endLoc)
 
 type_ :: Parser (TypeSyntax Parsed)
 type_ =

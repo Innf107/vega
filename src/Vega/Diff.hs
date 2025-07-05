@@ -7,6 +7,7 @@ import Relude hiding (Type, evalState, get, put)
 import Vega.Syntax (
     BinaryOperator,
     Declaration (name),
+    DeclarationName (..),
     DeclarationSyntax,
     Expr,
     GlobalName,
@@ -36,16 +37,16 @@ import Vega.Util qualified as Util
 
 data DiffChange
     = Added (Declaration Parsed)
-    | Removed GlobalName
+    | Removed DeclarationName
     | Changed (Declaration Parsed)
 
 reportNewModule :: ParsedModule -> Seq DiffChange
 reportNewModule MkParsedModule{declarations} = fmap Added declarations
 
-diffDeclarations :: Seq (Declaration Parsed) -> HashMap GlobalName (Declaration Parsed) -> Eff es (Seq DiffChange)
+diffDeclarations :: Seq (Declaration Parsed) -> HashMap DeclarationName (Declaration Parsed) -> Eff es (Seq DiffChange)
 diffDeclarations declarations allPreviousDeclarations = evalState allPreviousDeclarations $ execOutputSeq $ do
     for_ declarations \declaration -> do
-        previousDeclarations :: HashMap GlobalName (Declaration Parsed) <- get
+        previousDeclarations :: HashMap DeclarationName (Declaration Parsed) <- get
         case HashMap.lookup declaration.name previousDeclarations of
             Nothing -> output (Added declaration)
             Just previousDeclaration -> do
@@ -56,7 +57,7 @@ diffDeclarations declarations allPreviousDeclarations = evalState allPreviousDec
                         output (Changed declaration)
                     False -> pure ()
     -- If there are any declarations left that we didn't hit in the new ones, these must have been removed
-    remainingHashMap :: HashMap GlobalName (Declaration Parsed) <- get
+    remainingHashMap :: HashMap DeclarationName (Declaration Parsed) <- get
     outputAll (Seq.fromList (map Removed (HashMap.keys remainingHashMap)))
 
 class DiffGen f where
@@ -108,6 +109,7 @@ instance (Diff a) => Diff (Seq a) where
 deriving via Generically (Maybe a) instance (Diff a) => Diff (Maybe a)
 deriving via Generically (Either a b) instance (Diff a, Diff b) => Diff (Either a b)
 deriving via Generically (a, b) instance (Diff a, Diff b) => Diff (a, b)
+deriving via Generically (a, b, c) instance (Diff a, Diff b, Diff c) => Diff (a, b, c)
 
 deriving via Generically (Declaration Parsed) instance Diff (Declaration Parsed)
 deriving via Generically (DeclarationSyntax Parsed) instance Diff (DeclarationSyntax Parsed)
@@ -124,6 +126,7 @@ deriving via Generically (KindSyntax Parsed) instance Diff (KindSyntax Parsed)
 deriving via Generically (KindSyntax Renamed) instance Diff (KindSyntax Renamed)
 deriving via Generically LocalName instance Diff LocalName
 deriving via Generically GlobalName instance Diff GlobalName
+deriving via Generically DeclarationName instance Diff DeclarationName
 deriving via Generically Name instance Diff Name
 deriving via Generically ModuleName instance Diff ModuleName
 

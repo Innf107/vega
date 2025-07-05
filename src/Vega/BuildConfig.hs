@@ -21,7 +21,7 @@ import Data.Aeson qualified as Aeson
 import Data.Yaml as Yaml hiding (object)
 
 import System.FilePath ((</>))
-import Vega.Syntax (GlobalName (..), ModuleName (..))
+import Vega.Syntax (GlobalName (..), ModuleName (..), DeclarationName (..))
 
 data BuildConfigContents = MkBuildConfigContents
     { name :: Text

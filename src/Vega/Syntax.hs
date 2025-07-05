@@ -6,6 +6,7 @@ import Data.Unique (Unique)
 import Relude hiding (Type)
 import Vega.Loc (HasLoc, Loc)
 
+import Data.Sequence (Seq (..))
 import GHC.Generics (Generically (..))
 import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, localConstructorText, localIdentText, lparen, meta, rparen, skolem, (<+>))
 
@@ -16,11 +17,18 @@ newtype ModuleName = MkModuleName Text
 renderModuleName :: ModuleName -> Text
 renderModuleName (MkModuleName name) = name
 
+data DeclarationName = MkDeclarationName {moduleName :: ModuleName, name :: Text}
+    deriving stock (Generic, Eq, Show)
+    deriving anyclass (Hashable)
+
+instance Pretty DeclarationName where
+    pretty (MkDeclarationName{moduleName, name}) = globalIdentText (renderModuleName moduleName <> ":" <> name)
+
 data GlobalName = MkGlobalName {moduleName :: ModuleName, name :: Text}
     deriving stock (Generic, Eq, Show)
     deriving anyclass (Hashable)
 
-data LocalName = MkLocalName {parent :: GlobalName, name :: Text, count :: Int}
+data LocalName = MkLocalName {parent :: DeclarationName, name :: Text, count :: Int}
     deriving stock (Generic, Eq, Show)
     deriving anyclass (Hashable)
 
@@ -50,11 +58,6 @@ type family XName (p :: Pass) where
     XName Renamed = Name
     XName Typed = Name
 
-type family XGlobalName (p :: Pass) where
-    XGlobalName Parsed = Text
-    XGlobalName Renamed = GlobalName
-    XGlobalName Typed = GlobalName
-
 type family XLocalName (p :: Pass) where
     XLocalName Parsed = Text
     XLocalName Renamed = LocalName
@@ -67,15 +70,9 @@ data NameKind
     deriving stock (Generic, Eq)
     deriving anyclass (Hashable)
 
--- TODO: This doesn't actually work since e.g. a variant definition defines several names. oops
-definedDeclarationKind :: DeclarationSyntax p -> NameKind
-definedDeclarationKind = \case
-    DefineFunction{} -> VarKind
-    DefineVariantType{} -> undefined
-
 data Declaration p = MkDeclaration
     { loc :: Loc
-    , name :: GlobalName
+    , name :: DeclarationName
     , syntax :: DeclarationSyntax p
     }
     deriving stock (Generic)
@@ -83,14 +80,16 @@ data Declaration p = MkDeclaration
 
 data DeclarationSyntax p
     = DefineFunction
-        { typeSignature :: TypeSyntax p
+        { name :: GlobalName
+        , typeSignature :: TypeSyntax p
         , declaredTypeParameters :: Maybe (Seq (XLocalName p))
         , parameters :: Seq (Pattern p)
         , body :: Expr p
         }
     | DefineVariantType
-        { typeParameters :: Seq (XLocalName p)
-        , constructors :: Seq (XName p, Seq (TypeSyntax p))
+        { name :: GlobalName
+        , typeParameters :: Seq (TypeVarBinderS p)
+        , constructors :: Seq (Loc, GlobalName, Seq (TypeSyntax p))
         }
     deriving stock (Generic)
 
@@ -223,6 +222,14 @@ data TypeSyntax p
     deriving stock (Generic)
     deriving anyclass (HasLoc)
 
+typeApplicationS :: Loc -> TypeSyntax p -> Seq (TypeSyntax p) -> TypeSyntax p
+typeApplicationS _ constructor Empty = constructor
+typeApplicationS loc constructor arguments = TypeApplicationS loc constructor arguments
+
+forallS :: Loc -> Seq (TypeVarBinderS p) -> TypeSyntax p -> TypeSyntax p
+forallS _loc Empty result = result
+forallS loc binders result = ForallS loc binders result
+
 data TypeVarBinderS p = MkTypeVarBinderS
     { loc :: Loc
     , varName :: XLocalName p
@@ -353,3 +360,20 @@ prettyGlobalConstructor MkGlobalName{moduleName, name} = globalConstructorText (
 
 prettyArguments :: (Foldable list, Functor list, Pretty a) => list a -> Doc Ann
 prettyArguments list = lparen "(" <> intercalateDoc (keyword ",") (fmap pretty list) <> rparen ")"
+
+definedGlobals :: DeclarationSyntax p -> Seq (GlobalName, NameKind)
+definedGlobals = \case
+    DefineFunction{name} -> pure (name, VarKind)
+    DefineVariantType{name, constructors} ->
+        [(name, TypeConstructorKind)] <> fmap (\(_, name, _) -> (name, DataConstructorKind)) constructors
+
+typeOfGlobal :: (HasCallStack) => GlobalName -> DeclarationSyntax Renamed -> TypeSyntax Renamed
+typeOfGlobal global = \case
+    DefineFunction{name, typeSignature}
+        | name == global -> typeSignature
+        | otherwise -> error $ "global (term) variable not found in function '" <> show name <> "': " <> show global
+    DefineVariantType{name = variantName, typeParameters, constructors} ->
+        case find (\(_, name, _) -> name == global) constructors of
+            Nothing -> error $ "global (term) variable not found in variant definition '" <> show variantName <> ": " <> show global
+            Just (loc, _, parameterTypes) ->
+                forallS loc typeParameters (PureFunctionS loc parameterTypes (typeApplicationS loc (TypeConstructorS loc (Global variantName)) (fmap (\MkTypeVarBinderS{loc, varName} -> TypeVarS loc varName) typeParameters)))

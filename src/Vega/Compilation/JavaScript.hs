@@ -20,7 +20,9 @@ import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 
 import Data.HashSet qualified as HashSet
 import Data.Text qualified as Text
+import Effectful.Error.Static (Error)
 import Vega.Effect.Trace (Category (..), Trace, trace)
+import Vega.Error (DriverError)
 import Vega.Syntax
 
 -- In this module, we want string literals to default to text builders.
@@ -37,12 +39,13 @@ type Compile es =
 
 compileDeclaration :: (GraphPersistence :> es, Trace :> es) => Declaration Typed -> Eff es LText
 compileDeclaration declaration = fmap (TextBuilder.toLazyText . snd) $ runWriter @TextBuilder.Builder do
-    compileDeclarationSyntax declaration.name declaration.syntax
+    compileDeclarationSyntax declaration.syntax
 
-compileDeclarationSyntax :: (Compile es) => GlobalName -> DeclarationSyntax Typed -> Eff es ()
-compileDeclarationSyntax name = \case
+compileDeclarationSyntax :: (Compile es) => DeclarationSyntax Typed -> Eff es ()
+compileDeclarationSyntax = \case
     DefineFunction
-        { typeSignature = _
+        { name
+        , typeSignature = _
         , declaredTypeParameters = _
         , parameters
         , body
@@ -103,18 +106,28 @@ compileExpr = \case
         , cases
         } -> undefined
 
-assembleFromEntryPoint :: (GraphPersistence :> es, Trace :> es) => GlobalName -> Eff es TextBuilder.Builder
-assembleFromEntryPoint entryPoint = fmap snd $ runWriter $ evalState @(HashSet GlobalName) mempty do
-    includeDeclarationRecursively entryPoint
+{- | Assemble all the alrady compiled JS declarations into a single JS file.
+This assumes that
+   - the passed entry point exists and is valid (has the right type, accessibility, etc.)
+   - all other declarations have already been compiled to JS
+-}
+assembleFromEntryPoint :: (HasCallStack, GraphPersistence :> es, Trace :> es) => GlobalName -> Eff es TextBuilder.Builder
+assembleFromEntryPoint entryPoint = fmap snd $ runWriter $ evalState @(HashSet DeclarationName) mempty do
+    entryPointDeclaration <-
+        GraphPersistence.getDefiningDeclaration entryPoint >>= \case
+            Just declaration -> pure declaration
+            Nothing -> error $ "JavaScript.assembleFromEntryPoint: entry point not found (this should have been caught by the driver): " <> show entryPoint
+
+    includeDeclarationRecursively entryPointDeclaration
 
     tell (compileGlobalName entryPoint <> "()")
 
 includeDeclarationRecursively ::
-    (GraphPersistence :> es, Trace :> es, Writer TextBuilder.Builder :> es, State (HashSet GlobalName) :> es) =>
-    GlobalName ->
+    (GraphPersistence :> es, Trace :> es, Writer TextBuilder.Builder :> es, State (HashSet DeclarationName) :> es) =>
+    DeclarationName ->
     Eff es ()
 includeDeclarationRecursively name = do
-    processedDeclarations <- get @(HashSet GlobalName)
+    processedDeclarations <- get @(HashSet DeclarationName)
     case HashSet.member name processedDeclarations of
         True -> do
             trace AssembleJS ("Skipping already included declaration: " <> show name)

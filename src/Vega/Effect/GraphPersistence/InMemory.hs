@@ -15,6 +15,7 @@ import Vega.Effect.GraphPersistence hiding (
     findMatchingNames,
     getCompiledJS,
     getCurrentErrors,
+    getDefiningDeclaration,
     getDependencies,
     getDependents,
     getErrors,
@@ -59,19 +60,21 @@ data DeclarationData = MkDeclarationData
     , typed :: IORef (GraphData TypeErrorSet (Declaration Typed))
     , compiledJS :: IORef (GraphData Void LText)
     , --
-      dependencies :: IORef (HashSet GlobalName)
-    , dependents :: IORef (HashSet GlobalName)
-    , --
-      cachedType :: IORef (Maybe Type)
+      dependencies :: IORef (HashSet DeclarationName)
+    , dependents :: IORef (HashSet DeclarationName)
     }
 
-type DeclarationStore = CuckooHashTable GlobalName DeclarationData
+type CachedTypes = CuckooHashTable GlobalName Type
 
-type LastKnownDeclarations = IORef (HashMap FilePath (HashMap GlobalName (Declaration Parsed)))
+type DeclarationStore = CuckooHashTable DeclarationName DeclarationData
+
+type LastKnownDeclarations = IORef (HashMap FilePath (HashMap DeclarationName (Declaration Parsed)))
 
 type NameResolution = CuckooHashTable Text (HashMap GlobalName NameKind)
 
 type ImportScopes = CuckooHashTable ModuleName ImportScope
+
+type DefiningDeclarations = CuckooHashTable GlobalName DeclarationName
 
 type InMemory es =
     ( IOE :> es
@@ -79,16 +82,18 @@ type InMemory es =
     , Reader LastKnownDeclarations :> es
     , Reader NameResolution :> es
     , Reader ImportScopes :> es
+    , Reader CachedTypes :> es
+    , Reader DefiningDeclarations :> es
     )
 
-declarationData :: (HasCallStack, InMemory es) => GlobalName -> Eff es DeclarationData
+declarationData :: (HasCallStack, InMemory es) => DeclarationName -> Eff es DeclarationData
 declarationData name = do
     declarations <- ask @DeclarationStore
     liftIO (HashTable.lookup declarations name) >>= \case
         Just data_ -> pure data_
         Nothing -> error $ "Unknown declaration '" <> show name <> "'"
 
-resetDependencies :: (InMemory es) => GlobalName -> Eff es ()
+resetDependencies :: (InMemory es) => DeclarationName -> Eff es ()
 resetDependencies name = do
     data_ <- declarationData name
     dependencies <- readIORef data_.dependencies
@@ -96,19 +101,19 @@ resetDependencies name = do
         dependencyData <- declarationData dependency
         modifyIORef' dependencyData.dependents (HashSet.delete name)
 
-invalidateDependents :: (InMemory es) => GlobalName -> Eff es ()
+invalidateDependents :: (InMemory es) => DeclarationName -> Eff es ()
 invalidateDependents name = do
     data_ <- declarationData name
     dependents <- readIORef data_.dependents
     for_ dependents \dependent -> do
         invalidate dependent
 
-lastKnownDeclarations :: (InMemory es) => FilePath -> Eff es (Maybe (HashMap GlobalName (Declaration Parsed)))
+lastKnownDeclarations :: (InMemory es) => FilePath -> Eff es (Maybe (HashMap DeclarationName (Declaration Parsed)))
 lastKnownDeclarations filePath = do
     declarationsPerFile <- readIORef =<< ask @LastKnownDeclarations
     pure $ lookup filePath declarationsPerFile
 
-setKnownDeclarations :: (InMemory es) => FilePath -> HashMap GlobalName (Declaration Parsed) -> Eff es ()
+setKnownDeclarations :: (InMemory es) => FilePath -> HashMap DeclarationName (Declaration Parsed) -> Eff es ()
 setKnownDeclarations filePath declarations = do
     lastKnownDeclarationsPerFile <- ask @LastKnownDeclarations
     modifyIORef' lastKnownDeclarationsPerFile (insert filePath declarations)
@@ -125,7 +130,7 @@ setModuleImportScope moduleName scope = do
     importScopes <- ask @ImportScopes
     liftIO $ HashTable.insert importScopes moduleName scope
 
-doesDeclarationExist :: (InMemory es) => GlobalName -> Eff es Bool
+doesDeclarationExist :: (InMemory es) => DeclarationName -> Eff es Bool
 doesDeclarationExist name = do
     declarations <- ask @DeclarationStore
     liftIO (HashTable.lookup declarations name) >>= \case
@@ -135,7 +140,6 @@ doesDeclarationExist name = do
 addDeclaration :: (InMemory es) => Declaration Parsed -> Eff es ()
 addDeclaration declaration = do
     declarations <- ask @DeclarationStore
-    nameResolution <- ask @NameResolution
 
     parsed <- newIORef declaration
     renamed <- newIORef Missing{previous = Nothing}
@@ -143,19 +147,18 @@ addDeclaration declaration = do
     compiledJS <- newIORef Missing{previous = Nothing}
     dependencies <- newIORef mempty
     dependents <- newIORef mempty
-    cachedType <- newIORef Nothing
-    let data_ = MkDeclarationData{parsed, renamed, typed, compiledJS, dependencies, dependents, cachedType}
+    let data_ = MkDeclarationData{parsed, renamed, typed, compiledJS, dependencies, dependents}
     liftIO $ HashTable.mutate declarations declaration.name \case
         Nothing -> (Just data_, ())
         Just _ -> error $ "Trying to add declaration as new that already exists: '" <> show declaration.name <> "'"
 
-    -- TODO: yeah no this totally doesn't work for anything other than variables oops
+    let globals = definedGlobals declaration.syntax
 
-    liftIO $ HashTable.mutate nameResolution declaration.name.name \case
-        Nothing -> (Just [(declaration.name, definedDeclarationKind declaration.syntax)], ())
-        Just entries -> (Just (insert declaration.name (definedDeclarationKind declaration.syntax) entries), ())
+    for_ globals \(name, kind) -> do
+        addNameResolutionAssociation name kind
+        setDefiningDeclaration name declaration.name
 
-getParsed :: (InMemory es) => GlobalName -> Eff es (Declaration Parsed)
+getParsed :: (InMemory es) => DeclarationName -> Eff es (Declaration Parsed)
 getParsed name = do
     data_ <- declarationData name
     liftIO $ readIORef data_.parsed
@@ -166,7 +169,11 @@ setParsed declaration = do
     data_ <- declarationData declaration.name
     writeIORef data_.parsed declaration
 
-getRenamed :: (InMemory es) => GlobalName -> Eff es (GraphData RenameErrorSet (Declaration Renamed))
+    for_ (definedGlobals declaration.syntax) \(global, kind) -> do
+        addNameResolutionAssociation global kind
+        setDefiningDeclaration global declaration.name
+
+getRenamed :: (InMemory es) => DeclarationName -> Eff es (GraphData RenameErrorSet (Declaration Renamed))
 getRenamed name = do
     data_ <- declarationData name
     liftIO $ readIORef data_.renamed
@@ -177,7 +184,7 @@ setRenamed declaration = do
     data_ <- declarationData declaration.name
     writeIORef data_.renamed (Ok declaration)
 
-getTyped :: (InMemory es) => GlobalName -> Eff es (GraphData TypeErrorSet (Declaration Typed))
+getTyped :: (InMemory es) => DeclarationName -> Eff es (GraphData TypeErrorSet (Declaration Typed))
 getTyped name = do
     data_ <- declarationData name
     readIORef data_.typed
@@ -188,25 +195,47 @@ setTyped declaration = do
     data_ <- declarationData declaration.name
     writeIORef data_.typed (Ok declaration)
 
-getCompiledJS :: (InMemory es) => GlobalName -> Eff es (GraphData Void LText)
+getCompiledJS :: (InMemory es) => DeclarationName -> Eff es (GraphData Void LText)
 getCompiledJS name = do
     data_ <- declarationData name
     readIORef data_.compiledJS
 
-setCompiledJS :: (InMemory es) => GlobalName -> LText -> Eff es ()
+setCompiledJS :: (InMemory es) => DeclarationName -> LText -> Eff es ()
 setCompiledJS name js = do
     data_ <- declarationData name
     writeIORef data_.compiledJS (Ok js)
 
-removeDeclaration :: (InMemory es) => GlobalName -> Eff es ()
+removeDeclaration :: (InMemory es) => DeclarationName -> Eff es ()
 removeDeclaration name = do
     dependencies <- ask @DeclarationStore
-    nameResolution <- ask @NameResolution
     resetDependencies name
     invalidateDependents name
     liftIO $ HashTable.delete dependencies name
+
+    globals <- getDefinedGlobals name
+    for_ globals \(name, _) -> removeNameResolutionAssociation name
+
+getDefinedGlobals :: (InMemory es) => DeclarationName -> Eff es (Seq (GlobalName, NameKind))
+getDefinedGlobals name = do
+    data_ <- declarationData name
+
+    -- Since all global names are known after parsing, we can just look at the parsed declaration here
+    declaration <- readIORef data_.parsed
+    pure (definedGlobals declaration.syntax)
+
+addNameResolutionAssociation :: (HasCallStack, InMemory es) => GlobalName -> NameKind -> Eff es ()
+addNameResolutionAssociation name kind = do
+    nameResolution <- ask @NameResolution
+
     liftIO $ HashTable.mutate nameResolution name.name \case
-        Nothing -> error $ "removing declaration with a name that was never tracked: " <> show name
+        Nothing -> (Just [(name, kind)], ())
+        Just entries -> (Just (insert name kind entries), ())
+
+removeNameResolutionAssociation :: (HasCallStack, InMemory es) => GlobalName -> Eff es ()
+removeNameResolutionAssociation name = do
+    nameResolution <- ask @NameResolution
+    liftIO $ HashTable.mutate nameResolution name.name \case
+        Nothing -> error $ "removing name association that was never tracked: " <> show name
         Just entries -> do
             let remaining = HashMap.delete name entries
             if null remaining
@@ -226,7 +255,7 @@ failGraphData error = \case
     Missing{previous} -> Failed{error, previous}
     Failed{previous, error = _} -> Failed{error, previous}
 
-invalidate :: (InMemory es) => GlobalName -> Eff es ()
+invalidate :: (InMemory es) => DeclarationName -> Eff es ()
 invalidate name = do
     data_ <- declarationData name
     resetDependencies name
@@ -234,10 +263,10 @@ invalidate name = do
     modifyIORef' data_.renamed invalidateGraphData
     invalidateTyped Nothing name
 
-invalidateRenamed :: (InMemory es, HasCallStack) => Maybe RenameErrorSet -> GlobalName -> Eff es ()
+invalidateRenamed :: (InMemory es, HasCallStack) => Maybe RenameErrorSet -> DeclarationName -> Eff es ()
 invalidateRenamed = undefined
 
-invalidateTyped :: (InMemory es) => Maybe TypeErrorSet -> GlobalName -> Eff es ()
+invalidateTyped :: (InMemory es) => Maybe TypeErrorSet -> DeclarationName -> Eff es ()
 invalidateTyped maybeError name = do
     let invalidate = case maybeError of
             Nothing -> invalidateGraphData
@@ -245,21 +274,24 @@ invalidateTyped maybeError name = do
 
     data_ <- declarationData name
     modifyIORef' data_.typed invalidate
-    writeIORef data_.cachedType Nothing
-
     modifyIORef' data_.compiledJS invalidateGraphData
 
-getDependencies :: (InMemory es) => GlobalName -> Eff es (HashSet GlobalName)
+    cachedTypes <- ask @CachedTypes
+    globals <- getDefinedGlobals name
+    for_ globals \(name, _) ->
+        liftIO (HashTable.delete cachedTypes name)
+
+getDependencies :: (InMemory es) => DeclarationName -> Eff es (HashSet DeclarationName)
 getDependencies name = do
     data_ <- declarationData name
     liftIO $ readIORef data_.dependencies
 
-getDependents :: (InMemory es) => GlobalName -> Eff es (HashSet GlobalName)
+getDependents :: (InMemory es) => DeclarationName -> Eff es (HashSet DeclarationName)
 getDependents name = do
     data_ <- declarationData name
     liftIO $ readIORef data_.dependents
 
-addDependency :: (InMemory es) => GlobalName -> GlobalName -> Eff es ()
+addDependency :: (InMemory es) => DeclarationName -> DeclarationName -> Eff es ()
 addDependency dependent dependency = do
     dependentData <- declarationData dependent
     dependencyData <- declarationData dependency
@@ -268,20 +300,29 @@ addDependency dependent dependency = do
 
 getGlobalType :: (HasCallStack, InMemory es) => GlobalName -> Eff es (Either Type (TypeSyntax Renamed))
 getGlobalType name = do
-    data_ <- declarationData name
-    readIORef data_.cachedType >>= \case
+    cachedTypes <- ask @CachedTypes
+
+    liftIO (HashTable.lookup cachedTypes name) >>= \case
         Just type_ -> pure (Left type_)
-        Nothing ->
-            readIORef data_.renamed >>= \case
-                Ok renamed -> case renamed.syntax of
-                    DefineFunction{typeSignature} -> pure (Right typeSignature)
-                    _ -> error $ "trying to access type of non-function declaration: " <> show name
-                _ -> error $ "trying to access type of non-renamed declaration: " <> show name
+        Nothing -> do
+            declarationName <-
+                getDefiningDeclaration name >>= \case
+                    Just declarationName -> pure declarationName
+                    Nothing -> error $ "trying to access undefined declaration of global " <> show name
+            data_ <- declarationData declarationName
+            renamed <-
+                readIORef data_.renamed >>= \case
+                    Missing{} -> error $ "trying to access type of a global that has not been renamed: " <> show name
+                    -- TODO: this might not actually be impossible?
+                    Failed{} -> error $ "trying to access type of a global where renaming failed"
+                    Ok renamed -> pure renamed
+
+            pure (Right (typeOfGlobal name renamed.syntax))
 
 cacheGlobalType :: (InMemory es) => GlobalName -> Type -> Eff es ()
 cacheGlobalType name type_ = do
-    data_ <- declarationData name
-    writeIORef (data_.cachedType) (Just type_)
+    cachedTypes <- ask @CachedTypes
+    liftIO $ HashTable.insert cachedTypes name type_
 
 findMatchingNames :: (InMemory es) => Text -> Eff es (HashMap GlobalName NameKind)
 findMatchingNames text = do
@@ -291,7 +332,7 @@ findMatchingNames text = do
         Just candidates -> pure candidates
         Nothing -> mempty
 
-getErrors :: (InMemory es) => GlobalName -> Eff es (Seq CompilationError)
+getErrors :: (InMemory es) => DeclarationName -> Eff es (Seq CompilationError)
 getErrors name = do
     data_ <- declarationData name
     getErrorsFromData data_
@@ -322,7 +363,7 @@ getCurrentErrors = runConcurrent do
     fold <$> forConcurrently declarations \(_, data_) -> do
         getErrorsFromData data_
 
-remainingWorkItems :: (InMemory es) => Backend -> GlobalName -> DeclarationData -> Eff es (Seq WorkItem)
+remainingWorkItems :: (InMemory es) => Backend -> DeclarationName -> DeclarationData -> Eff es (Seq WorkItem)
 remainingWorkItems backend name data_ = do
     -- TODO: ughhhh i hope this gets better once we switch to the work queue API
     let remainingCompilation = case backend of
@@ -358,6 +399,16 @@ getRemainingWork backend = do
         TypeCheck{} -> 1
         CompileToJS{} -> 2
 
+getDefiningDeclaration :: (InMemory es) => GlobalName -> Eff es (Maybe DeclarationName)
+getDefiningDeclaration name = do
+    definingDeclarations <- ask @DefiningDeclarations
+    liftIO $ HashTable.lookup definingDeclarations name
+
+setDefiningDeclaration :: (InMemory es) => GlobalName -> DeclarationName -> Eff es ()
+setDefiningDeclaration global declaration = do
+    definingDeclarations <- ask @DefiningDeclarations
+    liftIO $ HashTable.insert definingDeclarations global declaration
+
 runInMemory :: forall a es. (IOE :> es) => Eff (GraphPersistence : es) a -> Eff es a
 runInMemory action = do
     lastKnownDeclarationsPerFile :: LastKnownDeclarations <- liftIO $ newIORef mempty
@@ -368,11 +419,17 @@ runInMemory action = do
 
     importScopes :: ImportScopes <- liftIO HashTable.new
 
+    cachedTypes :: CachedTypes <- liftIO HashTable.new
+
+    definingDeclarations :: DefiningDeclarations <- liftIO HashTable.new
+
     action & interpret \_ ->
         runReader lastKnownDeclarationsPerFile
             . runReader declarations
             . runReader nameResolution
             . runReader importScopes
+            . runReader cachedTypes
+            . runReader definingDeclarations
             . \case
                 LastKnownDeclarations filePath -> lastKnownDeclarations filePath
                 SetKnownDeclarations filePath declarations -> setKnownDeclarations filePath declarations
@@ -405,3 +462,5 @@ runInMemory action = do
                 -- Compilation
                 GetCurrentErrors -> getCurrentErrors
                 GetRemainingWork backend -> getRemainingWork backend
+                --
+                GetDefiningDeclaration name -> getDefiningDeclaration name

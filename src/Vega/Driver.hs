@@ -5,9 +5,10 @@ module Vega.Driver (
 ) where
 
 -- TODO: check that imports make sense somewhere
--- TODO: diff imports and invalidate all declarations if they did
+-- TODO: diff imports and invalidate all declarations if they changed
 -- TODO: check file modifications to avoid having to diff every module every time
 -- TODO: remove modules if their files are deleted
+-- TODO: catch duplicate declarations (in the parser i guess??)
 
 import Relude hiding (Reader, ask, trace)
 
@@ -176,7 +177,7 @@ rebuild = do
     performAllRemainingWork
 
     GraphPersistence.getCurrentErrors >>= \case
-        [] -> do 
+        [] -> do
             runErrorNoCallStack compileBackend >>= \case
                 Left error -> do
                     pure (CompilationFailed{errors = [DriverError error]})
@@ -189,10 +190,12 @@ compileBackend = do
     config <- ask @BuildConfig
 
     let entryPoint = BuildConfig.entryPoint config
-    -- TODO: check that the entry point has the correct type (`Unit -{IO}> Unit` probably?)
-    GraphPersistence.doesDeclarationExist entryPoint >>= \case
-        True -> pure ()
-        False -> throwError_ (Error.EntryPointNotFound entryPoint)
+
+    -- TODO: check that the entry point has the right type
+    GraphPersistence.getDefiningDeclaration entryPoint >>= \case
+        Just _ -> pure ()
+        Nothing -> throwError_ (Error.EntryPointNotFound entryPoint)
+
     case BuildConfig.backend config of
         BuildConfig.JavaScript -> do
             jsCode <- JavaScript.assembleFromEntryPoint entryPoint
@@ -204,7 +207,7 @@ compileBackend = do
 execute :: FilePath -> Text -> Eff es ()
 execute = undefined
 
-getLastKnownRenamed :: (Driver es) => GlobalName -> Eff es (Maybe (Declaration Renamed))
+getLastKnownRenamed :: (Driver es) => DeclarationName -> Eff es (Maybe (Declaration Renamed))
 getLastKnownRenamed name = do
     GraphPersistence.getRenamed name >>= \case
         Ok renamed -> pure $ Just renamed
@@ -218,7 +221,7 @@ typeChanged old new = case old.syntax of
         DefineVariantType{} -> undefined
     DefineVariantType{} -> undefined
 
-rename :: (Driver es) => GlobalName -> Eff es ()
+rename :: (Driver es) => DeclarationName -> Eff es ()
 rename name = do
     previous <- getLastKnownRenamed name
 
@@ -242,7 +245,7 @@ rename name = do
                         for_ dependents (GraphPersistence.invalidateTyped Nothing)
                 _ -> pure ()
 
-typecheck :: (Driver es) => GlobalName -> Eff es ()
+typecheck :: (Driver es) => DeclarationName -> Eff es ()
 typecheck name =
     GraphPersistence.getRenamed name >>= \case
         Missing{} -> error $ "missing renamed in typecheck: " <> show name
@@ -255,7 +258,7 @@ typecheck name =
                 Right typed -> do
                     GraphPersistence.setTyped typed
 
-compileToJS :: (Driver es) => GlobalName -> Eff es ()
+compileToJS :: (Driver es) => DeclarationName -> Eff es ()
 compileToJS name =
     GraphPersistence.getTyped name >>= \case
         Missing{} -> error $ "missing typed in compilation to JS: " <> show name
