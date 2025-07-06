@@ -20,8 +20,8 @@ import Data.Text qualified as Text
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Vega.Loc (HasLoc, Loc (..), getLoc)
-import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, keyword, note, number, plain, vsep, (<+>), localIdentText)
-import Vega.Syntax (GlobalName (..), Kind, Type, prettyGlobalIdent)
+import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, keyword, localIdentText, note, number, plain, vsep, (<+>))
+import Vega.Syntax (GlobalName (..), Kind, NameKind (..), Type, prettyGlobal, prettyGlobalText)
 
 data CompilationError
     = RenameError RenameError
@@ -30,19 +30,26 @@ data CompilationError
     deriving stock (Generic)
 
 data RenameError
-    = VarNotFound
+    = NameNotFound
         { loc :: Loc
-        , var :: Text
+        , name :: Text
+        , nameKind :: NameKind
         }
-    | AmbiguousGlobalVariable
+    | AmbiguousGlobal
         { loc :: Loc
-        , var :: Text
+        , name :: Text
+        , nameKind :: NameKind
         , candidates :: HashSet GlobalName
         }
-    | InaccessibleGlobalVariable
+    | InaccessibleGlobal
         { loc :: Loc
-        , var :: Text
+        , name :: Text
+        , nameKind :: NameKind
         , candidates :: HashSet GlobalName
+        }
+    | TypeVariableNotFound
+        { loc :: Loc
+        , name :: Text
         }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
@@ -78,6 +85,17 @@ data TypeError
         { loc :: Loc
         , expectedType :: Type
         , actualType :: Type
+        }
+    | ApplicationOfNonFunctionKind
+        { loc :: Loc
+        , kind :: Kind
+        }
+    | TypeConstructorAppliedToIncorrectNumberOfArguments
+        { loc :: Loc
+        , type_ :: Type
+        , kind :: Kind
+        , expectedNumber :: Int
+        , actualNumber :: Int
         }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
@@ -167,9 +185,22 @@ prettyErrorWithLoc MkErrorMessageWithLoc{location, contents} = do
             <> "\n"
             <> code
 
+prettyNameKind :: NameKind -> Doc Ann
+prettyNameKind = emphasis . \case
+    VarKind -> "variable"
+    TypeConstructorKind -> "type constructor"
+    DataConstructorKind -> "data constructor"
+
 renderCompilationError :: CompilationError -> ErrorMessage
 renderCompilationError = \case
-    RenameError error -> undefined
+    RenameError error -> ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
+        NameNotFound{} -> undefined
+        AmbiguousGlobal{} -> undefined
+        InaccessibleGlobal{name, nameKind, candidates} -> align do
+            emphasis "Inaccessible" <+> prettyNameKind nameKind <+> prettyGlobalText nameKind name <> "\n"
+            <> "  The following definitions are available but not imported:\n"
+            <> "    " <> align (foldMap (\candidate -> emphasis "-" <+> prettyGlobal nameKind candidate <> "\n") candidates)
+        TypeVariableNotFound{} -> undefined
     TypeError error -> ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
         FunctionDefinedWithIncorrectNumberOfArguments
             { loc = _
@@ -230,18 +261,42 @@ renderCompilationError = \case
                     emphasis "Type mismatch\n"
                         <> "  Unable to unify\n"
                         <> "    "
-                        <> emphasis "expected" <+> "type"
-                        <+> pretty expectedType
+                        <> emphasis "expected"
+                            <+> "type"
+                            <+> pretty expectedType
                         <> "\n"
-                        <> "      " <> emphasis "actual" <+> "type"
-                        <+> pretty actualType
+                        <> "      "
+                        <> emphasis "actual"
+                            <+> "type"
+                            <+> pretty actualType
+        ApplicationOfNonFunctionKind
+            { loc = _
+            , kind
+            } ->
+                align $
+                    emphasis "Trying to apply a type of non-function kind" <+> pretty kind
+        TypeConstructorAppliedToIncorrectNumberOfArguments
+            { loc = _
+            , type_
+            , kind
+            , expectedNumber
+            , actualNumber
+            } ->
+                align $
+                    emphasis "Type constructor applied to an incorrect number of arguments.\n"
+                        <> emphasis "  expected     " <+> number expectedNumber <+> "arguments\n"
+                        <> emphasis "  but received " <+> number actualNumber
+                        <> "\n"
+                        <> "    In an application of type" <+> pretty type_
+                        <> "\n"
+                        <> "      which has kind " <+> pretty kind
     DriverError error -> case error of
         EntryPointNotFound entryPoint ->
             PlainError $
                 MkPlainErrorMessage $
                     align $
                         emphasis "Missing entry point "
-                            <> prettyGlobalIdent entryPoint
+                            <> prettyGlobal VarKind entryPoint
                             <> "\n"
                             <> note "  Note: To change the entry point, set the" <+> localIdentText "entry-point" <+> note "field in your "
                             <> keyword "vega.yaml"

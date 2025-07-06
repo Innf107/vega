@@ -10,6 +10,7 @@ import Data.HashSet qualified as HashSet
 import Vega.Effect.GraphPersistence hiding (
     addDeclaration,
     addDependency,
+    cacheGlobalKind,
     cacheGlobalType,
     doesDeclarationExist,
     findMatchingNames,
@@ -19,6 +20,7 @@ import Vega.Effect.GraphPersistence hiding (
     getDependencies,
     getDependents,
     getErrors,
+    getGlobalKind,
     getGlobalType,
     getModuleImportScope,
     getParsed,
@@ -65,6 +67,7 @@ data DeclarationData = MkDeclarationData
     }
 
 type CachedTypes = CuckooHashTable GlobalName Type
+type CachedKinds = CuckooHashTable GlobalName Kind
 
 type DeclarationStore = CuckooHashTable DeclarationName DeclarationData
 
@@ -83,6 +86,7 @@ type InMemory es =
     , Reader NameResolution :> es
     , Reader ImportScopes :> es
     , Reader CachedTypes :> es
+    , Reader CachedKinds :> es
     , Reader DefiningDeclarations :> es
     )
 
@@ -264,7 +268,15 @@ invalidate name = do
     invalidateTyped Nothing name
 
 invalidateRenamed :: (InMemory es, HasCallStack) => Maybe RenameErrorSet -> DeclarationName -> Eff es ()
-invalidateRenamed = undefined
+invalidateRenamed maybeError name = do
+    let invalidate = case maybeError of
+            Nothing -> invalidateGraphData
+            Just error -> failGraphData error
+
+    data_ <- declarationData name
+    modifyIORef' data_.renamed invalidate
+    resetDependencies name
+    invalidateTyped Nothing name
 
 invalidateTyped :: (InMemory es) => Maybe TypeErrorSet -> DeclarationName -> Eff es ()
 invalidateTyped maybeError name = do
@@ -323,6 +335,31 @@ cacheGlobalType :: (InMemory es) => GlobalName -> Type -> Eff es ()
 cacheGlobalType name type_ = do
     cachedTypes <- ask @CachedTypes
     liftIO $ HashTable.insert cachedTypes name type_
+
+getGlobalKind :: (HasCallStack, InMemory es) => GlobalName -> Eff es (Either Kind (KindSyntax Renamed))
+getGlobalKind name = do
+    cachedKinds <- ask @CachedKinds
+    liftIO (HashTable.lookup cachedKinds name) >>= \case
+        Just kind -> pure (Left kind)
+        Nothing -> do
+            declarationName <-
+                getDefiningDeclaration name >>= \case
+                    Just declarationName -> pure declarationName
+                    Nothing -> error $ "trying to access undefined declaration of global " <> show name
+            data_ <- declarationData declarationName
+            renamed <-
+                readIORef data_.renamed >>= \case
+                    Missing{} -> error $ "trying to access kind of a global that has not been renamed: " <> show name
+                    -- TODO: this might not actually be impossible?
+                    Failed{} -> error $ "trying to access kind of a global where renaming failed"
+                    Ok renamed -> pure renamed
+
+            pure (Right (kindOfGlobal renamed))
+
+cacheGlobalKind :: (InMemory es) => GlobalName -> Kind -> Eff es ()
+cacheGlobalKind name kind = do
+    cachedKinds <- ask @CachedKinds
+    liftIO $ HashTable.insert cachedKinds name kind
 
 findMatchingNames :: (InMemory es) => Text -> Eff es (HashMap GlobalName NameKind)
 findMatchingNames text = do
@@ -421,6 +458,8 @@ runInMemory action = do
 
     cachedTypes :: CachedTypes <- liftIO HashTable.new
 
+    cachedKinds :: CachedKinds <- liftIO HashTable.new
+
     definingDeclarations :: DefiningDeclarations <- liftIO HashTable.new
 
     action & interpret \_ ->
@@ -429,6 +468,7 @@ runInMemory action = do
             . runReader nameResolution
             . runReader importScopes
             . runReader cachedTypes
+            . runReader cachedKinds
             . runReader definingDeclarations
             . \case
                 LastKnownDeclarations filePath -> lastKnownDeclarations filePath
@@ -457,6 +497,8 @@ runInMemory action = do
                 -- Specific accesses
                 GetGlobalType name -> getGlobalType name
                 CacheGlobalType name type_ -> cacheGlobalType name type_
+                GetGlobalKind name -> getGlobalKind name
+                CacheGlobalKind name kind -> cacheGlobalKind name kind
                 FindMatchingNames name -> findMatchingNames name
                 GetErrors name -> getErrors name
                 -- Compilation

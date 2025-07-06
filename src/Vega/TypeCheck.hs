@@ -26,6 +26,7 @@ import Vega.Pretty (errorText, keyword, pretty, (<+>))
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
     , localTypeVariables :: HashMap LocalName Kind
+    , localTypeConstructors :: HashMap LocalName Kind
     }
 
 emptyEnv :: Env
@@ -33,6 +34,7 @@ emptyEnv =
     MkEnv
         { localTypes = mempty
         , localTypeVariables = mempty
+        , localTypeConstructors = mempty
         }
 
 bindVarType :: LocalName -> Type -> Env -> Env
@@ -75,7 +77,7 @@ fatalTypeError error = do
     throwError_ error
 
 getGlobalType :: (TypeCheck es) => GlobalName -> Eff es Type
-getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobalIdent name) do
+getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobal VarKind name) do
     GraphPersistence.getGlobalType name >>= \case
         Left cachedType -> do
             trace TypeCheck $ "cached ~> " <> pretty cachedType
@@ -84,6 +86,15 @@ getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobalIdent 
             (type_, _) <- checkType emptyEnv Type syntax
             GraphPersistence.cacheGlobalType name type_
             pure type_
+
+globalConstructorKind :: (TypeCheck es) => GlobalName -> Eff es Kind
+globalConstructorKind name = do
+    GraphPersistence.getGlobalKind name >>= \case
+        Left cachedKind -> pure cachedKind
+        Right syntax -> do
+            (kind, _synax) <- evalKind syntax
+            GraphPersistence.cacheGlobalKind name kind
+            pure kind
 
 checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
 checkDeclarationSyntax loc = \case
@@ -121,7 +132,15 @@ checkDeclarationSyntax loc = \case
         subsumesEffect bodyEffect effect
 
         pure DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body}
-    DefineVariantType{} -> undefined
+    DefineVariantType{name, typeParameters, constructors} -> do
+        let env = emptyEnv
+        (env, binders) <- mapAccumLM applyTypeVarBinder env typeParameters
+        let typeParameters = fmap (\(_, _, binder) -> binder) binders
+
+        constructors <- for constructors \(name, loc, parameters) -> do
+            (_, parameters) <- Seq.unzip <$> traverse (checkType env Type) parameters
+            pure (name, loc, parameters)
+        pure (DefineVariantType{name, typeParameters, constructors})
 
 checkPattern :: (TypeCheck es) => Env -> Type -> Pattern Renamed -> Eff es (Pattern Typed, Env -> Env)
 checkPattern env expectedType = \case
@@ -260,7 +279,14 @@ boolType :: Type
 boolType = TypeConstructor (Global (internalName "Bool"))
 
 evalKind :: (TypeCheck es) => KindSyntax Renamed -> Eff es (Kind, KindSyntax Typed)
-evalKind = undefined
+evalKind = \case
+    TypeS loc -> pure (Type, TypeS loc)
+    EffectS loc -> pure (Effect, EffectS loc)
+    ArrowKindS loc argumentKindsSyntax resultKindSyntax -> do
+        (argumentKinds, argumentKindsSyntax) <- Seq.unzip <$> traverse evalKind argumentKindsSyntax
+        (resultKind, resultKindSyntax) <- evalKind resultKindSyntax
+        pure (ArrowKind argumentKinds resultKind, ArrowKindS loc argumentKindsSyntax resultKindSyntax)
+
 
 checkType :: (TypeCheck es) => Env -> Kind -> TypeSyntax Renamed -> Eff es (Type, TypeSyntax Typed)
 checkType env expectedKind syntax = withTrace KindCheck ("checkType: " <> showHeadConstructor syntax <> keyword " <= " <> pretty expectedKind) do
@@ -275,21 +301,42 @@ inferType env syntax = do
     pure (kind, type_, syntax)
   where
     go = case syntax of
-        TypeConstructorS loc name -> pure (Type, TypeConstructor name, TypeConstructorS loc name)
-        TypeApplicationS loc funType argTypes -> do
-            undefined
+        TypeConstructorS loc name -> do
+            kind <- case name of
+                Global name -> globalConstructorKind name
+                Local name -> case lookup name env.localTypeConstructors of
+                    Nothing -> error $ "local type constructor " <> show name <> " not found in type checker"
+                    Just kind -> pure kind
+            pure (kind, TypeConstructor name, TypeConstructorS loc name)
+        TypeApplicationS loc typeConstructorSyntax argumentsSyntax -> do
+            (constructorKind, typeConstructor, typeConstructorSyntax) <- inferType env typeConstructorSyntax
+            case constructorKind of
+                ArrowKind argumentKinds resultKind
+                    | length argumentKinds == length argumentsSyntax -> do
+                        (arguments, argumentsSyntax) <- Seq.unzip <$> zipWithSeqM (checkType env) argumentKinds argumentsSyntax
+                        pure
+                            ( resultKind
+                            , TypeApplication typeConstructor arguments
+                            , TypeApplicationS loc typeConstructorSyntax argumentsSyntax
+                            )
+                    | otherwise -> do
+                        -- TODO: make this non-fatal. This will probably involve using some sort of 'Bottom' type we insert
+                        -- for kinds we couldn't determine to suppress further spurious kind errors.
+                        fatalTypeError
+                            ( TypeConstructorAppliedToIncorrectNumberOfArguments
+                                { loc
+                                , type_ = typeConstructor
+                                , kind = constructorKind
+                                , expectedNumber = length argumentKinds
+                                , actualNumber = length argumentsSyntax
+                                }
+                            )
+                -- TODO: make this non-fatal
+                kind -> fatalTypeError (ApplicationOfNonFunctionKind{loc, kind})
         TypeVarS loc localName -> do
             let kind = typeVariableKind localName env
             pure (kind, TypeVar localName, TypeVarS loc localName)
         ForallS loc typeVarBinders body -> do
-            let applyTypeVarBinder env (MkTypeVarBinderS{loc, varName, kind = kindSyntax}) = do
-                    (kind, kindSyntax) <- case kindSyntax of
-                        Nothing -> pure (Type, Nothing)
-                        Just kindSyntax -> do
-                            (kind, syntax) <- evalKind kindSyntax
-                            pure (kind, Just syntax)
-                    pure (bindTypeVariable varName kind env, (varName, kind, MkTypeVarBinderS{loc, varName, kind = kindSyntax}))
-
             (env, typeVarBinders) <- mapAccumLM applyTypeVarBinder env typeVarBinders
 
             (body, bodySyntax) <- checkType env Type body
@@ -311,6 +358,15 @@ inferType env syntax = do
         TupleS loc elements -> do
             (elementTypes, elementTypeSyntax) <- Seq.unzip <$> traverse (checkType env Type) elements
             pure (Type, Tuple elementTypes, TupleS loc elementTypeSyntax)
+
+applyTypeVarBinder :: (TypeCheck es) => Env -> TypeVarBinderS Renamed -> Eff es (Env, (LocalName, Kind, TypeVarBinderS Typed))
+applyTypeVarBinder env (MkTypeVarBinderS{loc, varName, kind = kindSyntax}) = do
+    (kind, kindSyntax) <- case kindSyntax of
+        Nothing -> pure (Type, Nothing)
+        Just kindSyntax -> do
+            (kind, syntax) <- evalKind kindSyntax
+            pure (kind, Just syntax)
+    pure (bindTypeVariable varName kind env, (varName, kind, MkTypeVarBinderS{loc, varName, kind = kindSyntax}))
 
 splitFunctionType :: (TypeCheck es) => Loc -> Int -> Type -> Eff es (Seq Type, Effect, Type)
 splitFunctionType loc parameterCount type_ = do

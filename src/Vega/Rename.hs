@@ -11,10 +11,12 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.HashSet qualified as HashSet
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
+import Data.Traversable (for)
 import Effectful (Eff, (:>))
 import Effectful.Reader.Static (Reader, ask, runReader)
-import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getModuleImportScope, getDefiningDeclaration)
-import Vega.Effect.Output.Static.Local (Output, output, runOutputSeq)
+import GHC.List (List)
+import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getDefiningDeclaration, getModuleImportScope)
+import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
 import Vega.Error (RenameError (..), RenameErrorSet (..))
 import Vega.Loc (Loc)
 import Vega.Util qualified as Util
@@ -27,8 +29,9 @@ type Rename es =
     )
 
 data Env = MkEnv
-    { localVariables :: Map Text LocalName
-    , localTypeVariables :: Map Text LocalName
+    { localVariables :: HashMap Text LocalName
+    , localTypeVariables :: HashMap Text LocalName
+    , localTypeConstructors :: HashMap Text LocalName
     }
 
 emptyEnv :: Env
@@ -36,6 +39,7 @@ emptyEnv =
     MkEnv
         { localVariables = mempty
         , localTypeVariables = mempty
+        , localTypeConstructors = mempty
         }
 
 bindLocalVar :: (Rename es) => Text -> Eff es (LocalName, Env -> Env)
@@ -58,15 +62,16 @@ data GlobalVariableOccurance
     | Ambiguous (HashSet GlobalName)
     | Inaccessible (HashSet GlobalName)
 
-findGlobalVariableUnregistered :: (Rename es) => Text -> Eff es GlobalVariableOccurance
-findGlobalVariableUnregistered var = do
+findGlobalUnregistered :: (Rename es) => NameKind -> Text -> Eff es GlobalVariableOccurance
+findGlobalUnregistered nameKind name = do
     parent <- ask @DeclarationName
 
     importScope <- getModuleImportScope parent.moduleName
-    candidatesOfAllKinds <- findMatchingNames var
+    candidatesOfAllKinds <- findMatchingNames name
 
     let takeVarCandidate = \case
-            (name, VarKind) -> Just name
+            (name, candidateKind)
+                | candidateKind == nameKind -> Just name
             _ -> Nothing
     let candidates = mapMaybe takeVarCandidate (HashMap.toList candidatesOfAllKinds)
 
@@ -77,19 +82,40 @@ findGlobalVariableUnregistered var = do
         [var] -> pure $ Found var
         candidatesInScope -> pure $ Ambiguous (fromList candidatesInScope)
 
-findGlobalVariable :: (Rename es) => Text -> Eff es GlobalVariableOccurance
-findGlobalVariable var = do
-    findGlobalVariableUnregistered var >>= \case
+findGlobal :: (Rename es) => NameKind -> Text -> Eff es GlobalVariableOccurance
+findGlobal nameKind name = do
+    findGlobalUnregistered nameKind name >>= \case
         Found globalName -> do
-            dependencyDeclarationName <- getDefiningDeclaration globalName >>= \case
-                Nothing -> error $ "declaration of name not found: " <> show globalName
-                Just name -> pure name
+            dependencyDeclarationName <-
+                getDefiningDeclaration globalName >>= \case
+                    Nothing -> error $ "declaration of name not found: " <> show globalName
+                    Just name -> pure name
 
             output dependencyDeclarationName
             pure (Found globalName)
         NotFound -> pure NotFound
         Inaccessible candidates -> pure $ Inaccessible candidates
         Ambiguous candidatesInScope -> pure $ Ambiguous candidatesInScope
+
+findGlobalOrDummy :: (Rename es) => Loc -> NameKind -> Text -> Eff es Name
+findGlobalOrDummy loc nameKind name =
+    findGlobal nameKind name >>= \case
+        Found globalName -> pure (Global globalName)
+        NotFound -> do
+            output (NameNotFound{loc, name, nameKind = VarKind})
+
+            parent <- ask @DeclarationName
+            pure (Local (dummyLocalName parent name))
+        Ambiguous candidates -> do
+            output (AmbiguousGlobal{loc, name = name, nameKind = VarKind, candidates})
+
+            parent <- ask @DeclarationName
+            pure (Local (dummyLocalName parent name))
+        Inaccessible candidates -> do
+            output (InaccessibleGlobal{loc, name, nameKind = VarKind, candidates})
+
+            parent <- ask @DeclarationName
+            pure (Local (dummyLocalName parent name))
 
 isInScope :: GlobalName -> ImportScope -> Bool
 isInScope name scope = do
@@ -99,32 +125,20 @@ isInScope name scope = do
             -- TODO: qualified
             HashSet.member name.name importedItems.unqualifiedItems
 
-rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, RenameErrorSet, Seq DeclarationName)
+rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, RenameErrorSet, List DeclarationName)
 rename (MkDeclaration loc name syntax) = runReader name do
-    ((syntax, errors), dependencies) <- runOutputSeq $ runOutputSeq @RenameError $ renameDeclarationSyntax syntax
+    ((syntax, errors), dependencies) <- runOutputList $ runOutputSeq @RenameError $ renameDeclarationSyntax syntax
     pure (MkDeclaration loc name syntax, (MkRenameErrorSet errors), dependencies)
 
 findVarName :: (Rename es) => Env -> Loc -> Text -> Eff es Name
 findVarName env loc text = case lookup text env.localVariables of
     Just localName -> pure (Local localName)
-    Nothing ->
-        findGlobalVariable text >>= \case
-            Found globalName -> pure (Global globalName)
-            NotFound -> do
-                output (VarNotFound{loc, var = text})
+    Nothing -> findGlobalOrDummy loc VarKind text
 
-                parent <- ask @DeclarationName
-                pure (Local (dummyLocalName parent text))
-            Ambiguous candidates -> do
-                output (AmbiguousGlobalVariable{loc, var = text, candidates})
-
-                parent <- ask @DeclarationName
-                pure (Local (dummyLocalName parent text))
-            Inaccessible candidates -> do
-                output (InaccessibleGlobalVariable{loc, var = text, candidates})
-
-                parent <- ask @DeclarationName
-                pure (Local (dummyLocalName parent text))
+findTypeConstructorName :: (Rename es) => Env -> Loc -> Text -> Eff es Name
+findTypeConstructorName env loc text = case lookup text env.localTypeConstructors of
+    Just localName -> pure (Local localName)
+    Nothing -> findGlobalOrDummy loc TypeConstructorKind text
 
 {- | This is returned if we cannot find a local name during renaming.
 
@@ -137,37 +151,49 @@ the current declaration anyway and will not cause any issues.
 dummyLocalName :: DeclarationName -> Text -> LocalName
 dummyLocalName parent name = MkLocalName{parent, name, count = -1}
 
-findTypeVariable :: Env -> Text -> Eff es LocalName
-findTypeVariable env text = case lookup text env.localTypeVariables of
+findTypeVariable :: (Rename es) => Env -> Loc -> Text -> Eff es LocalName
+findTypeVariable env loc name = case lookup name env.localTypeVariables of
     Just localName -> pure localName
-    Nothing -> undefined
+    Nothing -> do
+        output (TypeVariableNotFound{loc, name})
+
+        parent <- ask
+        pure (dummyLocalName parent name)
 
 renameDeclarationSyntax :: (Rename es) => DeclarationSyntax Parsed -> Eff es (DeclarationSyntax Renamed)
 renameDeclarationSyntax = \case
     DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body} -> do
-        typeSignature <- renameTypeSyntax emptyEnv typeSignature
+        let env = emptyEnv
+        typeSignature <- renameTypeSyntax env typeSignature
 
         (declaredTypeParameters, env) <- case declaredTypeParameters of
-            Nothing -> pure (Nothing, emptyEnv)
+            Nothing -> pure (Nothing, env)
             Just declaredTypeParameters -> do
                 (declaredTypeParameters, envTransformers) <- Seq.unzip <$> traverse bindTypeVariable declaredTypeParameters
-                pure (Just declaredTypeParameters, Util.compose envTransformers emptyEnv)
+                pure (Just declaredTypeParameters, Util.compose envTransformers env)
 
         (parameters, transformers) <- Seq.unzip <$> traverse (renamePattern env) parameters
         body <- renameExpr (Util.compose transformers env) body
         pure (DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body})
-    DefineVariantType{typeParameters, constructors} -> do
-        undefined
+    DefineVariantType{name, typeParameters, constructors} -> do
+        let env = emptyEnv
+        (typeParameters, env) <- renameTypeVarBinders env typeParameters
+        constructors <- for constructors \(loc, dataConstructorName, parameters) -> do
+            parameters <- traverse (renameTypeSyntax env) parameters
+            pure (loc, dataConstructorName, parameters)
+        pure (DefineVariantType{name, typeParameters, constructors})
 
 renameTypeSyntax :: (Rename es) => Env -> TypeSyntax Parsed -> Eff es (TypeSyntax Renamed)
 renameTypeSyntax env = \case
-    TypeConstructorS{} -> undefined
+    TypeConstructorS loc name -> do
+        name <- findTypeConstructorName env loc name
+        pure (TypeConstructorS loc name)
     TypeApplicationS loc funType arguments -> do
         funType <- renameTypeSyntax env funType
         arguments <- traverse (renameTypeSyntax env) arguments
         pure (TypeApplicationS loc funType arguments)
     TypeVarS loc name -> do
-        name <- findTypeVariable env name
+        name <- findTypeVariable env loc name
         pure (TypeVarS loc name)
     ForallS loc typeVarBinders body -> do
         (typeVarBinders, env) <- renameTypeVarBinders env typeVarBinders

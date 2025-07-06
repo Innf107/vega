@@ -304,10 +304,10 @@ data ImportedItems = MkImportedItems
 
 instance Pretty Type where
     pretty = \case
-        TypeConstructor name -> prettyConstructor name
+        TypeConstructor name -> prettyName TypeConstructorKind name
         TypeApplication typeConstructor argTypes ->
             pretty typeConstructor <> prettyArguments argTypes
-        TypeVar name -> prettyLocalIdent name
+        TypeVar name -> prettyLocal VarKind name
         Forall binders body -> keyword "forall" <+> intercalateDoc " " (fmap prettyTypeVarBinder binders) <> "." <+> pretty body
         Function arguments Pure result ->
             prettyArguments arguments <+> keyword "->" <+> pretty result
@@ -320,8 +320,8 @@ instance Pretty Type where
 
 prettyTypeVarBinder :: (LocalName, Kind) -> Doc Ann
 prettyTypeVarBinder = \case
-    (name, Type) -> prettyLocalIdent name
-    (name, kind) -> lparen "(" <> prettyLocalIdent name <+> keyword ":" <+> pretty kind <> ")"
+    (name, Type) -> prettyLocal VarKind name
+    (name, kind) -> lparen "(" <> prettyLocal VarKind name <+> keyword ":" <+> pretty kind <> ")"
 
 instance Pretty Kind where
     pretty = \case
@@ -336,27 +336,25 @@ instance Pretty MetaVar where
 instance Pretty Skolem where
     pretty (MkSkolem{identity, originalName}) = skolem identity (renderLocalName originalName)
 
-prettyConstructor :: Name -> Doc Ann
-prettyConstructor = \case
-    Local name -> prettyLocalConstructor name
-    Global name -> prettyGlobalConstructor name
+prettyName :: NameKind -> Name -> Doc Ann
+prettyName kind = \case
+    Local name -> prettyLocal kind name
+    Global name -> prettyGlobal kind name
 
-prettyIdent :: Name -> Doc Ann
-prettyIdent = \case
-    Local name -> prettyLocalIdent name
-    Global name -> prettyGlobalIdent name
+prettyLocal :: NameKind -> LocalName -> Doc Ann
+prettyLocal kind name = case kind of
+    VarKind -> globalIdentText (renderLocalName name)
+    TypeConstructorKind -> globalConstructorText (renderLocalName name)
+    DataConstructorKind -> globalConstructorText (renderLocalName name)
 
-prettyLocalIdent :: LocalName -> Doc Ann
-prettyLocalIdent name = localIdentText $ renderLocalName name
+prettyGlobal :: NameKind -> GlobalName -> Doc Ann
+prettyGlobal kind MkGlobalName{moduleName, name} = prettyGlobalText kind (renderModuleName moduleName <> ":" <> name)
 
-prettyLocalConstructor :: LocalName -> Doc Ann
-prettyLocalConstructor name = localConstructorText $ renderLocalName name
-
-prettyGlobalIdent :: GlobalName -> Doc Ann
-prettyGlobalIdent MkGlobalName{moduleName, name} = globalIdentText (renderModuleName moduleName <> ":" <> name)
-
-prettyGlobalConstructor :: GlobalName -> Doc Ann
-prettyGlobalConstructor MkGlobalName{moduleName, name} = globalConstructorText (renderModuleName moduleName <> ":" <> name)
+prettyGlobalText :: NameKind -> Text -> Doc Ann
+prettyGlobalText kind raw = case kind of
+    VarKind -> globalIdentText raw
+    TypeConstructorKind -> globalConstructorText raw
+    DataConstructorKind -> globalConstructorText raw
 
 prettyArguments :: (Foldable list, Functor list, Pretty a) => list a -> Doc Ann
 prettyArguments list = lparen "(" <> intercalateDoc (keyword ",") (fmap pretty list) <> rparen ")"
@@ -377,3 +375,13 @@ typeOfGlobal global = \case
             Nothing -> error $ "global (term) variable not found in variant definition '" <> show variantName <> ": " <> show global
             Just (loc, _, parameterTypes) ->
                 forallS loc typeParameters (PureFunctionS loc parameterTypes (typeApplicationS loc (TypeConstructorS loc (Global variantName)) (fmap (\MkTypeVarBinderS{loc, varName} -> TypeVarS loc varName) typeParameters)))
+
+kindOfGlobal :: (HasCallStack) => Declaration Renamed -> KindSyntax Renamed
+kindOfGlobal declaration = case declaration.syntax of
+    DefineFunction{} -> error "trying to access 'kind' of a function"
+    DefineVariantType{name = _, typeParameters, constructors = _} -> do
+        let argumentKinds =
+                typeParameters & fmap \(MkTypeVarBinderS{loc, kind}) -> case kind of
+                    Nothing -> TypeS loc
+                    Just kind -> kind
+        ArrowKindS declaration.loc argumentKinds (TypeS declaration.loc)

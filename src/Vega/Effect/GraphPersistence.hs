@@ -54,6 +54,8 @@ data GraphPersistence :: Effect where
     -- Specific accesses
     GetGlobalType :: GlobalName -> GraphPersistence m (Either Type (TypeSyntax Renamed))
     CacheGlobalType :: GlobalName -> Type -> GraphPersistence m ()
+    GetGlobalKind :: GlobalName -> GraphPersistence m (Either Kind (KindSyntax Renamed))
+    CacheGlobalKind :: GlobalName -> Kind -> GraphPersistence m ()
     FindMatchingNames :: Text -> GraphPersistence m (HashMap GlobalName NameKind)
     GetErrors :: DeclarationName -> GraphPersistence m (Seq CompilationError)
     -- Compilation
