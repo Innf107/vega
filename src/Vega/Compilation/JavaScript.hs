@@ -63,15 +63,15 @@ compileDeclarationSyntax = \case
         , constructors
         } -> do
             for_ constructors \(_loc, constructorName, arguments) -> case arguments of
-                [] -> tell $ "const " <> compileGlobalName constructorName <> " = " <> "{ tag: \"" <> compileGlobalName constructorName <> "\" }\n"
+                [] -> tell $ "const " <> compileGlobalName constructorName <> " = " <> "({ tag: \"" <> compileGlobalName constructorName <> "\" })\n"
                 _ -> do
                     let parameters = ["x" <> show i | i <- [1 .. length arguments]]
 
                     tell $ "const " <> compileGlobalName constructorName <> " = ("
                     tell $ TextBuilder.fromText $ Text.intercalate ", " parameters
-                    tell $ ") => { tag: \"" <> compileGlobalName constructorName <> "\", payload = ["
+                    tell $ ") => ({ tag: \"" <> compileGlobalName constructorName <> "\", payload: ["
                     tell $ TextBuilder.fromText $ Text.intercalate ", " parameters
-                    tell $ "] }\n"
+                    tell $ "] })\n"
 
 compileExpr :: (Compile es) => Expr Typed -> Eff es ()
 compileExpr = \case
