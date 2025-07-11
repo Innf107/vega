@@ -20,6 +20,7 @@ import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutput
 import Vega.Error (RenameError (..), RenameErrorSet (..))
 import Vega.Loc (Loc)
 import Vega.Util qualified as Util
+import Vega.Util (mapAccumLM)
 
 type Rename es =
     ( GraphPersistence :> es
@@ -102,17 +103,17 @@ findGlobalOrDummy loc nameKind name =
     findGlobal nameKind name >>= \case
         Found globalName -> pure (Global globalName)
         NotFound -> do
-            output (NameNotFound{loc, name, nameKind = VarKind})
+            output (NameNotFound{loc, name, nameKind})
 
             parent <- ask @DeclarationName
             pure (Local (dummyLocalName parent name))
         Ambiguous candidates -> do
-            output (AmbiguousGlobal{loc, name = name, nameKind = VarKind, candidates})
+            output (AmbiguousGlobal{loc, name = name, nameKind, candidates})
 
             parent <- ask @DeclarationName
             pure (Local (dummyLocalName parent name))
         Inaccessible candidates -> do
-            output (InaccessibleGlobal{loc, name, nameKind = VarKind, candidates})
+            output (InaccessibleGlobal{loc, name, nameKind, candidates})
 
             parent <- ask @DeclarationName
             pure (Local (dummyLocalName parent name))
@@ -177,7 +178,7 @@ renameDeclarationSyntax = \case
         pure (DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body})
     DefineVariantType{name, typeParameters, constructors} -> do
         let env = emptyEnv
-        (typeParameters, env) <- renameTypeVarBinders env typeParameters
+        (env, typeParameters) <- renameTypeVarBinders env typeParameters
         constructors <- for constructors \(loc, dataConstructorName, parameters) -> do
             parameters <- traverse (renameTypeSyntax env) parameters
             pure (loc, dataConstructorName, parameters)
@@ -196,7 +197,7 @@ renameTypeSyntax env = \case
         name <- findTypeVariable env loc name
         pure (TypeVarS loc name)
     ForallS loc typeVarBinders body -> do
-        (typeVarBinders, env) <- renameTypeVarBinders env typeVarBinders
+        (env, typeVarBinders) <- renameTypeVarBinders env typeVarBinders
         body <- renameTypeSyntax env body
         pure (ForallS loc typeVarBinders body)
     PureFunctionS loc parameters resultType -> do
@@ -212,17 +213,14 @@ renameTypeSyntax env = \case
         elements <- traverse (renameTypeSyntax env) elements
         pure (TupleS loc elements)
 
-renameTypeVarBinders :: (Rename es) => Env -> Seq (TypeVarBinderS Parsed) -> Eff es (Seq (TypeVarBinderS Renamed), Env)
-renameTypeVarBinders env = \case
-    Empty -> pure (Empty, env)
-    (MkTypeVarBinderS{loc, varName, kind} :<| rest) -> do
-        (varName, envTrans) <- bindTypeVariable varName
-        -- The kind is not allowed to depend on the variable being defined so we don't use the env transformer yet
-        kind <- traverse (renameKindSyntax env) kind
+renameTypeVarBinders :: (Rename es) => Env -> Seq (ForallBinderS Parsed) -> Eff es (Env, Seq (ForallBinderS Renamed))
+renameTypeVarBinders env binders = mapAccumLM renameForallBinder env binders
 
-        (rest, finalEnv) <- renameTypeVarBinders (envTrans env) rest
-
-        pure (MkTypeVarBinderS{loc, varName, kind} :<| rest, finalEnv)
+renameForallBinder :: Rename es => Env -> ForallBinderS Parsed -> Eff es (Env, ForallBinderS Renamed)
+renameForallBinder env = \case
+    UnspecifiedBinderS{} -> undefined
+    TypeVarBinderS{} -> undefined
+    KindVarBinderS{} -> undefined
 
 renameKindSyntax :: (Rename es) => Env -> KindSyntax Parsed -> Eff es (KindSyntax Renamed)
 renameKindSyntax env = \case

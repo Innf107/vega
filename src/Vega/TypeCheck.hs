@@ -209,7 +209,11 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
             pure (If{loc, condition, thenBranch, elseBranch}, effect)
         SequenceBlock{loc, statements} -> do
             undefined
-        _ -> undefined
+        TupleLiteral loc elements -> do
+            undefined
+        PartialApplication{} -> undefined
+        BinaryOperator{} -> undefined
+        Match{} -> undefined
 
 infer :: (TypeCheck es) => Env -> Expr Renamed -> Eff es (Type, Expr Typed, Effect)
 infer env expr = do
@@ -287,7 +291,6 @@ evalKind = \case
         (resultKind, resultKindSyntax) <- evalKind resultKindSyntax
         pure (ArrowKind argumentKinds resultKind, ArrowKindS loc argumentKindsSyntax resultKindSyntax)
 
-
 checkType :: (TypeCheck es) => Env -> Kind -> TypeSyntax Renamed -> Eff es (Type, TypeSyntax Typed)
 checkType env expectedKind syntax = withTrace KindCheck ("checkType: " <> showHeadConstructor syntax <> keyword " <= " <> pretty expectedKind) do
     (kind, type_, syntax) <- inferType env syntax
@@ -359,14 +362,13 @@ inferType env syntax = do
             (elementTypes, elementTypeSyntax) <- Seq.unzip <$> traverse (checkType env Type) elements
             pure (Type, Tuple elementTypes, TupleS loc elementTypeSyntax)
 
-applyTypeVarBinder :: (TypeCheck es) => Env -> TypeVarBinderS Renamed -> Eff es (Env, (LocalName, Kind, TypeVarBinderS Typed))
-applyTypeVarBinder env (MkTypeVarBinderS{loc, varName, kind = kindSyntax}) = do
-    (kind, kindSyntax) <- case kindSyntax of
-        Nothing -> pure (Type, Nothing)
-        Just kindSyntax -> do
-            (kind, syntax) <- evalKind kindSyntax
-            pure (kind, Just syntax)
-    pure (bindTypeVariable varName kind env, (varName, kind, MkTypeVarBinderS{loc, varName, kind = kindSyntax}))
+applyTypeVarBinder :: (TypeCheck es) => Env -> ForallBinderS Renamed -> Eff es (Env, (LocalName, Kind, ForallBinderS Typed))
+applyTypeVarBinder env = \case
+    UnspecifiedBinderS{loc, varName} -> undefined
+    TypeVarBinderS{loc, varName, kind = kindSyntax} -> do
+        (kind, kindSyntax) <- evalKind kindSyntax
+        pure (bindTypeVariable varName kind env, (varName, kind, TypeVarBinderS{loc, varName, kind = kindSyntax}))
+    KindVarBinderS{} -> undefined
 
 splitFunctionType :: (TypeCheck es) => Loc -> Int -> Type -> Eff es (Seq Type, Effect, Type)
 splitFunctionType loc parameterCount type_ = do

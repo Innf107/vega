@@ -194,7 +194,8 @@ prettyNameKind = emphasis . \case
 renderCompilationError :: CompilationError -> ErrorMessage
 renderCompilationError = \case
     RenameError error -> ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
-        NameNotFound{} -> undefined
+        NameNotFound{name, nameKind} -> align do
+            prettyNameKind nameKind <+> prettyGlobalText nameKind name <+> emphasis"not found"
         AmbiguousGlobal{} -> undefined
         InaccessibleGlobal{name, nameKind, candidates} -> align do
             emphasis "Inaccessible" <+> prettyNameKind nameKind <+> prettyGlobalText nameKind name <> "\n"

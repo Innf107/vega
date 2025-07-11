@@ -88,7 +88,7 @@ data DeclarationSyntax p
         }
     | DefineVariantType
         { name :: GlobalName
-        , typeParameters :: Seq (TypeVarBinderS p)
+        , typeParameters :: Seq (ForallBinderS p)
         , constructors :: Seq (Loc, GlobalName, Seq (TypeSyntax p))
         }
     deriving stock (Generic)
@@ -215,7 +215,7 @@ data TypeSyntax p
     = TypeConstructorS Loc (XName p)
     | TypeApplicationS Loc (TypeSyntax p) (Seq (TypeSyntax p))
     | TypeVarS Loc (XLocalName p)
-    | ForallS Loc (Seq (TypeVarBinderS p)) (TypeSyntax p)
+    | ForallS Loc (Seq (ForallBinderS p)) (TypeSyntax p)
     | PureFunctionS Loc (Seq (TypeSyntax p)) (TypeSyntax p)
     | FunctionS Loc (Seq (TypeSyntax p)) (EffectSyntax p) (TypeSyntax p)
     | TupleS Loc (Seq (TypeSyntax p))
@@ -226,17 +226,33 @@ typeApplicationS :: Loc -> TypeSyntax p -> Seq (TypeSyntax p) -> TypeSyntax p
 typeApplicationS _ constructor Empty = constructor
 typeApplicationS loc constructor arguments = TypeApplicationS loc constructor arguments
 
-forallS :: Loc -> Seq (TypeVarBinderS p) -> TypeSyntax p -> TypeSyntax p
+forallS :: Loc -> Seq (ForallBinderS p) -> TypeSyntax p -> TypeSyntax p
 forallS _loc Empty result = result
 forallS loc binders result = ForallS loc binders result
 
-data TypeVarBinderS p = MkTypeVarBinderS
-    { loc :: Loc
-    , varName :: XLocalName p
-    , kind :: Maybe (KindSyntax p)
-    }
+data ForallBinderS p
+    = UnspecifiedBinderS
+        { loc :: Loc
+        , varName :: XLocalName p
+        }
+    | TypeVarBinderS
+        { loc :: Loc
+        , varName :: XLocalName p
+        , kind :: KindSyntax p
+        }
+    | KindVarBinderS
+        { loc :: Loc
+        , varName :: XLocalName p
+        , kind :: KindSyntax p -- kind in kind yay
+        }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
+
+varNameInBinder :: ForallBinderS p -> XLocalName p
+varNameInBinder = \case
+    UnspecifiedBinderS{varName} -> varName
+    TypeVarBinderS{varName} -> varName
+    KindVarBinderS{varName} -> varName
 
 data KindSyntax p
     = TypeS Loc
@@ -373,15 +389,21 @@ typeOfGlobal global = \case
     DefineVariantType{name = variantName, typeParameters, constructors} ->
         case find (\(_, name, _) -> name == global) constructors of
             Nothing -> error $ "global (term) variable not found in variant definition '" <> show variantName <> ": " <> show global
-            Just (loc, _, parameterTypes) ->
-                forallS loc typeParameters (PureFunctionS loc parameterTypes (typeApplicationS loc (TypeConstructorS loc (Global variantName)) (fmap (\MkTypeVarBinderS{loc, varName} -> TypeVarS loc varName) typeParameters)))
+            Just (loc, _, parameterTypes) -> do
+                let boundVar = \case
+                        -- TODO: kind applications??? ughhh maybe Type : Type would be better
+                        _ -> undefined
+
+                forallS
+                    loc
+                    typeParameters
+                    (PureFunctionS loc parameterTypes (typeApplicationS loc (TypeConstructorS loc (Global variantName)) (fmap boundVar typeParameters)))
 
 kindOfGlobal :: (HasCallStack) => Declaration Renamed -> KindSyntax Renamed
 kindOfGlobal declaration = case declaration.syntax of
     DefineFunction{} -> error "trying to access 'kind' of a function"
     DefineVariantType{name = _, typeParameters, constructors = _} -> do
         let argumentKinds =
-                typeParameters & fmap \(MkTypeVarBinderS{loc, kind}) -> case kind of
-                    Nothing -> TypeS loc
-                    Just kind -> kind
+                typeParameters & fmap \case
+                    _ -> undefined
         ArrowKindS declaration.loc argumentKinds (TypeS declaration.loc)

@@ -21,7 +21,7 @@ import Vega.Syntax (
     Pattern,
     Statement,
     TypeSyntax,
-    TypeVarBinderS,
+    ForallBinderS,
  )
 
 import Effectful
@@ -118,8 +118,8 @@ deriving via Generically (Statement Parsed) instance Diff (Statement Parsed)
 deriving via Generically (Pattern Parsed) instance Diff (Pattern Parsed)
 deriving via Generically (MatchCase Parsed) instance Diff (MatchCase Parsed)
 deriving via Generically BinaryOperator instance Diff BinaryOperator
-deriving via Generically (TypeVarBinderS Parsed) instance Diff (TypeVarBinderS Parsed)
-deriving via Generically (TypeVarBinderS Renamed) instance Diff (TypeVarBinderS Renamed)
+deriving via Generically (ForallBinderS Parsed) instance Diff (ForallBinderS Parsed)
+deriving via Generically (ForallBinderS Renamed) instance Diff (ForallBinderS Renamed)
 deriving via Generically (TypeSyntax Parsed) instance Diff (TypeSyntax Parsed)
 deriving via Generically (TypeSyntax Renamed) instance Diff (TypeSyntax Renamed)
 deriving via Generically (KindSyntax Parsed) instance Diff (KindSyntax Parsed)

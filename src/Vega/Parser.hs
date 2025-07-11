@@ -275,19 +275,27 @@ forall_ = do
     remainingType <- type_
     pure (ForallS (startLoc <> getLoc remainingType) vars remainingType)
 
-typeVarBinder :: Parser (TypeVarBinderS Parsed)
+typeVarBinder :: Parser (ForallBinderS Parsed)
 typeVarBinder =
     choice
         [ do
             (varName, loc) <- identifierWithLoc
-            pure (MkTypeVarBinderS{loc, varName, kind = Nothing})
+            pure (UnspecifiedBinderS{loc, varName})
         , do
             startLoc <- single LParen
             varName <- identifier
             _ <- single Colon
             varKind <- kind
             endLoc <- single RParen
-            pure (MkTypeVarBinderS{loc = startLoc <> endLoc, varName, kind = Just varKind})
+            pure (TypeVarBinderS{loc = startLoc <> endLoc, varName, kind = varKind})
+        , do
+            startLoc <- single LParen
+            varName <- identifier
+            _ <- single Colon
+            _ <- single Colon
+            varKind <- kind
+            endLoc <- single RParen
+            pure (KindVarBinderS{loc = startLoc <> endLoc, varName, kind = varKind})
         ]
 
 kind :: Parser (KindSyntax Parsed)
