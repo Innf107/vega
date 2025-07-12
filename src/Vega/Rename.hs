@@ -278,10 +278,10 @@ renameExpr env = \case
         functionExpr <- renameExpr env functionExpr
         partialArguments <- traverse (traverse (renameExpr env)) partialArguments
         pure (PartialApplication{loc, functionExpr, partialArguments})
-    VisibleTypeApplication{loc, expr, typeArguments} -> do
-        expr <- renameExpr env expr
+    VisibleTypeApplication{loc, varName, typeArguments} -> do
+        varName <- findVarName env loc varName
         typeArguments <- traverse (renameTypeSyntax env) typeArguments
-        pure (VisibleTypeApplication{loc, expr, typeArguments})
+        pure (VisibleTypeApplication{loc, varName, typeArguments})
     Lambda loc boundTypeParameters parameters body -> do
         (boundTypeParameters, typeParamTransformers) <-
             Seq.unzip <$> for boundTypeParameters \(loc, name) -> do

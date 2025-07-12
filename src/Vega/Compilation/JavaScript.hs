@@ -96,9 +96,10 @@ compileExpr = \case
         , partialArguments
         } -> undefined
     VisibleTypeApplication
-        { expr
+        { loc
+        , varName
         , typeArguments = _
-        } -> compileExpr expr
+        } -> compileExpr (Var loc varName)
     Lambda _loc _typeParameters parameters body -> do
         let compileParameter = \case
                 VarPattern _loc name -> compileLocalName name

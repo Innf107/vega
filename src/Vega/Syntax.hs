@@ -108,7 +108,7 @@ data Expr p
         }
     | VisibleTypeApplication
         { loc :: Loc
-        , expr :: Expr p
+        , varName :: XName p
         , typeArguments :: Seq (TypeSyntax p)
         }
     | Lambda
@@ -249,7 +249,7 @@ forallS loc binders result = ForallS loc binders result
 
 forall_ :: Seq (LocalName, Kind, Monomorphization) -> Type -> Type
 forall_ Empty result = result
-forall_ binders result = Forall binders result
+forall_ binders result = Forall_ binders result
 
 data Monomorphization
     = Monomorphized
@@ -281,7 +281,7 @@ data Type
     = TypeConstructor Name
     | TypeApplication Type (Seq Type)
     | TypeVar LocalName
-    | Forall (Seq (LocalName, Kind, Monomorphization)) Type
+    | Forall_ (Seq (LocalName, Kind, Monomorphization)) Type
     | Function (Seq Type) Effect Type
     | Tuple (Seq Type)
     | MetaVar MetaVar
@@ -298,6 +298,34 @@ data Type
     | BoxedRep
     | Kind
     deriving (Generic)
+
+{-# COMPLETE
+    TypeConstructor
+    , TypeApplication
+    , TypeVar
+    , Forall
+    , Function
+    , Tuple
+    , MetaVar
+    , Skolem
+    , Pure
+    , Rep
+    , Type
+    , Effect
+    , SumRep
+    , ProductRep
+    , UnitRep
+    , EmptyRep
+    , BoxedRep
+    , Kind
+    #-}
+
+-- We override the Forall constructor with a custom pattern synonym to enforce the invariant
+-- that `Forall [] body` is equivalent to just `body`
+pattern Forall :: Seq (LocalName, Kind, Monomorphization) -> Type -> Type
+pattern Forall bindings body <- Forall_ bindings body
+    where
+        Forall bindings body = forall_ bindings body
 
 type Kind = Type
 
@@ -369,7 +397,7 @@ prettyTypeVarBinder (name, kind, monomorphization) = do
     let prefix = case monomorphization of
             Parametric -> mempty
             Monomorphized -> keyword "*"
-    prefix <> lparen "(" <> prettyLocal VarKind name <+> keyword ":" <+> pretty kind <> ")"
+    prefix <> lparen "(" <> prettyLocal VarKind name <+> keyword ":" <+> pretty kind <> rparen ")"
 
 instance Pretty MetaVar where
     pretty (MkMetaVar{identity, name}) = meta identity ("?" <> name)

@@ -23,6 +23,7 @@ import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>))
 import Vega.Util qualified as Util
+import qualified Data.HashMap.Strict as HashMap
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -131,7 +132,7 @@ checkDeclarationSyntax loc = \case
                 checkPattern env type_ pattern_
 
         (parameters, transformers) <- Seq.unzip <$> zipWithSeqM checkParameter parameters parameterTypes
-        let env = compose transformers emptyEnv
+        env <- pure (compose transformers env)
 
         (body, bodyEffect) <- check env returnType body
         subsumesEffect bodyEffect effect
@@ -184,7 +185,8 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
         Var{} -> deferToInference
         DataConstructor{} -> undefined
         Application{} -> deferToInference
-        VisibleTypeApplication{} -> undefined
+        -- TODO: not entirely sure if this is correct or if we should try to stay in check mode
+        VisibleTypeApplication{} -> deferToInference
         Lambda loc typeParameters parameters body -> do
             (envTrans, typeWithoutBoundParameters) <- bindTypeParameters typeParameters expectedType
             env <- pure (envTrans env)
@@ -234,7 +236,8 @@ bindTypeParameters parameters type_ = do
 
 bindTypeParameter :: (TypeCheck es) => Loc -> LocalName -> Type -> Eff es (Env -> Env, Type)
 bindTypeParameter loc parameter = \case
-    type_@(Forall ((name, kind, monomorphization) :<| _) _) -> do
+    type_@(Forall ((_name, kind, monomorphization) :<| _) _) -> do
+        trace TypeCheck $ "binding type parameter" <+> prettyLocal VarKind parameter
         skolem <- Skolem <$> freshSkolem parameter monomorphization
         -- It would be nice to avoid calling instantiateWith over and over again,
         -- but we can't just defer all the variables until the end since binders
@@ -247,7 +250,15 @@ bindTypeParameter loc parameter = \case
         -- never bind the parameter so we will panic because the type variable is unbound,
         -- but we also can't bind the parameter to anything since we don't know its type or
         -- monomorphization
-        fatalTypeError (TryingToBindTypeParameterOfMonotype { loc, parameter, type_ })
+        fatalTypeError (TryingToBindTypeParameterOfMonotype{loc, parameter, type_})
+
+varType :: HasCallStack => TypeCheck es => Env -> Name -> Eff es Type
+varType env name = case name of
+            Global globalName -> getGlobalType globalName
+            Local localName -> do
+                case lookup localName env.localTypes of
+                    Just type_ -> pure type_
+                    Nothing -> error ("variable not found in renamer: " <> show name)
 
 infer :: (TypeCheck es) => Env -> Expr Renamed -> Eff es (Type, Expr Typed, Effect)
 infer env expr = do
@@ -256,16 +267,9 @@ infer env expr = do
     pure (type_, expr, effect)
   where
     go = case expr of
-        Var loc name -> case name of
-            Global globalName -> do
-                type_ <- instantiate =<< getGlobalType globalName
-                pure (type_, Var loc name, Pure)
-            Local localName -> do
-                case lookup localName env.localTypes of
-                    Just type_ -> do
-                        type_ <- instantiate type_
-                        pure (type_, Var loc name, Pure)
-                    Nothing -> error ("variable not found in renamer: " <> show name)
+        Var loc name -> do
+            type_ <- instantiate =<< varType env name
+            pure (type_, Var loc name, Pure)
         Application{loc, functionExpr, arguments} -> do
             (functionType, functionExpr, functionExprEffect) <- infer env functionExpr
             (argumentTypes, functionEffect, returnType) <- splitFunctionType loc (length arguments) functionType
@@ -282,8 +286,26 @@ infer env expr = do
             (arguments, argumentEffects) <- Seq.unzip <$> zipWithSeqM checkArguments arguments argumentTypes
             finalEffect <- pure functionExprEffect `unionM` unionAll argumentEffects `unionM` pure functionEffect
             pure (returnType, Application{loc, functionExpr, arguments}, finalEffect)
-        VisibleTypeApplication{} ->
-            undefined
+        VisibleTypeApplication{loc, varName, typeArguments} -> do
+            type_ <- varType env varName  
+            case normalizeForalls type_ of
+                Forall binders _body
+                    | length binders >= length typeArguments -> do
+                        (arguments, argumentSyntax) <-
+                            Seq.unzip <$> for (Seq.zip typeArguments binders) \(argumentSyntax, (_varName, expectedKind, monomorphization)) -> do
+                                (argumentType, argumentSyntax) <- checkType env expectedKind argumentSyntax
+                                case monomorphization of
+                                    Parametric -> pure ()
+                                    Monomorphized -> monomorphized loc env argumentType
+                                pure (argumentType, argumentSyntax)
+                        resultingType <- instantiate =<< instantiateWith arguments type_
+                        pure (resultingType, VisibleTypeApplication{loc, varName, typeArguments = argumentSyntax}, Pure)
+                    | otherwise -> do
+                        -- TODO: try to make this non-fatal. That's going to be quite difficult though, since
+                        -- returning anything else is going to cause a ton of false-positives
+                        fatalTypeError (TypeApplicationWithTooFewParameters{loc, typeArgumentCount = length typeArguments, instantiatedType = type_, parameterCount = length binders})
+                _ -> do
+                    fatalTypeError (TypeApplicationToMonoType{loc, instantiatedType = type_, typeArgumentCount = length typeArguments})
         Lambda loc typeParameters parameters body -> do
             case typeParameters of
                 [] -> pure ()

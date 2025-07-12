@@ -112,6 +112,17 @@ data TypeError
         , parameter :: LocalName
         , type_ :: Type
         }
+    | TypeApplicationWithTooFewParameters
+        { loc :: Loc
+        , typeArgumentCount :: Int
+        , instantiatedType :: Type
+        , parameterCount :: Int
+        }
+    | TypeApplicationToMonoType
+        { loc :: Loc
+        , instantiatedType :: Type
+        , typeArgumentCount :: Int
+        }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
 
@@ -304,7 +315,7 @@ renderCompilationError = \case
             } ->
                 align $
                     emphasis "Type constructor applied to an incorrect number of arguments.\n"
-                        <> emphasis "  expected     " <+> number expectedNumber <+> "arguments\n"
+                        <> emphasis "  expected     " <+> pluralNumber expectedNumber "argument" <> "\n"
                         <> emphasis "  but received " <+> number actualNumber
                         <> "\n"
                         <> "    In an application of type" <+> pretty type_
@@ -334,6 +345,13 @@ renderCompilationError = \case
                 emphasis "Trying to bind type parameter" <+> prettyLocal VarKind parameter <+> emphasis "of a type that doesn't have any remaining type parameters."
                     <> "\n  Type" <+> pretty type_
                     <> "\n  does not include a top-level" <+> keyword "forall"
+        TypeApplicationWithTooFewParameters{loc=_, typeArgumentCount, parameterCount, instantiatedType} ->
+            align $ emphasis "Trying to apply" <+> pluralNumber typeArgumentCount "type argument" <+> emphasis "to a type that only expects" <+> number parameterCount
+            <> "\n  In a type application of type" <+> pretty instantiatedType
+        TypeApplicationToMonoType{loc=_, typeArgumentCount, instantiatedType} ->
+            align $ emphasis "Trying to apply" <+> pluralNumber typeArgumentCount "type argument" <+> emphasis "to a monomorphic type"
+            <> "\n  In a type application of type" <+> pretty instantiatedType 
+
     DriverError error -> case error of
         EntryPointNotFound entryPoint ->
             PlainError $
@@ -347,3 +365,7 @@ renderCompilationError = \case
                             <> note " file"
     Panic exception -> do
         PlainError $ MkPlainErrorMessage $ align $ errorText "PANIC: " <> emphasis (show exception)
+
+pluralNumber :: Int -> Text -> Doc Ann
+pluralNumber 1 text = number @Int 1 <+> emphasis text 
+pluralNumber n text = number n <+> emphasis (text <> "s")

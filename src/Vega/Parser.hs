@@ -394,7 +394,14 @@ expr = exprLogical
         choice
             [ do
                 (name, loc) <- identifierWithLoc
-                pure (Var loc name)
+                choice
+                    [ do
+                        _ <- single LBracket
+                        typeArguments <- type_ `sepBy` (single Comma)
+                        endLoc <- single RBracket
+                        pure (VisibleTypeApplication (loc <> endLoc) name typeArguments)
+                    , pure (Var loc name)
+                    ]
             , do
                 (name, loc) <- constructorWithLoc
                 pure (DataConstructor loc name)
@@ -498,24 +505,16 @@ let_ = do
         ]
 
 functionApplication :: Parser (Expr Parsed -> Expr Parsed)
-functionApplication =
-    choice
-        [ do
-            (partialArgs, endLoc) <-
-                argumentsWithLoc $
-                    choice
-                        [ Just <$> expr
-                        , single Underscore *> pure Nothing
-                        ]
-            case sequence partialArgs of
-                Nothing -> pure (\inner -> PartialApplication (getLoc inner <> endLoc) inner partialArgs)
-                Just args -> pure (\inner -> Application (getLoc inner <> endLoc) inner args)
-        , do
-            _ <- single LBracket
-            typeArguments <- type_ `sepBy` (single Comma)
-            endLoc <- single RBracket
-            pure (\inner -> VisibleTypeApplication (getLoc inner <> endLoc) inner typeArguments)
-        ]
+functionApplication = do
+    (partialArgs, endLoc) <-
+        argumentsWithLoc $
+            choice
+                [ Just <$> expr
+                , single Underscore *> pure Nothing
+                ]
+    case sequence partialArgs of
+        Nothing -> pure (\inner -> PartialApplication (getLoc inner <> endLoc) inner partialArgs)
+        Just args -> pure (\inner -> Application (getLoc inner <> endLoc) inner args)
 
 import_ :: Parser Import
 import_ = do

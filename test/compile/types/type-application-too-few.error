@@ -1,0 +1,6 @@
+$FILE:6:15: ERROR:
+Trying to apply 2 type arguments to a type that only expects 1
+  In a type application of type forall (a : Type(Boxed)). (a) -> a
+  ┃ 
+6 ┃ g[b,c](x,y) = f[b,c](x);
+  ┃               ▔▔▔▔▔▔

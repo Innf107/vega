@@ -1,0 +1,6 @@
+$FILE:6:11: ERROR:
+Trying to apply 1 type argument to a monomorphic type
+  In a type application of type () -> ()
+  ┃ 
+6 ┃ g[b](x) = f[b]();
+  ┃           ▔▔▔▔

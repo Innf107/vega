@@ -1,0 +1,10 @@
+
+f : forall (a : Type(Boxed)). a -> a;
+f(x) = x;
+
+g : forall (b : Type(Boxed)). b -> b;
+g[b](x) = f[b](x);
+
+
+main : () -> ();
+main() = main();
