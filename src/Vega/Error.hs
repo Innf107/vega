@@ -100,6 +100,7 @@ data TypeError
     | ParametricVariableInMono
         { loc :: Loc
         , varName :: LocalName
+        , fullType :: Maybe Type
         }
     | AmbiguousMono
         { loc :: Loc
@@ -306,14 +307,22 @@ renderCompilationError = \case
         ParametricVariableInMono
             { loc = _
             , varName
+            , fullType
             } ->
                 align $
                     emphasis "Parametric type variable" <+> prettyLocal VarKind varName <+> emphasis "cannot be monomorphized\n"
                         <> "  Only type variables bound in monomorphizable bindings can appear in kinds of bound type variables\n"
                         <> "  or be used to instantiate monomorphizable bindings"
-        AmbiguousMono {loc = _, type_} ->
-            align $ emphasis "Unable to monomorphize ambiguous type" <+> pretty type_ <> "\n"
-                <> note "    Try adding a type signature"
+                        <> case fullType of
+                            Nothing -> mempty
+                            Just type_ ->
+                                "\n    Trying to unify type" <+> pretty type_
+                                    <> "\n    with a monomorphizable type parameter"
+        AmbiguousMono{loc = _, type_} ->
+            align $
+                emphasis "Unable to monomorphize ambiguous type" <+> pretty type_
+                    <> "\n"
+                    <> note "    Try adding a type signature"
     DriverError error -> case error of
         EntryPointNotFound entryPoint ->
             PlainError $

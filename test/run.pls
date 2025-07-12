@@ -64,7 +64,7 @@ List.for(compileTests, \testFile -> {
 })
 
 if (failures! == 0) then {
-    print("\n\e[1m[32mAll tests passed.\e[0m")
+    print("\n\e[1m\e[32mAll tests passed.\e[0m")
 } else {
     print("\n\e[1m\e[31m${failures!}/${List.length(compileTests)} TESTS FAILED\e[0m")
 }

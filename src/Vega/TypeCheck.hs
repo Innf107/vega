@@ -21,7 +21,7 @@ import Vega.Debug (showHeadConstructor)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputSeq)
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
-import Vega.Pretty (errorText, keyword, pretty, (<+>), emphasis)
+import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>))
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -494,8 +494,8 @@ unify loc type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pretty
     type1 <- followMetas type1
     type2 <- followMetas type2
     case (type1, type2) of
-        (MetaVar meta1, _) -> bindMeta meta1 type2
-        (_, MetaVar meta2) -> bindMeta meta2 type1
+        (MetaVar meta1, _) -> bindMeta loc meta1 type2
+        (_, MetaVar meta2) -> bindMeta loc meta2 type1
         _ ->
             case type1 of
                 TypeConstructor name1 -> case type2 of
@@ -565,8 +565,8 @@ unify loc type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pretty
                     Kind -> pure ()
                     _ -> unificationFailure
 
-bindMeta :: (TypeCheck es) => MetaVar -> Type -> Eff es ()
-bindMeta meta boundType =
+bindMeta :: (TypeCheck es) => Loc -> MetaVar -> Type -> Eff es ()
+bindMeta loc meta boundType =
     followMetas (MetaVar meta) >>= \case
         MetaVar meta -> do
             followMetas boundType >>= \case
@@ -575,13 +575,13 @@ bindMeta meta boundType =
                     -- so we need to handle them separately
                     | meta == meta2 -> pure ()
                 boundType ->
-                    occursAndAdjust meta boundType >>= \case
+                    occursAndAdjust loc meta boundType >>= \case
                         True -> undefined
                         False -> writeIORef meta.underlying (Just boundType)
         _ -> error $ "Trying to bind unbound meta variable"
 
-occursAndAdjust :: (TypeCheck es) => MetaVar -> Type -> Eff es Bool
-occursAndAdjust meta type_ = do
+occursAndAdjust :: (TypeCheck es) => Loc -> MetaVar -> Type -> Eff es Bool
+occursAndAdjust loc meta type_ = do
     -- TODO: adjust levels
     runErrorNoCallStack (go type_) >>= \case
         Left () -> pure True
@@ -605,8 +605,22 @@ occursAndAdjust meta type_ = do
                 | meta == foundMeta ->
                     throwError_ ()
                 -- Because we ran followMetas on type_, this is an unbound meta var that we don't need to look into further
-                | otherwise -> pure ()
-            Skolem{} -> pure ()
+                | otherwise ->
+                    case (meta.monomorphization, foundMeta.monomorphization) of
+                        (Monomorphized, Parametric) -> do
+                            -- This is a parametric meta variable but it's really supposed to be monomorphized, so
+                            -- we "strengthen" it by binding it to a monomorphized unification variable
+
+                            -- TODO: we only ever really call this when binding our monomorphized meta variable
+                            -- to the result so we could really just swap the order of the meta variables and
+                            -- avoid the extra meta variable and unification
+                            newMeta <- freshMeta foundMeta.name Monomorphized
+                            bindMeta loc foundMeta (MetaVar newMeta)
+                        _ -> pure ()
+            Skolem skolem -> case (meta.monomorphization, skolem.monomorphization) of
+                (Monomorphized, Parametric) -> do
+                    typeError ParametricVariableInMono{loc, varName = skolem.originalName, fullType = Just type_}
+                _ -> pure ()
             Pure -> pure ()
             Rep -> pure ()
             Type rep -> go rep
@@ -671,12 +685,12 @@ monomorphized loc env type_ = do
         TypeVar varName -> do
             case typeVariableMonomorphization varName env of
                 Monomorphized -> pure ()
-                Parametric -> typeError (ParametricVariableInMono{loc, varName})
+                Parametric -> typeError (ParametricVariableInMono{loc, varName, fullType = Nothing})
         Skolem skolem -> do
             case skolem.monomorphization of
                 Monomorphized -> pure ()
                 -- TODO: should we use a separate error message for skolems?
-                Parametric -> typeError (ParametricVariableInMono{loc, varName = skolem.originalName})
+                Parametric -> typeError (ParametricVariableInMono{loc, varName = skolem.originalName, fullType = Nothing})
         MetaVar{} -> do
             undefined
         -- recursive boilerplate
