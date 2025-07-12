@@ -23,6 +23,7 @@ import Data.Traversable (for)
 import Effectful.Concurrent (Concurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
 
+import Effectful.Exception (try)
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
 import Vega.Compilation.JavaScript qualified as JavaScript
@@ -172,18 +173,23 @@ performAllRemainingWork = do
                 compileToJS name
 
 rebuild :: (Driver es) => Eff es CompilationResult
-rebuild = do
-    trackSourceChanges
-    performAllRemainingWork
-
-    GraphPersistence.getCurrentErrors >>= \case
-        [] -> do
-            runErrorNoCallStack compileBackend >>= \case
-                Left error -> do
-                    pure (CompilationFailed{errors = [DriverError error]})
-                Right () -> pure CompilationSuccessful
-        errors -> pure (CompilationFailed{errors = errors})
+rebuild = try @SomeException go >>= \case
+    Right result -> pure result
+    Left exception -> do
+        errors <- GraphPersistence.getCurrentErrors
+        pure (CompilationFailed{errors = errors <> [Panic exception]})
   where
+    go = do
+        trackSourceChanges
+
+        performAllRemainingWork
+        GraphPersistence.getCurrentErrors >>= \case
+            [] -> do
+                runErrorNoCallStack compileBackend >>= \case
+                    Left error -> do
+                        pure (CompilationFailed{errors = [DriverError error]})
+                    Right () -> pure CompilationSuccessful
+            errors -> pure (CompilationFailed{errors = errors})
 
 compileBackend :: (Error Error.DriverError :> es, Driver es) => Eff es ()
 compileBackend = do

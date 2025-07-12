@@ -27,6 +27,7 @@ data CompilationError
     = RenameError RenameError
     | TypeError TypeError
     | DriverError DriverError
+    | Panic SomeException
     deriving stock (Generic)
 
 data RenameError
@@ -104,6 +105,11 @@ data TypeError
         }
     | AmbiguousMono
         { loc :: Loc
+        , type_ :: Type
+        }
+    | TryingToBindTypeParameterOfMonotype
+        { loc :: Loc
+        , parameter :: LocalName
         , type_ :: Type
         }
     deriving stock (Generic)
@@ -323,6 +329,11 @@ renderCompilationError = \case
                 emphasis "Unable to monomorphize ambiguous type" <+> pretty type_
                     <> "\n"
                     <> note "    Try adding a type signature"
+        TryingToBindTypeParameterOfMonotype{loc = _, type_, parameter} ->
+            align $
+                emphasis "Trying to bind type parameter" <+> prettyLocal VarKind parameter <+> emphasis "of a type that doesn't have any remaining type parameters."
+                    <> "\n  Type" <+> pretty type_
+                    <> "\n  does not include a top-level" <+> keyword "forall"
     DriverError error -> case error of
         EntryPointNotFound entryPoint ->
             PlainError $
@@ -334,3 +345,5 @@ renderCompilationError = \case
                             <> note "  Note: To change the entry point, set the" <+> localIdentText "entry-point" <+> note "field in your "
                             <> keyword "vega.yaml"
                             <> note " file"
+    Panic exception -> do
+        PlainError $ MkPlainErrorMessage $ align $ errorText "PANIC: " <> emphasis (show exception)

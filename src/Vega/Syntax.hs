@@ -82,7 +82,7 @@ data DeclarationSyntax p
     = DefineFunction
         { name :: GlobalName
         , typeSignature :: TypeSyntax p
-        , declaredTypeParameters :: Maybe (Seq (XLocalName p))
+        , declaredTypeParameters :: Seq (Loc, XLocalName p)
         , parameters :: Seq (Pattern p)
         , body :: Expr p
         }
@@ -113,7 +113,7 @@ data Expr p
         }
     | Lambda
         { loc :: Loc
-        , boundTypeParameters :: Seq (XLocalName p)
+        , boundTypeParameters :: Seq (Loc, XLocalName p)
         , parameters :: Seq (Pattern p)
         , body :: Expr p
         }
@@ -246,6 +246,10 @@ typeApplicationS loc constructor arguments = TypeApplicationS loc constructor ar
 forallS :: Loc -> Seq (ForallBinderS p) -> TypeSyntax p -> TypeSyntax p
 forallS _loc Empty result = result
 forallS loc binders result = ForallS loc binders result
+
+forall_ :: Seq (LocalName, Kind, Monomorphization) -> Type -> Type
+forall_ Empty result = result
+forall_ binders result = Forall binders result
 
 data Monomorphization
     = Monomorphized

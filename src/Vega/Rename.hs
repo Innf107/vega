@@ -167,11 +167,11 @@ renameDeclarationSyntax = \case
         let env = emptyEnv
         typeSignature <- renameTypeSyntax env typeSignature
 
-        (declaredTypeParameters, env) <- case declaredTypeParameters of
-            Nothing -> pure (Nothing, env)
-            Just declaredTypeParameters -> do
-                (declaredTypeParameters, envTransformers) <- Seq.unzip <$> traverse bindTypeVariable declaredTypeParameters
-                pure (Just declaredTypeParameters, Util.compose envTransformers env)
+        (declaredTypeParameters, envTransformers) <-
+            Seq.unzip <$> for declaredTypeParameters \(loc, name) -> do
+                (name, envTrans) <- bindTypeVariable name
+                pure ((loc, name), envTrans)
+        env <- pure (Util.compose envTransformers env)
 
         (parameters, transformers) <- Seq.unzip <$> traverse (renamePattern env) parameters
         body <- renameExpr (Util.compose transformers env) body
@@ -283,7 +283,10 @@ renameExpr env = \case
         typeArguments <- traverse (renameTypeSyntax env) typeArguments
         pure (VisibleTypeApplication{loc, expr, typeArguments})
     Lambda loc boundTypeParameters parameters body -> do
-        (boundTypeParameters, typeParamTransformers) <- Seq.unzip <$> traverse bindTypeVariable boundTypeParameters
+        (boundTypeParameters, typeParamTransformers) <-
+            Seq.unzip <$> for boundTypeParameters \(loc, name) -> do
+                (name, envTrans) <- bindTypeVariable name
+                pure ((loc, name), envTrans)
         -- It's important that we apply the type parameter transformers *before* renaming the
         -- regular parameters since they might use the type variables bound here
         env <- pure (Util.compose typeParamTransformers env)

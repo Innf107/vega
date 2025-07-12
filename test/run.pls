@@ -1,12 +1,11 @@
 #!/usr/bin/env polaris
 module List = import("@std/list.pls")
 
-!stack "build" "--fast"
-let vega = !readlink "-f" "${!stack "path" "--dist-dir"}/build/vega/vega"
-
 let testdir = !readlink "-f" (scriptLocal("."))
-
 chdir(testdir)
+
+!stack "build" "--fast"
+let vega = !readlink "-f" "../${!stack "path" "--dist-dir"}/build/vega/vega"
 
 let compileTests = lines(!find "compile" "-name" "*.vega")
 

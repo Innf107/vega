@@ -5,7 +5,7 @@ module Vega.Parser (Parser, AdditionalParseError (..), parse) where
 
 import Relude hiding (many)
 
-import Vega.Syntax
+import Vega.Syntax hiding (forall_)
 
 import Data.Sequence (Seq (..))
 import GHC.IsList (Item)
@@ -150,9 +150,9 @@ defineFunction = do
                 ]
             )
 
-    declaredTypeParameters <- optional do
+    declaredTypeParameters <- option Empty do
         _ <- single LBracket
-        parameters <- identifier `sepBy` (single Comma)
+        parameters <- (swap <$> identifierWithLoc) `sepBy` (single Comma)
         _ <- single RBracket
         pure parameters
 
@@ -284,7 +284,7 @@ effectArrow = do
 forall_ :: Parser (TypeSyntax Parsed)
 forall_ = do
     startLoc <- single Lexer.Forall
-    vars <- many1 (typeVarBinder)
+    vars <- many1 typeVarBinder
     _ <- single Lexer.Period
     remainingType <- type_
     pure (ForallS (startLoc <> getLoc remainingType) vars remainingType)
@@ -402,7 +402,7 @@ expr = exprLogical
                 startLoc <- single Lexer.Lambda
                 typeParameters <- option Empty do
                     single LBracket
-                    parameters <- identifier `sepBy` single Comma
+                    parameters <- (swap <$> identifierWithLoc) `sepBy` single Comma
                     single RBracket
                     pure parameters
                 parameters <- many pattern_

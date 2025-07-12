@@ -1,0 +1,7 @@
+$FILE:3:3: ERROR:
+Trying to bind type parameter a of a type that doesn't have any remaining type parameters.
+  Type () -> ()
+  does not include a top-level forall
+  ┃ 
+3 ┃ f[a]() = f();
+  ┃   ▔

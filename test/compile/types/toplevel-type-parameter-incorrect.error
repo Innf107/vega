@@ -1,1 +1,8 @@
-
+$FILE:4:9: ERROR:
+Type mismatch
+  Unable to unify
+    expected type a
+      actual type b
+  ┃ 
+4 ┃ f[a, b](x : b) = x;
+  ┃         ▔▔▔▔▔

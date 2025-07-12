@@ -108,14 +108,13 @@ checkDeclarationSyntax loc = \case
         let env = emptyEnv
         (functionType, typeSignature) <- checkType env (Type BoxedRep) typeSignature
 
-        (parameterTypes, effect, returnType, env, declaredTypeParameters) <- case declaredTypeParameters of
-            Nothing -> do
-                -- TODO: i don't think this works correctly with foralls?
-                functionType <- skolemize functionType
-                (parameterTypes, effect, returnType) <- splitFunctionType loc (length parameters) functionType
-                pure (parameterTypes, effect, returnType, env, Nothing)
-            Just typeParameters -> do
-                undefined
+        (envTransformer, remainingType) <- bindTypeParameters declaredTypeParameters functionType
+        env <- pure (envTransformer env)
+
+        -- We bound the declared type parameters above and the rest are not accessible in the body
+        -- so we can just skolemize them away here
+        remainingType <- skolemize remainingType
+        (parameterTypes, effect, returnType) <- splitFunctionType loc (length parameters) remainingType
 
         when (length parameters /= length parameterTypes) $ do
             typeError
@@ -228,13 +227,13 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
         BinaryOperator{} -> undefined
         Match{} -> undefined
 
-bindTypeParameters :: (TypeCheck es) => Seq LocalName -> Type -> Eff es (Env -> Env, Type)
+bindTypeParameters :: (TypeCheck es) => Seq (Loc, LocalName) -> Type -> Eff es (Env -> Env, Type)
 bindTypeParameters parameters type_ = do
-    (remainingType, transformers) <- mapAccumLM (\type_ parameter -> swap <$> bindTypeParameter parameter type_) type_ parameters
+    (remainingType, transformers) <- mapAccumLM (\type_ (loc, parameter) -> swap <$> bindTypeParameter loc parameter type_) type_ parameters
     pure (Util.compose transformers, remainingType)
 
-bindTypeParameter :: (TypeCheck es) => LocalName -> Type -> Eff es (Env -> Env, Type)
-bindTypeParameter parameter = \case
+bindTypeParameter :: (TypeCheck es) => Loc -> LocalName -> Type -> Eff es (Env -> Env, Type)
+bindTypeParameter loc parameter = \case
     type_@(Forall ((name, kind, monomorphization) :<| _) _) -> do
         skolem <- Skolem <$> freshSkolem parameter monomorphization
         -- It would be nice to avoid calling instantiateWith over and over again,
@@ -242,7 +241,13 @@ bindTypeParameter parameter = \case
         -- might depend on previous binders
         remainingType <- instantiateWith [skolem] type_
         pure (bindTypeVariable parameter skolem kind monomorphization, remainingType)
-    type_ -> undefined
+    type_ -> do
+        -- TODO: try to make this non-fatal.
+        -- This is a lot harder than it looks. If we just return (id, type_), we
+        -- never bind the parameter so we will panic because the type variable is unbound,
+        -- but we also can't bind the parameter to anything since we don't know its type or
+        -- monomorphization
+        fatalTypeError (TryingToBindTypeParameterOfMonotype { loc, parameter, type_ })
 
 infer :: (TypeCheck es) => Env -> Expr Renamed -> Eff es (Type, Expr Typed, Effect)
 infer env expr = do
@@ -476,12 +481,23 @@ substituteTypeVariables substitution type_ =
         type_@Kind -> pure type_
 
 instantiateWith :: (TypeCheck es) => (Seq Type) -> Type -> Eff es Type
-instantiateWith arguments = \case
+instantiateWith arguments type_ = case normalizeForalls type_ of
     Forall params body
-        | length params == length arguments -> do
-            substituteTypeVariables (viaList (Seq.zipWith (\(param, _kind, _) argument -> (param, argument)) params arguments)) body
+        | length arguments <= length params -> do
+            forall_ (Seq.drop (length arguments) params) <$> substituteTypeVariables (viaList (Seq.zipWith (\(param, _kind, _) argument -> (param, argument)) params arguments)) body
         | otherwise -> undefined
     _ -> undefined
+
+{- | Collect repeated foralls into a single one.
+This will turn e.g. `forall a b. forall c d. Int` into `forall a b c d. Int`
+
+This is a very cheap operation (O(#foralls))
+-}
+normalizeForalls :: Type -> Type
+normalizeForalls = go []
+  where
+    go totalBinders (Forall binders body) = go (totalBinders <> binders) body
+    go totalBinders type_ = Forall totalBinders type_
 
 instantiate :: (TypeCheck es) => Type -> Eff es Type
 instantiate type_ = case collectAllPrenexBinders type_ of
