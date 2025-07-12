@@ -400,10 +400,15 @@ expr = exprLogical
                 pure (DataConstructor loc name)
             , do
                 startLoc <- single Lexer.Lambda
+                typeParameters <- option Empty do
+                    single LBracket
+                    parameters <- identifier `sepBy` single Comma
+                    single RBracket
+                    pure parameters
                 parameters <- many pattern_
                 _ <- single Arrow
                 body <- expr
-                pure (Syntax.Lambda (startLoc <> getLoc body) parameters body)
+                pure (Syntax.Lambda (startLoc <> getLoc body) typeParameters parameters body)
             , do
                 (literal, loc) <- stringLit
                 pure (Syntax.StringLiteral loc literal)

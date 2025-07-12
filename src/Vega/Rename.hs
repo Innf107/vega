@@ -282,10 +282,15 @@ renameExpr env = \case
         expr <- renameExpr env expr
         typeArguments <- traverse (renameTypeSyntax env) typeArguments
         pure (VisibleTypeApplication{loc, expr, typeArguments})
-    Lambda loc parameters body -> do
+    Lambda loc boundTypeParameters parameters body -> do
+        (boundTypeParameters, typeParamTransformers) <- Seq.unzip <$> traverse bindTypeVariable boundTypeParameters
+        -- It's important that we apply the type parameter transformers *before* renaming the
+        -- regular parameters since they might use the type variables bound here
+        env <- pure (Util.compose typeParamTransformers env)
+
         (parameters, transformers) <- Seq.unzip <$> traverse (renamePattern env) parameters
         body <- renameExpr (Util.compose transformers env) body
-        pure (Lambda loc parameters body)
+        pure (Lambda loc boundTypeParameters parameters body)
     StringLiteral loc literal -> pure (StringLiteral loc literal)
     IntLiteral loc literal -> pure (IntLiteral loc literal)
     DoubleLiteral loc literal -> pure (DoubleLiteral loc literal)

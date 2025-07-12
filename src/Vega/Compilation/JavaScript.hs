@@ -51,14 +51,19 @@ compileDeclarationSyntax = \case
         , body
         } -> do
             tell ("const " <> compileGlobalName name <> " = " <> "(")
+
+            let compileParameter = \case
+                    VarPattern _ localName -> compileLocalName localName
+                    TypePattern _ inner _ -> compileParameter inner
+                    _ -> undefined
             -- TODO: we need to support actual decision tree compilation for non-variable patterns
-            for_ parameters \case
-                VarPattern _ localName -> tell (compileLocalName localName)
-                _ -> undefined
+            for_ parameters \parameter -> do
+                tell (compileParameter parameter)
+                tell ", "
             tell ") => "
             compileExpr body
     DefineVariantType
-        { name=_
+        { name = _
         , typeParameters = _
         , constructors
         } -> do
@@ -94,7 +99,18 @@ compileExpr = \case
         { expr
         , typeArguments = _
         } -> compileExpr expr
-    Lambda _loc parameters body -> undefined
+    Lambda _loc _typeParameters parameters body -> do
+        let compileParameter = \case
+                VarPattern _loc name -> compileLocalName name
+                TypePattern _ inner _ -> compileParameter inner
+                _ -> undefined
+        tell "(("
+        for_ parameters \parameter -> do
+            tell (compileParameter parameter)
+            tell ","
+        tell ") => "
+        compileExpr body
+        tell ")"
     -- TODO: this uses haskell's escaping rules which might not line up 100% with JS
     StringLiteral _loc literal -> tell (show literal)
     IntLiteral _loc literal -> tell (show literal)

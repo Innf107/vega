@@ -22,10 +22,11 @@ import Vega.Effect.Output.Static.Local (Output, output, runOutputSeq)
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>))
+import Vega.Util qualified as Util
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
-    , localTypeVariables :: HashMap LocalName (Kind, Monomorphization)
+    , localTypeVariables :: HashMap LocalName (Type, Kind, Monomorphization)
     , localTypeConstructors :: HashMap LocalName Kind
     }
 
@@ -40,20 +41,19 @@ emptyEnv =
 bindVarType :: LocalName -> Type -> Env -> Env
 bindVarType name type_ env@MkEnv{localTypes} = env{localTypes = insert name type_ localTypes}
 
-bindTypeVariable :: LocalName -> Kind -> Monomorphization -> Env -> Env
-bindTypeVariable name kind monomorphization env@MkEnv{localTypeVariables} = env{localTypeVariables = insert name (kind, monomorphization) localTypeVariables}
+bindTypeVariable :: LocalName -> Type -> Kind -> Monomorphization -> Env -> Env
+bindTypeVariable name type_ kind monomorphization env@MkEnv{localTypeVariables} = env{localTypeVariables = insert name (type_, kind, monomorphization) localTypeVariables}
 
-typeVariableKind :: (HasCallStack) => LocalName -> Env -> Kind
-typeVariableKind name env =
-    case lookup name env.localTypeVariables of
-        Nothing -> error $ "type variable not found in type checker: " <> show name
-        Just (kind, _) -> kind
+lookupTypeVariable :: (HasCallStack) => LocalName -> Env -> (Type, Kind, Monomorphization)
+lookupTypeVariable name env = case lookup name env.localTypeVariables of
+    Nothing -> error $ "type variable not found in type checker: " <> show name
+    Just result -> result
 
 typeVariableMonomorphization :: (HasCallStack) => LocalName -> Env -> Monomorphization
 typeVariableMonomorphization name env =
     case lookup name env.localTypeVariables of
         Nothing -> error $ "type variable not found in type checker: " <> show name
-        Just (_, monomorphization) -> monomorphization
+        Just (_, _, monomorphization) -> monomorphization
 
 -- TODO: factor out the reference/unique bits so you don't need full IOE
 type TypeCheck es = (GraphPersistence :> es, Output TypeError :> es, Error TypeError :> es, Trace :> es, IOE :> es)
@@ -186,8 +186,14 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
         DataConstructor{} -> undefined
         Application{} -> deferToInference
         VisibleTypeApplication{} -> undefined
-        Lambda loc parameters body -> do
-            (parameterTypes, expectedEffect, returnType) <- splitFunctionType loc (length parameters) expectedType
+        Lambda loc typeParameters parameters body -> do
+            (envTrans, typeWithoutBoundParameters) <- bindTypeParameters typeParameters expectedType
+            env <- pure (envTrans env)
+
+            -- Any type variables *not* bound above are not going to be available in the body
+            -- and so are just skolemized away here
+            resultingType <- skolemize typeWithoutBoundParameters
+            (parameterTypes, expectedEffect, returnType) <- splitFunctionType loc (length parameters) resultingType
             when (length parameters /= length parameterTypes) do
                 typeError
                     ( LambdaDefinedWithIncorrectNumberOfArguments
@@ -203,7 +209,7 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
             (parameters, envTransformers) <- Seq.unzip <$> zipWithSeqM checkParameter parameters parameterTypes
             (body, bodyEffect) <- check (compose envTransformers env) returnType body
             subsumesEffect bodyEffect expectedEffect
-            pure (Lambda loc parameters body, Pure)
+            pure (Lambda loc typeParameters parameters body, Pure)
         StringLiteral{} -> deferToInference
         IntLiteral{} -> deferToInference
         DoubleLiteral{} -> deferToInference
@@ -221,6 +227,22 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
         PartialApplication{} -> undefined
         BinaryOperator{} -> undefined
         Match{} -> undefined
+
+bindTypeParameters :: (TypeCheck es) => Seq LocalName -> Type -> Eff es (Env -> Env, Type)
+bindTypeParameters parameters type_ = do
+    (remainingType, transformers) <- mapAccumLM (\type_ parameter -> swap <$> bindTypeParameter parameter type_) type_ parameters
+    pure (Util.compose transformers, remainingType)
+
+bindTypeParameter :: (TypeCheck es) => LocalName -> Type -> Eff es (Env -> Env, Type)
+bindTypeParameter parameter = \case
+    type_@(Forall ((name, kind, monomorphization) :<| _) _) -> do
+        skolem <- Skolem <$> freshSkolem parameter monomorphization
+        -- It would be nice to avoid calling instantiateWith over and over again,
+        -- but we can't just defer all the variables until the end since binders
+        -- might depend on previous binders
+        remainingType <- instantiateWith [skolem] type_
+        pure (bindTypeVariable parameter skolem kind monomorphization, remainingType)
+    type_ -> undefined
 
 infer :: (TypeCheck es) => Env -> Expr Renamed -> Eff es (Type, Expr Typed, Effect)
 infer env expr = do
@@ -257,12 +279,15 @@ infer env expr = do
             pure (returnType, Application{loc, functionExpr, arguments}, finalEffect)
         VisibleTypeApplication{} ->
             undefined
-        Lambda loc parameters body -> do
+        Lambda loc typeParameters parameters body -> do
+            case typeParameters of
+                [] -> pure ()
+                _ -> undefined -- error? I don't think we can handle type parameters in infer mode
             (parameters, parameterTypes, envTransformers) <- unzip3Seq <$> traverse inferPattern parameters
 
             (bodyType, body, bodyEffect) <- infer (compose envTransformers env) body
 
-            pure (Function parameterTypes bodyEffect bodyType, Lambda loc parameters body, Pure)
+            pure (Function parameterTypes bodyEffect bodyType, Lambda loc typeParameters parameters body, Pure)
         StringLiteral loc literal -> pure (stringType, StringLiteral loc literal, Pure)
         IntLiteral loc literal -> pure (intType, IntLiteral loc literal, Pure)
         DoubleLiteral loc literal -> pure (doubleType, DoubleLiteral loc literal, Pure)
@@ -335,8 +360,8 @@ inferType env syntax = do
                 -- TODO: make this non-fatal
                 kind -> fatalTypeError (ApplicationOfNonFunctionKind{loc, kind})
         TypeVarS loc localName -> do
-            let kind = typeVariableKind localName env
-            pure (kind, TypeVar localName, TypeVarS loc localName)
+            let (actualType, kind, _mono) = lookupTypeVariable localName env
+            pure (kind, actualType, TypeVarS loc localName)
         ForallS loc typeVarBinders body -> do
             (env, typeVarBinders) <- mapAccumLM applyForallBinder env typeVarBinders
 
@@ -391,7 +416,7 @@ applyForallBinder env = \case
         (kind, kindSyntax) <- checkType env Kind kindSyntax
         -- TODO: not entirely sure if this is the right place for this
         monomorphized loc env kind
-        pure (bindTypeVariable varName kind monomorphization env, (varName, kind, TypeVarBinderS{loc, monomorphization, varName, kind = kindSyntax}))
+        pure (bindTypeVariable varName (TypeVar varName) kind monomorphization env, (varName, kind, TypeVarBinderS{loc, monomorphization, varName, kind = kindSyntax}))
 
 splitFunctionType :: (TypeCheck es) => Loc -> Int -> Type -> Eff es (Seq Type, Effect, Type)
 splitFunctionType loc parameterCount type_ = do
@@ -400,7 +425,6 @@ splitFunctionType loc parameterCount type_ = do
             | length parameters == parameterCount -> pure (parameters, effect, result)
             | otherwise -> undefined
         type_ -> do
-            -- TODO: let's hope 'Parametric' is okay here
             parameters <- fromList . map MetaVar <$> replicateM parameterCount (freshMeta "a" Parametric)
             effect <- MetaVar <$> freshMeta "e" Parametric
             result <- MetaVar <$> freshMeta "b" Parametric

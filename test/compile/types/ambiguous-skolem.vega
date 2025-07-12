@@ -1,0 +1,4 @@
+
+f : forall (a : Type(Boxed)). () -> forall (b : Type(Boxed)). a -> b;
+f() = \[a](x : a) -> x;
+

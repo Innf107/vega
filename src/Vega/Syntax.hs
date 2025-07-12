@@ -111,7 +111,12 @@ data Expr p
         , expr :: Expr p
         , typeArguments :: Seq (TypeSyntax p)
         }
-    | Lambda Loc (Seq (Pattern p)) (Expr p)
+    | Lambda
+        { loc :: Loc
+        , boundTypeParameters :: Seq (XLocalName p)
+        , parameters :: Seq (Pattern p)
+        , body :: Expr p
+        }
     | StringLiteral Loc Text
     | IntLiteral Loc Integer
     | DoubleLiteral Loc Rational
@@ -358,7 +363,7 @@ instance Pretty Type where
 prettyTypeVarBinder :: (LocalName, Kind, Monomorphization) -> Doc Ann
 prettyTypeVarBinder (name, kind, monomorphization) = do
     let prefix = case monomorphization of
-            Parametric -> mempty 
+            Parametric -> mempty
             Monomorphized -> keyword "*"
     prefix <> lparen "(" <> prettyLocal VarKind name <+> keyword ":" <+> pretty kind <> ")"
 

@@ -41,7 +41,7 @@ compileExpr env = \case
         pure (funBindings . Util.compose argBindings, MIR.Application functionLocal argLocals)
     Vega.PartialApplication{} -> undefined
     Vega.VisibleTypeApplication{} -> undefined
-    Vega.Lambda loc parameters result -> do
+    Vega.Lambda loc typeParameters parameters result -> do
         undefined
     Vega.StringLiteral _ text -> do
         pure (id, MIR.Literal (MIR.StringLiteral text))

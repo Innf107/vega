@@ -1,0 +1,8 @@
+$FILE:3:22: ERROR:
+Type mismatch
+  Unable to unify
+    expected type a
+      actual type b
+  ┃ 
+3 ┃ f() = \[b](x : b) -> x;
+  ┃                      ▔

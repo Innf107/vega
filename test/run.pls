@@ -41,7 +41,7 @@ List.for(compileTests, \testFile -> {
     match (testKind, testResult) {
         (ExpectPass, Passed) -> print("\e[32m[${testFile}]: passed\e[0m")
         (ExpectPass, Failed(output)) -> {
-            print("\e[1m\e[31m[${testFile}]: FAILED\n${output}\e[0m")
+            print("\e[1m\e[31m[${testFile}]: FAILED\e[0m\n\e[31m${output}\e[0m")
             failures := failures! + 1
         }
         (ExpectFail(expectedMessage), Passed) -> {
@@ -56,7 +56,7 @@ List.for(compileTests, \testFile -> {
             if (expectedMessage == actualMessage) then {
                 print("\e[32m[${testFile}]: passed\e[0m")
             } else {
-                print("\e[1m\e[31m[${testFile}]: FAILED\n\e[31mExpected error message: ${expectedMessage}\nActual error message: ${actualMessage}\e[0m")
+                print("\e[1m\e[31m[${testFile}]: FAILED\e[0m\n\e[31mExpected error message: ${expectedMessage}\nActual error message: ${actualMessage}\e[0m")
                 failures := failures! + 1
             }
         }
