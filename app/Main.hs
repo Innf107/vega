@@ -1,3 +1,5 @@
+{-# LANGUAGE PartialTypeSignatures #-}
+
 module Main (main) where
 
 import Relude hiding (Reader, runReader)
@@ -6,18 +8,20 @@ import Options.Applicative
 import Vega.Driver qualified as Driver
 
 import Data.Text qualified as Text
+import Data.Text.IO qualified as Text
 import Data.Yaml (prettyPrintParseException)
 import Effectful (Eff, IOE, runEff)
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.FileSystem (FileSystem, runFileSystem)
 import Effectful.Reader.Static (runReader)
+import System.IO (hIsTerminalDevice)
 import Vega.BuildConfig (BuildConfigPresence (..), findBuildConfig)
 import Vega.Driver (CompilationResult (..))
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence.InMemory (runInMemory)
 import Vega.Effect.Trace (Trace, runTrace)
 import Vega.Error (ErrorMessage (..), PlainErrorMessage (..), prettyErrorWithLoc, renderCompilationError)
-import Vega.Pretty (PrettyANSIIConfig (MkPrettyANSIIConfig, includeUnique), align, emphasis, eprintANSII, keyword, pretty, (<+>))
+import Vega.Pretty (Ann, Doc, PrettyANSIIConfig (MkPrettyANSIIConfig, includeUnique), align, emphasis, eprintANSII, keyword, pretty, prettyPlain, (<+>))
 import Vega.Util (constructorNames)
 
 data PersistenceBackend
@@ -84,17 +88,24 @@ main = do
     options <- execParser (info (parser <**> helper) fullDesc)
     case options of
         Build{persistence} -> run persistence do
-            let ?config =
-                    MkPrettyANSIIConfig
-                        { includeUnique = options.includeUnique
-                        }
+            let eprint :: forall io. (MonadIO io) => Doc Ann -> io ()
+                eprint doc =
+                    liftIO (hIsTerminalDevice stderr) >>= \case
+                        True -> do
+                            let ?config =
+                                    MkPrettyANSIIConfig
+                                        { includeUnique = options.includeUnique
+                                        }
+                            eprintANSII doc
+                        False -> liftIO (Text.hPutStrLn stderr (prettyPlain doc))
+
             findBuildConfig "." >>= \case
                 Missing -> do
-                    eprintANSII $ pretty $ MkPlainErrorMessage $ emphasis "Missing" <+> keyword "vega.yaml" <+> emphasis "file"
+                    eprint $ pretty $ MkPlainErrorMessage $ emphasis "Missing" <+> keyword "vega.yaml" <+> emphasis "file"
                     exitFailure
                 Invalid parseException -> do
                     -- TODO: format these yourself so they're actually human readable
-                    eprintANSII $
+                    eprint $
                         pretty $
                             MkPlainErrorMessage $
                                 emphasis "Malformed" <+> keyword "vega.yaml" <+> emphasis "file:"
@@ -110,6 +121,7 @@ main = do
                                 doc <- case renderCompilationError error of
                                     ErrorWithLoc errorWithLoc -> prettyErrorWithLoc errorWithLoc
                                     PlainError plainError -> pure $ pretty plainError
-                                eprintANSII doc
+                                eprint doc
+                                exitFailure
         Exec{file, mainFunction} -> run InMemory do
             Driver.execute file mainFunction

@@ -19,8 +19,8 @@ import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getDef
 import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
 import Vega.Error (RenameError (..), RenameErrorSet (..))
 import Vega.Loc (Loc)
-import Vega.Util qualified as Util
 import Vega.Util (mapAccumLM)
+import Vega.Util qualified as Util
 
 type Rename es =
     ( GraphPersistence :> es
@@ -212,24 +212,37 @@ renameTypeSyntax env = \case
     TupleS loc elements -> do
         elements <- traverse (renameTypeSyntax env) elements
         pure (TupleS loc elements)
+    RepS loc -> pure (RepS loc)
+    TypeS loc repKind -> do
+        repKind <- renameKindSyntax env repKind
+        pure (TypeS loc repKind)
+    EffectS loc -> pure (EffectS loc)
+    SumRepS loc elements -> do
+        elements <- traverse (renameTypeSyntax env) elements
+        pure (SumRepS loc elements)
+    ProductRepS loc elements -> do
+        elements <- traverse (renameTypeSyntax env) elements
+        pure (ProductRepS loc elements)
+    UnitRepS loc -> pure (UnitRepS loc)
+    EmptyRepS loc -> pure (EmptyRepS loc)
+    BoxedRepS loc -> pure (BoxedRepS loc)
+    KindS loc -> pure (KindS loc)
+
+renameKindSyntax :: (Rename es) => Env -> KindSyntax Parsed -> Eff es (KindSyntax Renamed)
+renameKindSyntax = renameTypeSyntax
 
 renameTypeVarBinders :: (Rename es) => Env -> Seq (ForallBinderS Parsed) -> Eff es (Env, Seq (ForallBinderS Renamed))
 renameTypeVarBinders env binders = mapAccumLM renameForallBinder env binders
 
-renameForallBinder :: Rename es => Env -> ForallBinderS Parsed -> Eff es (Env, ForallBinderS Renamed)
+renameForallBinder :: (Rename es) => Env -> ForallBinderS Parsed -> Eff es (Env, ForallBinderS Renamed)
 renameForallBinder env = \case
-    UnspecifiedBinderS{} -> undefined
-    TypeVarBinderS{} -> undefined
-    KindVarBinderS{} -> undefined
-
-renameKindSyntax :: (Rename es) => Env -> KindSyntax Parsed -> Eff es (KindSyntax Renamed)
-renameKindSyntax env = \case
-    TypeS loc -> pure (TypeS loc)
-    EffectS loc -> pure (EffectS loc)
-    ArrowKindS loc parameters result -> do
-        parameters <- traverse (renameKindSyntax env) parameters
-        result <- renameKindSyntax env result
-        pure (ArrowKindS loc parameters result)
+    UnspecifiedBinderS{loc, varName} -> do
+        (varName, envTrans) <- bindTypeVariable varName
+        pure (envTrans env, UnspecifiedBinderS{loc, varName})
+    TypeVarBinderS{loc, monomorphization, varName, kind} -> do
+        kind <- renameKindSyntax env kind
+        (varName, envTrans) <- bindTypeVariable varName
+        pure (envTrans env, TypeVarBinderS{loc, monomorphization, varName, kind})
 
 renamePattern :: (Rename es) => Env -> Pattern Parsed -> Eff es (Pattern Renamed, Env -> Env)
 renamePattern env = \case

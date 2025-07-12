@@ -219,8 +219,20 @@ data TypeSyntax p
     | PureFunctionS Loc (Seq (TypeSyntax p)) (TypeSyntax p)
     | FunctionS Loc (Seq (TypeSyntax p)) (EffectSyntax p) (TypeSyntax p)
     | TupleS Loc (Seq (TypeSyntax p))
+    | -- Kinds
+      RepS Loc
+    | TypeS Loc (KindSyntax p)
+    | EffectS Loc
+    | SumRepS Loc (Seq (TypeSyntax p))
+    | ProductRepS Loc (Seq (TypeSyntax p))
+    | UnitRepS Loc
+    | EmptyRepS Loc
+    | BoxedRepS Loc
+    | KindS Loc
     deriving stock (Generic)
     deriving anyclass (HasLoc)
+
+type KindSyntax = TypeSyntax
 
 typeApplicationS :: Loc -> TypeSyntax p -> Seq (TypeSyntax p) -> TypeSyntax p
 typeApplicationS _ constructor Empty = constructor
@@ -230,6 +242,11 @@ forallS :: Loc -> Seq (ForallBinderS p) -> TypeSyntax p -> TypeSyntax p
 forallS _loc Empty result = result
 forallS loc binders result = ForallS loc binders result
 
+data Monomorphization
+    = Monomorphized
+    | Parametric
+    deriving (Generic, Show, Eq)
+
 data ForallBinderS p
     = UnspecifiedBinderS
         { loc :: Loc
@@ -238,12 +255,8 @@ data ForallBinderS p
     | TypeVarBinderS
         { loc :: Loc
         , varName :: XLocalName p
+        , monomorphization :: Monomorphization
         , kind :: KindSyntax p
-        }
-    | KindVarBinderS
-        { loc :: Loc
-        , varName :: XLocalName p
-        , kind :: KindSyntax p -- kind in kind yay
         }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
@@ -252,15 +265,6 @@ varNameInBinder :: ForallBinderS p -> XLocalName p
 varNameInBinder = \case
     UnspecifiedBinderS{varName} -> varName
     TypeVarBinderS{varName} -> varName
-    KindVarBinderS{varName} -> varName
-
-data KindSyntax p
-    = TypeS Loc
-    | EffectS Loc
-    | ArrowKindS Loc (Seq (KindSyntax p)) (KindSyntax p)
-    -- This has to implement Eq and Ord because megaparsec is being silly
-    deriving stock (Generic, Eq, Ord)
-    deriving anyclass (HasLoc)
 
 type EffectSyntax = TypeSyntax
 
@@ -268,13 +272,25 @@ data Type
     = TypeConstructor Name
     | TypeApplication Type (Seq Type)
     | TypeVar LocalName
-    | Forall (Seq (LocalName, Kind)) Type
+    | Forall (Seq (LocalName, Kind, Monomorphization)) Type
     | Function (Seq Type) Effect Type
     | Tuple (Seq Type)
     | MetaVar MetaVar
     | Skolem Skolem
     | Pure
+    | -- Kinds
+      Rep
+    | Type Kind
+    | Effect
+    | SumRep (Seq Type)
+    | ProductRep (Seq Type)
+    | UnitRep
+    | EmptyRep
+    | BoxedRep
+    | Kind
     deriving (Generic)
+
+type Kind = Type
 
 -- TODO: don't meta variables need kinds?
 -- TODO: levels
@@ -282,6 +298,7 @@ data MetaVar = MkMetaVar
     { underlying :: IORef (Maybe Type)
     , identity :: Unique
     , name :: Text
+    , monomorphization :: Monomorphization
     }
 
 instance Eq MetaVar where
@@ -290,6 +307,7 @@ instance Eq MetaVar where
 data Skolem = MkSkolem
     { originalName :: LocalName
     , identity :: Unique
+    , monomorphization :: Monomorphization
     }
     deriving (Generic)
 
@@ -297,12 +315,6 @@ instance Eq Skolem where
     skolem1 == skolem2 = skolem1.identity == skolem2.identity
 
 type Effect = Type
-
-data Kind
-    = Type
-    | Effect
-    | ArrowKind (Seq Kind) Kind
-    deriving (Generic)
 
 newtype ImportScope
     = ImportScope
@@ -333,18 +345,22 @@ instance Pretty Type where
         MetaVar meta -> pretty meta
         Skolem skolem -> pretty skolem
         Pure -> keyword "Pure"
-
-prettyTypeVarBinder :: (LocalName, Kind) -> Doc Ann
-prettyTypeVarBinder = \case
-    (name, Type) -> prettyLocal VarKind name
-    (name, kind) -> lparen "(" <> prettyLocal VarKind name <+> keyword ":" <+> pretty kind <> ")"
-
-instance Pretty Kind where
-    pretty = \case
-        Type -> keyword "Type"
+        Rep -> keyword "Rep"
+        Type rep -> keyword "Type" <> prettyArguments @[] [rep]
         Effect -> keyword "Effect"
-        ArrowKind params result ->
-            prettyArguments params <+> keyword "->" <+> pretty result
+        SumRep reps -> lparen "(" <> intercalateDoc (keyword "+") (fmap pretty reps) <> rparen ")"
+        ProductRep reps -> lparen "(" <> intercalateDoc (keyword "*") (fmap pretty reps) <> rparen ")"
+        UnitRep -> keyword "Unit"
+        EmptyRep -> keyword "Empty"
+        BoxedRep -> keyword "Boxed"
+        Kind -> keyword "Kind"
+
+prettyTypeVarBinder :: (LocalName, Kind, Monomorphization) -> Doc Ann
+prettyTypeVarBinder (name, kind, monomorphization) = do
+    let prefix = case monomorphization of
+            Parametric -> mempty 
+            Monomorphized -> keyword "*"
+    prefix <> lparen "(" <> prettyLocal VarKind name <+> keyword ":" <+> pretty kind <> ")"
 
 instance Pretty MetaVar where
     pretty (MkMetaVar{identity, name}) = meta identity ("?" <> name)
@@ -406,4 +422,4 @@ kindOfGlobal declaration = case declaration.syntax of
         let argumentKinds =
                 typeParameters & fmap \case
                     _ -> undefined
-        ArrowKindS declaration.loc argumentKinds (TypeS declaration.loc)
+        PureFunctionS declaration.loc argumentKinds (TypeS declaration.loc undefined)

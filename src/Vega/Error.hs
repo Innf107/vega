@@ -21,7 +21,7 @@ import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Vega.Loc (HasLoc, Loc (..), getLoc)
 import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, keyword, localIdentText, note, number, plain, vsep, (<+>))
-import Vega.Syntax (GlobalName (..), Kind, NameKind (..), Type, prettyGlobal, prettyGlobalText)
+import Vega.Syntax (GlobalName (..), Kind, LocalName, NameKind (..), Type, prettyGlobal, prettyGlobalText, prettyLocal)
 
 data CompilationError
     = RenameError RenameError
@@ -96,6 +96,14 @@ data TypeError
         , kind :: Kind
         , expectedNumber :: Int
         , actualNumber :: Int
+        }
+    | ParametricVariableInMono
+        { loc :: Loc
+        , varName :: LocalName
+        }
+    | AmbiguousMono
+        { loc :: Loc
+        , type_ :: Type
         }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
@@ -186,22 +194,26 @@ prettyErrorWithLoc MkErrorMessageWithLoc{location, contents} = do
             <> code
 
 prettyNameKind :: NameKind -> Doc Ann
-prettyNameKind = emphasis . \case
-    VarKind -> "variable"
-    TypeConstructorKind -> "type constructor"
-    DataConstructorKind -> "data constructor"
+prettyNameKind =
+    emphasis . \case
+        VarKind -> "variable"
+        TypeConstructorKind -> "type constructor"
+        DataConstructorKind -> "data constructor"
 
 renderCompilationError :: CompilationError -> ErrorMessage
 renderCompilationError = \case
     RenameError error -> ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
         NameNotFound{name, nameKind} -> align do
-            prettyNameKind nameKind <+> prettyGlobalText nameKind name <+> emphasis"not found"
+            emphasis "Unbound" <+> prettyNameKind nameKind <+> prettyGlobalText nameKind name
         AmbiguousGlobal{} -> undefined
-        InaccessibleGlobal{name, nameKind, candidates} -> align do
-            emphasis "Inaccessible" <+> prettyNameKind nameKind <+> prettyGlobalText nameKind name <> "\n"
-            <> "  The following definitions are available but not imported:\n"
-            <> "    " <> align (foldMap (\candidate -> emphasis "-" <+> prettyGlobal nameKind candidate <> "\n") candidates)
-        TypeVariableNotFound{} -> undefined
+        InaccessibleGlobal{name, nameKind, candidates} ->
+            align do
+                emphasis "Inaccessible" <+> prettyNameKind nameKind <+> prettyGlobalText nameKind name <> "\n"
+                <> "  The following definitions are available but not imported:\n"
+                <> "    "
+                <> align (foldMap (\candidate -> emphasis "-" <+> prettyGlobal nameKind candidate <> "\n") candidates)
+        TypeVariableNotFound{name} -> align do
+            emphasis "Unbound type variable" <+> prettyGlobalText VarKind name
     TypeError error -> ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
         FunctionDefinedWithIncorrectNumberOfArguments
             { loc = _
@@ -291,6 +303,17 @@ renderCompilationError = \case
                         <> "    In an application of type" <+> pretty type_
                         <> "\n"
                         <> "      which has kind " <+> pretty kind
+        ParametricVariableInMono
+            { loc = _
+            , varName
+            } ->
+                align $
+                    emphasis "Parametric type variable" <+> prettyLocal VarKind varName <+> emphasis "cannot be monomorphized\n"
+                        <> "  Only type variables bound in monomorphizable bindings can appear in kinds of bound type variables\n"
+                        <> "  or be used to instantiate monomorphizable bindings"
+        AmbiguousMono {loc = _, type_} ->
+            align $ emphasis "Unable to monomorphize ambiguous type" <+> pretty type_ <> "\n"
+                <> note "    Try adding a type signature"
     DriverError error -> case error of
         EntryPointNotFound entryPoint ->
             PlainError $

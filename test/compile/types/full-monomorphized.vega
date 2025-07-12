@@ -1,0 +1,9 @@
+
+idVeryMono : forall *(r : Rep) *(a : Type(r)). a -> a;
+idVeryMono(x) = x;
+
+usage : forall *(a : Type(Boxed)). a -> a;
+usage(x) = idVeryMono(x);
+
+main : () -> ();
+main() = main();

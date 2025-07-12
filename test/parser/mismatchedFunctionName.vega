@@ -1,3 +1,0 @@
-
-blah : forall a. a -> a;
-notBlah(x) = x;

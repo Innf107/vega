@@ -22,7 +22,6 @@ data AdditionalParseError
         , definition :: Text
         }
     | UnknowNamedKind Loc Text
-    | TupleKind Loc (Seq (KindSyntax Parsed))
     | NonVarInFunctionDefinition Loc
     deriving stock (Eq, Ord, Generic)
     deriving anyclass (HasLoc)
@@ -212,6 +211,7 @@ defineVariantType = do
         (dataArguments, endLoc) <- option (fromList [], startLoc) (argumentsWithLoc type_)
         pure (globalName, dataArguments, startLoc <> endLoc)
 
+-- TODO: (k1 + ... + kn), (k1 * .. * kn)
 type_ :: Parser (TypeSyntax Parsed)
 type_ =
     choice
@@ -234,11 +234,25 @@ type_ =
             , do
                 (name, loc) <- constructorWithLoc
                 applications <- many @[_] (argumentsWithLoc type_)
-                pure $
-                    foldl'
-                        (\constr (args, loc) -> TypeApplicationS (getLoc constr <> loc) constr args)
-                        (TypeConstructorS loc name)
-                        applications
+                case name of
+                    -- TODO: this doesn't allow using `Type` as a bare type constructor
+                    "Type" -> case applications of
+                        [(rep :<| Empty, appLoc)] -> pure (TypeS (loc <> appLoc) rep)
+                        _ -> undefined
+                    _ -> do
+                        let constructor = case name of
+                                "Effect" -> EffectS loc
+                                "Rep" -> RepS loc
+                                "Unit" -> UnitRepS loc
+                                "Empty" -> EmptyRepS loc
+                                "Boxed" -> BoxedRepS loc
+                                "Kind" -> KindS loc
+                                _ -> TypeConstructorS loc name
+                        pure $
+                            foldl'
+                                (\constr (args, loc) -> TypeApplicationS (getLoc constr <> loc) constr args)
+                                constructor
+                                applications
             , do
                 (name, loc) <- identifierWithLoc
                 pure $ TypeVarS loc name
@@ -282,47 +296,20 @@ typeVarBinder =
             (varName, loc) <- identifierWithLoc
             pure (UnspecifiedBinderS{loc, varName})
         , do
+            monomorphization <- try $ monomorphization
             startLoc <- single LParen
             varName <- identifier
             _ <- single Colon
             varKind <- kind
             endLoc <- single RParen
-            pure (TypeVarBinderS{loc = startLoc <> endLoc, varName, kind = varKind})
-        , do
-            startLoc <- single LParen
-            varName <- identifier
-            _ <- single Colon
-            _ <- single Colon
-            varKind <- kind
-            endLoc <- single RParen
-            pure (KindVarBinderS{loc = startLoc <> endLoc, varName, kind = varKind})
+            pure (TypeVarBinderS{loc = startLoc <> endLoc, monomorphization, varName, kind = varKind})
         ]
 
 kind :: Parser (KindSyntax Parsed)
-kind = do
-    chainl1 kind1 (single Arrow *> pure (\kind1 kind2 -> ArrowKindS (getLoc kind1 <> getLoc kind2) (fromList [kind1]) kind2))
-  where
-    kind1 =
-        choice
-            [ do
-                (namedKind, loc) <- constructorWithLoc
-                case namedKind of
-                    "Type" -> pure $ TypeS loc
-                    "Effect" -> pure $ EffectS loc
-                    _ -> customFailure (UnknowNamedKind loc namedKind)
-            , do
-                (parameterKinds, startLoc) <- argumentsWithLoc kind
+kind = type_
 
-                choice
-                    [ do
-                        _ <- single Arrow
-                        result <- kind
-                        pure (ArrowKindS (startLoc <> getLoc result) parameterKinds result)
-                    , case parameterKinds of
-                        (kind :<| _) -> pure kind
-                        _ -> customFailure (TupleKind startLoc parameterKinds)
-                    ]
-            ]
+monomorphization :: Parser Monomorphization
+monomorphization = (single Asterisk *> pure Monomorphized) <|> pure Parametric
 
 pattern_ :: Parser (Pattern Parsed)
 pattern_ = do

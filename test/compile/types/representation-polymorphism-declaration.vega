@@ -1,0 +1,10 @@
+
+
+idBoxed : forall (a : Type(Boxed)). a -> a;
+idBoxed(x) = x;
+
+idMono : forall *(r : Rep) (a : Type(r)). a -> a;
+idMono(x) = x;
+
+main : () -> ();
+main() = main();

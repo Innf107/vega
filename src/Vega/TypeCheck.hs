@@ -21,11 +21,11 @@ import Vega.Debug (showHeadConstructor)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputSeq)
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
-import Vega.Pretty (errorText, keyword, pretty, (<+>))
+import Vega.Pretty (errorText, keyword, pretty, (<+>), emphasis)
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
-    , localTypeVariables :: HashMap LocalName Kind
+    , localTypeVariables :: HashMap LocalName (Kind, Monomorphization)
     , localTypeConstructors :: HashMap LocalName Kind
     }
 
@@ -40,14 +40,20 @@ emptyEnv =
 bindVarType :: LocalName -> Type -> Env -> Env
 bindVarType name type_ env@MkEnv{localTypes} = env{localTypes = insert name type_ localTypes}
 
-bindTypeVariable :: LocalName -> Kind -> Env -> Env
-bindTypeVariable name type_ env@MkEnv{localTypeVariables} = env{localTypeVariables = insert name type_ localTypeVariables}
+bindTypeVariable :: LocalName -> Kind -> Monomorphization -> Env -> Env
+bindTypeVariable name kind monomorphization env@MkEnv{localTypeVariables} = env{localTypeVariables = insert name (kind, monomorphization) localTypeVariables}
 
 typeVariableKind :: (HasCallStack) => LocalName -> Env -> Kind
 typeVariableKind name env =
     case lookup name env.localTypeVariables of
         Nothing -> error $ "type variable not found in type checker: " <> show name
-        Just kind -> kind
+        Just (kind, _) -> kind
+
+typeVariableMonomorphization :: (HasCallStack) => LocalName -> Env -> Monomorphization
+typeVariableMonomorphization name env =
+    case lookup name env.localTypeVariables of
+        Nothing -> error $ "type variable not found in type checker: " <> show name
+        Just (_, monomorphization) -> monomorphization
 
 -- TODO: factor out the reference/unique bits so you don't need full IOE
 type TypeCheck es = (GraphPersistence :> es, Output TypeError :> es, Error TypeError :> es, Trace :> es, IOE :> es)
@@ -83,7 +89,7 @@ getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobal VarKi
             trace TypeCheck $ "cached ~> " <> pretty cachedType
             pure cachedType
         Right syntax -> do
-            (type_, _) <- checkType emptyEnv Type syntax
+            (_rep, type_, _) <- inferTypeRep emptyEnv syntax
             GraphPersistence.cacheGlobalType name type_
             pure type_
 
@@ -92,7 +98,7 @@ globalConstructorKind name = do
     GraphPersistence.getGlobalKind name >>= \case
         Left cachedKind -> pure cachedKind
         Right syntax -> do
-            (kind, _synax) <- evalKind syntax
+            (kind, _synax) <- checkType emptyEnv Kind syntax
             GraphPersistence.cacheGlobalKind name kind
             pure kind
 
@@ -100,7 +106,7 @@ checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> 
 checkDeclarationSyntax loc = \case
     DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body} -> do
         let env = emptyEnv
-        (functionType, typeSignature) <- checkType env Type typeSignature
+        (functionType, typeSignature) <- checkType env (Type BoxedRep) typeSignature
 
         (parameterTypes, effect, returnType, env, declaredTypeParameters) <- case declaredTypeParameters of
             Nothing -> do
@@ -134,11 +140,12 @@ checkDeclarationSyntax loc = \case
         pure DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body}
     DefineVariantType{name, typeParameters, constructors} -> do
         let env = emptyEnv
-        (env, binders) <- mapAccumLM applyTypeVarBinder env typeParameters
+        (env, binders) <- mapAccumLM applyForallBinder env typeParameters
         let typeParameters = fmap (\(_, _, binder) -> binder) binders
 
         constructors <- for constructors \(name, loc, parameters) -> do
-            (_, parameters) <- Seq.unzip <$> traverse (checkType env Type) parameters
+            -- TODO: we need the representations, right??
+            (representations, _, parameters) <- unzip3Seq <$> traverse (inferTypeRep env) parameters
             pure (name, loc, parameters)
         pure (DefineVariantType{name, typeParameters, constructors})
 
@@ -150,7 +157,7 @@ checkPattern env expectedType = \case
         pure (AsPattern loc pattern_ name, bindVarType name expectedType . innerTrans)
     ConstructorPattern{} -> undefined
     TypePattern loc innerPattern innerTypeSyntax -> do
-        (innerType, innerTypeSyntax) <- checkType env Type innerTypeSyntax
+        (_typeRep, innerType, innerTypeSyntax) <- inferTypeRep env innerTypeSyntax
         (innerPattern, innerTrans) <- checkPattern env innerType innerPattern
         subsumes loc innerType expectedType
         pure (TypePattern loc innerPattern innerTypeSyntax, innerTrans)
@@ -160,7 +167,7 @@ checkPattern env expectedType = \case
 inferPattern :: (TypeCheck es) => Pattern Renamed -> Eff es (Pattern Typed, Type, Env -> Env)
 inferPattern = \case
     VarPattern loc varName -> do
-        meta <- freshMeta (varName.name)
+        meta <- freshMeta (varName.name) Parametric
         let type_ = MetaVar meta
         pure (VarPattern loc varName, type_, bindVarType varName type_)
     AsPattern loc innerPattern name -> do
@@ -282,19 +289,10 @@ doubleType = TypeConstructor (Global (internalName "Double"))
 boolType :: Type
 boolType = TypeConstructor (Global (internalName "Bool"))
 
-evalKind :: (TypeCheck es) => KindSyntax Renamed -> Eff es (Kind, KindSyntax Typed)
-evalKind = \case
-    TypeS loc -> pure (Type, TypeS loc)
-    EffectS loc -> pure (Effect, EffectS loc)
-    ArrowKindS loc argumentKindsSyntax resultKindSyntax -> do
-        (argumentKinds, argumentKindsSyntax) <- Seq.unzip <$> traverse evalKind argumentKindsSyntax
-        (resultKind, resultKindSyntax) <- evalKind resultKindSyntax
-        pure (ArrowKind argumentKinds resultKind, ArrowKindS loc argumentKindsSyntax resultKindSyntax)
-
 checkType :: (TypeCheck es) => Env -> Kind -> TypeSyntax Renamed -> Eff es (Type, TypeSyntax Typed)
 checkType env expectedKind syntax = withTrace KindCheck ("checkType: " <> showHeadConstructor syntax <> keyword " <= " <> pretty expectedKind) do
     (kind, type_, syntax) <- inferType env syntax
-    unifyKind (getLoc syntax) expectedKind kind
+    subsumes (getLoc syntax) kind expectedKind
     pure (type_, syntax)
 
 inferType :: (TypeCheck es) => Env -> TypeSyntax Renamed -> Eff es (Kind, Type, TypeSyntax Typed)
@@ -314,7 +312,7 @@ inferType env syntax = do
         TypeApplicationS loc typeConstructorSyntax argumentsSyntax -> do
             (constructorKind, typeConstructor, typeConstructorSyntax) <- inferType env typeConstructorSyntax
             case constructorKind of
-                ArrowKind argumentKinds resultKind
+                Function argumentKinds Pure resultKind
                     | length argumentKinds == length argumentsSyntax -> do
                         (arguments, argumentsSyntax) <- Seq.unzip <$> zipWithSeqM (checkType env) argumentKinds argumentsSyntax
                         pure
@@ -340,35 +338,60 @@ inferType env syntax = do
             let kind = typeVariableKind localName env
             pure (kind, TypeVar localName, TypeVarS loc localName)
         ForallS loc typeVarBinders body -> do
-            (env, typeVarBinders) <- mapAccumLM applyTypeVarBinder env typeVarBinders
+            (env, typeVarBinders) <- mapAccumLM applyForallBinder env typeVarBinders
 
-            (body, bodySyntax) <- checkType env Type body
+            (typeRep, body, bodySyntax) <- inferTypeRep env body
 
             pure
-                ( Type
-                , Forall (fmap (\(name, kind, _) -> (name, kind)) typeVarBinders) body
+                -- TODO: uhhhh i don't think this is correct?
+                -- we will need to introduce kind level foralls here... sometimes??
+                ( Type typeRep
+                , -- TODO: this doesn't work with unspecified binders (we need to desugar the binders manually in that case)
+                  Forall (fmap (\(name, kind, binder) -> (name, kind, binder.monomorphization)) typeVarBinders) body
                 , ForallS loc (fmap (\(_, _, binder) -> binder) typeVarBinders) bodySyntax
                 )
         PureFunctionS loc parameters result -> do
-            (parameterTypes, parameterTypeSyntax) <- Seq.unzip <$> traverse (checkType env Type) parameters
-            (resultType, resultTypeSyntax) <- checkType env Type result
-            pure (Type, Function parameterTypes Pure resultType, PureFunctionS loc parameterTypeSyntax resultTypeSyntax)
+            (_parameterReps, parameterTypes, parameterTypeSyntax) <- unzip3Seq <$> traverse (inferTypeRep env) parameters
+            (_resultRep, resultType, resultTypeSyntax) <- inferTypeRep env result
+            pure (Type BoxedRep, Function parameterTypes Pure resultType, PureFunctionS loc parameterTypeSyntax resultTypeSyntax)
         FunctionS loc parameters effect result -> do
-            (parameterTypes, parameterTypeSyntax) <- Seq.unzip <$> traverse (checkType env Type) parameters
+            (_parameterReps, parameterTypes, parameterTypeSyntax) <- unzip3Seq <$> traverse (inferTypeRep env) parameters
             (effect, effectSyntax) <- checkType env Effect effect
-            (resultType, resultTypeSyntax) <- checkType env Type result
-            pure (Type, Function parameterTypes effect resultType, FunctionS loc parameterTypeSyntax effectSyntax resultTypeSyntax)
+            (_resultRep, resultType, resultTypeSyntax) <- inferTypeRep env result
+            pure (Type BoxedRep, Function parameterTypes effect resultType, FunctionS loc parameterTypeSyntax effectSyntax resultTypeSyntax)
         TupleS loc elements -> do
-            (elementTypes, elementTypeSyntax) <- Seq.unzip <$> traverse (checkType env Type) elements
-            pure (Type, Tuple elementTypes, TupleS loc elementTypeSyntax)
+            (elementReps, elementTypes, elementTypeSyntax) <- unzip3Seq <$> traverse (inferType env) elements
+            pure (Type (ProductRep elementReps), Tuple elementTypes, TupleS loc elementTypeSyntax)
+        RepS loc -> pure (Kind, Rep, RepS loc)
+        TypeS loc repSyntax -> do
+            (rep, repSyntax) <- checkType env Rep repSyntax
+            pure (Kind, Type rep, TypeS loc repSyntax)
+        EffectS loc -> pure (Kind, Effect, EffectS loc)
+        SumRepS loc elementSyntax -> do
+            (elements, elementSyntax) <- Seq.unzip <$> traverse (checkType env Rep) elementSyntax
+            pure (Rep, SumRep elements, SumRepS loc elementSyntax)
+        ProductRepS loc elementSyntax -> do
+            (elements, elementSyntax) <- Seq.unzip <$> traverse (checkType env Rep) elementSyntax
+            pure (Rep, ProductRep elements, ProductRepS loc elementSyntax)
+        UnitRepS loc -> pure (Rep, UnitRep, UnitRepS loc)
+        EmptyRepS loc -> pure (Rep, EmptyRep, EmptyRepS loc)
+        BoxedRepS loc -> pure (Rep, BoxedRep, BoxedRepS loc)
+        KindS loc -> pure (Kind, Kind, KindS loc)
 
-applyTypeVarBinder :: (TypeCheck es) => Env -> ForallBinderS Renamed -> Eff es (Env, (LocalName, Kind, ForallBinderS Typed))
-applyTypeVarBinder env = \case
+inferTypeRep :: (TypeCheck es) => Env -> TypeSyntax Renamed -> Eff es (Kind, Type, TypeSyntax Typed)
+inferTypeRep env type_ = do
+    rep <- MetaVar <$> freshMeta "r" Parametric
+    (type_, typeSyntax) <- checkType env (Type rep) type_
+    pure (rep, type_, typeSyntax)
+
+applyForallBinder :: (TypeCheck es) => Env -> ForallBinderS Renamed -> Eff es (Env, (LocalName, Kind, ForallBinderS Typed))
+applyForallBinder env = \case
     UnspecifiedBinderS{loc, varName} -> undefined
-    TypeVarBinderS{loc, varName, kind = kindSyntax} -> do
-        (kind, kindSyntax) <- evalKind kindSyntax
-        pure (bindTypeVariable varName kind env, (varName, kind, TypeVarBinderS{loc, varName, kind = kindSyntax}))
-    KindVarBinderS{} -> undefined
+    TypeVarBinderS{loc, monomorphization, varName, kind = kindSyntax} -> do
+        (kind, kindSyntax) <- checkType env Kind kindSyntax
+        -- TODO: not entirely sure if this is the right place for this
+        monomorphized loc env kind
+        pure (bindTypeVariable varName kind monomorphization env, (varName, kind, TypeVarBinderS{loc, monomorphization, varName, kind = kindSyntax}))
 
 splitFunctionType :: (TypeCheck es) => Loc -> Int -> Type -> Eff es (Seq Type, Effect, Type)
 splitFunctionType loc parameterCount type_ = do
@@ -377,9 +400,10 @@ splitFunctionType loc parameterCount type_ = do
             | length parameters == parameterCount -> pure (parameters, effect, result)
             | otherwise -> undefined
         type_ -> do
-            parameters <- fromList . map MetaVar <$> replicateM parameterCount (freshMeta "a")
-            effect <- MetaVar <$> freshMeta "e"
-            result <- MetaVar <$> freshMeta "a"
+            -- TODO: let's hope 'Parametric' is okay here
+            parameters <- fromList . map MetaVar <$> replicateM parameterCount (freshMeta "a" Parametric)
+            effect <- MetaVar <$> freshMeta "e" Parametric
+            result <- MetaVar <$> freshMeta "b" Parametric
             subsumes loc type_ (Function parameters effect result)
             pure (parameters, effect, result)
 
@@ -411,12 +435,27 @@ substituteTypeVariables substitution type_ =
         type_@MetaVar{} -> pure type_
         type_@Skolem{} -> pure type_
         type_@Pure -> pure type_
+        type_@Rep -> pure type_
+        Type rep -> do
+            rep <- substituteTypeVariables substitution rep
+            pure (Type rep)
+        type_@Effect -> pure type_
+        SumRep elements -> do
+            elements <- traverse (substituteTypeVariables substitution) elements
+            pure (SumRep elements)
+        ProductRep elements -> do
+            elements <- traverse (substituteTypeVariables substitution) elements
+            pure (ProductRep elements)
+        type_@UnitRep -> pure type_
+        type_@EmptyRep -> pure type_
+        type_@BoxedRep -> pure type_
+        type_@Kind -> pure type_
 
 instantiateWith :: (TypeCheck es) => (Seq Type) -> Type -> Eff es Type
 instantiateWith arguments = \case
     Forall params body
         | length params == length arguments -> do
-            substituteTypeVariables (viaList (Seq.zipWith (\(param, _kind) argument -> (param, argument)) params arguments)) body
+            substituteTypeVariables (viaList (Seq.zipWith (\(param, _kind, _) argument -> (param, argument)) params arguments)) body
         | otherwise -> undefined
     _ -> undefined
 
@@ -424,19 +463,19 @@ instantiate :: (TypeCheck es) => Type -> Eff es Type
 instantiate type_ = case collectAllPrenexBinders type_ of
     ([], _) -> pure type_
     (binders, _) -> do
-        metas <- for binders \(name, _kind) -> do
-            MetaVar <$> freshMeta name.name
+        metas <- for binders \(name, _kind, monomorphization) -> do
+            MetaVar <$> freshMeta name.name monomorphization
         instantiateWith metas type_
 
 skolemize :: (TypeCheck es) => Type -> Eff es Type
 skolemize type_ = case collectAllPrenexBinders type_ of
     ([], _) -> pure type_
     (binders, _) -> do
-        skolems <- for binders \(name, _kind) -> do
-            Skolem <$> freshSkolem name
+        skolems <- for binders \(name, _kind, monomorphization) -> do
+            Skolem <$> freshSkolem name monomorphization
         instantiateWith skolems type_
 
-collectAllPrenexBinders :: Type -> (Seq (LocalName, Kind), Type)
+collectAllPrenexBinders :: Type -> (Seq (LocalName, Kind, Monomorphization), Type)
 collectAllPrenexBinders = \case
     Forall binders body -> do
         let (rest, monoBody) = collectAllPrenexBinders body
@@ -492,6 +531,39 @@ unify loc type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pretty
                 Pure -> case type2 of
                     Pure -> pure ()
                     _ -> unificationFailure
+                Rep -> case type2 of
+                    Rep -> pure ()
+                    _ -> unificationFailure
+                Type rep1 -> case type2 of
+                    Type rep2 -> unify loc rep1 rep2
+                    _ -> unificationFailure
+                Effect -> case type2 of
+                    Effect -> pure ()
+                    _ -> unificationFailure
+                SumRep elements1 -> case type2 of
+                    SumRep elements2
+                        | length elements1 == length elements2 -> do
+                            _ <- zipWithSeqM (unify loc) elements1 elements2
+                            pure ()
+                    _ -> unificationFailure
+                ProductRep elements1 -> case type2 of
+                    ProductRep elements2
+                        | length elements1 == length elements2 -> do
+                            _ <- zipWithSeqM (unify loc) elements1 elements2
+                            pure ()
+                    _ -> unificationFailure
+                UnitRep -> case type2 of
+                    UnitRep -> pure ()
+                    _ -> unificationFailure
+                EmptyRep -> case type2 of
+                    EmptyRep -> pure ()
+                    _ -> unificationFailure
+                BoxedRep -> case type2 of
+                    BoxedRep -> pure ()
+                    _ -> unificationFailure
+                Kind -> case type2 of
+                    Kind -> pure ()
+                    _ -> unificationFailure
 
 bindMeta :: (TypeCheck es) => MetaVar -> Type -> Eff es ()
 bindMeta meta boundType =
@@ -536,6 +608,15 @@ occursAndAdjust meta type_ = do
                 | otherwise -> pure ()
             Skolem{} -> pure ()
             Pure -> pure ()
+            Rep -> pure ()
+            Type rep -> go rep
+            Effect -> pure ()
+            SumRep elements -> for_ elements go
+            ProductRep elements -> for_ elements go
+            UnitRep -> pure ()
+            EmptyRep -> pure ()
+            BoxedRep -> pure ()
+            Kind -> pure ()
 
 subsumesEffect :: (TypeCheck es) => Effect -> Effect -> Eff es ()
 subsumesEffect Pure _ = pure ()
@@ -556,16 +637,16 @@ unionAll :: (TypeCheck es) => Seq Effect -> Eff es Effect
 unionAll Empty = pure Pure
 unionAll (eff :<| rest) = pure eff `unionM` unionAll rest
 
-freshMeta :: (TypeCheck es) => Text -> Eff es MetaVar
-freshMeta name = do
+freshMeta :: (TypeCheck es) => Text -> Monomorphization -> Eff es MetaVar
+freshMeta name monomorphization = do
     identity <- liftIO newUnique
     underlying <- newIORef Nothing
-    pure $ MkMetaVar{underlying, identity, name}
+    pure $ MkMetaVar{underlying, identity, name, monomorphization}
 
-freshSkolem :: (TypeCheck es) => LocalName -> Eff es Skolem
-freshSkolem originalName = do
+freshSkolem :: (TypeCheck es) => LocalName -> Monomorphization -> Eff es Skolem
+freshSkolem originalName monomorphization = do
     identity <- liftIO newUnique
-    pure $ MkSkolem{identity, originalName}
+    pure $ MkSkolem{identity, originalName, monomorphization}
 
 followMetas :: (TypeCheck es) => Type -> Eff es Type
 followMetas = \case
@@ -580,20 +661,43 @@ followMetas = \case
                 pure actualType
     type_ -> pure type_
 
-unifyKind :: (TypeCheck es) => Loc -> Kind -> Kind -> Eff es ()
-unifyKind loc expected actual = do
-    let kindMismatch = do
-            typeError (KindMismatch{loc, expectedKind = expected, actualKind = actual})
-    case expected of
-        Type -> case actual of
-            Type -> pure ()
-            _ -> kindMismatch
-        Effect -> case actual of
-            Effect -> pure ()
-            _ -> kindMismatch
-        ArrowKind parameters1 result1 -> case actual of
-            ArrowKind parameters2 result2
-                | length parameters1 == length parameters2 -> do
-                    _ <- zipWithSeqM (unifyKind loc) parameters1 parameters2
-                    unifyKind loc result1 result2
-            _ -> kindMismatch
+monomorphized :: (TypeCheck es) => Loc -> Env -> Type -> Eff es ()
+monomorphized loc env type_ = do
+    trace TypeCheck $ emphasis "mono" <+> pretty type_
+    go type_
+  where
+    go = \case
+        -- the interesting cases
+        TypeVar varName -> do
+            case typeVariableMonomorphization varName env of
+                Monomorphized -> pure ()
+                Parametric -> typeError (ParametricVariableInMono{loc, varName})
+        Skolem skolem -> do
+            case skolem.monomorphization of
+                Monomorphized -> pure ()
+                -- TODO: should we use a separate error message for skolems?
+                Parametric -> typeError (ParametricVariableInMono{loc, varName = skolem.originalName})
+        MetaVar{} -> do
+            undefined
+        -- recursive boilerplate
+        TypeConstructor{} -> pure ()
+        TypeApplication constructor arguments -> do
+            go constructor
+            for_ arguments go
+        Forall{} -> undefined -- not entirely sure about this
+        Function parameters effect result -> do
+            for_ parameters go
+            go effect
+            go result
+        Tuple elements -> do
+            for_ elements go
+        Pure -> pure ()
+        Rep -> pure ()
+        Type rep -> go rep
+        Effect -> pure ()
+        SumRep elements -> for_ elements go
+        ProductRep elements -> for_ elements go
+        UnitRep -> pure ()
+        EmptyRep -> pure ()
+        BoxedRep -> pure ()
+        Kind -> pure ()

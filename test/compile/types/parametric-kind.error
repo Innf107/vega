@@ -1,0 +1,7 @@
+$FILE:2:28: ERROR:
+Parametric type variable r cannot be monomorphized
+  Only type variables bound in monomorphizable bindings can appear in kinds of bound type variables
+  or be used to instantiate monomorphizable bindings
+  ┃ 
+2 ┃ idWrong : forall (r : Rep) (a : Type(r)). a -> a;
+  ┃                            ▔▔▔▔▔▔▔▔▔▔▔▔▔
