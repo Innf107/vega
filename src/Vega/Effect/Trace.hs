@@ -23,7 +23,7 @@ import Data.Text.IO (hPutStrLn)
 import Effectful.Dispatch.Dynamic (EffectHandler, localSeqUnlift, reinterpret)
 import Effectful.Reader.Dynamic (Reader, ask, local, runReader)
 import Effectful.TH (makeEffect)
-import Vega.Pretty (Ann, Doc, defaultPrettyANSIIConfig, prettyANSII, PrettyANSIIConfig (includeUnique))
+import Vega.Pretty (Ann, Doc, PrettyANSIIConfig (includeUnique), defaultPrettyANSIIConfig, prettyANSII)
 
 data Category
     = Driver
@@ -33,6 +33,7 @@ data Category
     | TypeCheck
     | KindCheck
     | Unify
+    | Instantiate
     deriving (Generic, Show, Enum, Bounded)
 
 data Trace :: Effect where
@@ -55,6 +56,7 @@ data Traces = MkTraces
     , typeCheck :: Bool
     , kindCheck :: Bool
     , unify :: Bool
+    , instantiate :: Bool
     }
 
 defaultTraces :: Traces
@@ -67,6 +69,7 @@ defaultTraces =
         , typeCheck = False
         , kindCheck = False
         , unify = False
+        , instantiate = False
         }
 
 categoryWidth :: Traces -> Int
@@ -83,7 +86,7 @@ runTrace eff = do
     -- We cannot disambiguate uniques across trace messages so
     -- keeping includeUniques off would make it basically impossible to track
     -- unification variables and skolems
-    let ?config = defaultPrettyANSIIConfig {includeUnique = True}
+    let ?config = defaultPrettyANSIIConfig{includeUnique = True}
     let trace category message = do
             depth <- ask @Int
             when (traceEnabledIn category enabledTraces) do
@@ -108,6 +111,7 @@ traceEnabledIn category enabledTraces = case category of
     TypeCheck -> enabledTraces.typeCheck
     KindCheck -> enabledTraces.kindCheck
     Unify -> enabledTraces.unify
+    Instantiate -> enabledTraces.instantiate
 
 getTraces :: (MonadIO io) => io Traces
 getTraces =
@@ -127,6 +131,7 @@ getTraces =
         ("types" : rest) -> go (traces{typeCheck = True}) rest
         ("kinds" : rest) -> go (traces{kindCheck = True}) rest
         ("unify" : rest) -> go (traces{unify = True}) rest
+        ("instantiate" : rest) -> go (traces{instantiate = True}) rest
         (trace_ : rest) -> do
             -- TODO: make the warning prettier
             putTextLn $ "WARNING: unrecognized trace category: " <> trace_

@@ -1,0 +1,9 @@
+
+f : forall *(r : Rep) (a : Type(r)). a -> a;
+f(x) = x;
+
+g : forall (a : Type(Boxed)). a -> a;
+g(x) = f[Boxed](x);
+
+main : () -> ();
+main() = main();

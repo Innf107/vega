@@ -1,0 +1,8 @@
+$FILE:6:17: ERROR:
+Type mismatch
+  Unable to unify
+    expected type Boxed
+      actual type Empty
+  ┃ 
+6 ┃ g(x) = f[Empty](x);
+  ┃                 ▔

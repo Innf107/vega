@@ -329,13 +329,13 @@ pattern Forall bindings body <- Forall_ bindings body
 
 type Kind = Type
 
--- TODO: don't meta variables need kinds?
 -- TODO: levels
 data MetaVar = MkMetaVar
     { underlying :: IORef (Maybe Type)
     , identity :: Unique
     , name :: Text
     , monomorphization :: Monomorphization
+    , kind :: Kind
     }
 
 instance Eq MetaVar where
@@ -345,6 +345,7 @@ data Skolem = MkSkolem
     { originalName :: LocalName
     , identity :: Unique
     , monomorphization :: Monomorphization
+    , kind :: Kind
     }
     deriving (Generic)
 
