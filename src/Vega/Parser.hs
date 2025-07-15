@@ -291,25 +291,30 @@ forall_ = do
 
 typeVarBinder :: Parser (ForallBinderS Parsed)
 typeVarBinder =
-    choice
-        [ do
-            (varName, loc) <- identifierWithLoc
-            pure (UnspecifiedBinderS{loc, varName})
-        , do
-            monomorphization <- try $ monomorphization
-            startLoc <- single LParen
-            varName <- identifier
-            _ <- single Colon
-            varKind <- kind
-            endLoc <- single RParen
-            pure (TypeVarBinderS{loc = startLoc <> endLoc, monomorphization, varName, kind = varKind})
-        ]
+    do
+        monomorphization <- monomorphization
+        choice
+            [ do
+                (varName, loc) <- identifierWithLoc
+                pure (UnspecifiedBinderS{loc, varName, monomorphization})
+            , do
+                startLoc <- single LParen
+                varName <- identifier
+                _ <- single Colon
+                varKind <- kind
+                endLoc <- single RParen
+                pure (TypeVarBinderS{loc = startLoc <> endLoc, monomorphization, varName, kind = varKind})
+            ]
 
 kind :: Parser (KindSyntax Parsed)
 kind = type_
 
 monomorphization :: Parser Monomorphization
-monomorphization = (single Asterisk *> pure Monomorphized) <|> pure Parametric
+monomorphization =
+    choice
+        [ single Asterisk *> pure Monomorphized
+        , pure Parametric
+        ]
 
 pattern_ :: Parser (Pattern Parsed)
 pattern_ = do

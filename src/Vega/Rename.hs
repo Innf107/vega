@@ -236,9 +236,9 @@ renameTypeVarBinders env binders = mapAccumLM renameForallBinder env binders
 
 renameForallBinder :: (Rename es) => Env -> ForallBinderS Parsed -> Eff es (Env, ForallBinderS Renamed)
 renameForallBinder env = \case
-    UnspecifiedBinderS{loc, varName} -> do
+    UnspecifiedBinderS{loc, monomorphization, varName} -> do
         (varName, envTrans) <- bindTypeVariable varName
-        pure (envTrans env, UnspecifiedBinderS{loc, varName})
+        pure (envTrans env, UnspecifiedBinderS{loc, monomorphization, varName})
     TypeVarBinderS{loc, monomorphization, varName, kind} -> do
         kind <- renameKindSyntax env kind
         (varName, envTrans) <- bindTypeVariable varName

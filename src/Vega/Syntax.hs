@@ -260,6 +260,7 @@ data ForallBinderS p
     = UnspecifiedBinderS
         { loc :: Loc
         , varName :: XLocalName p
+        , monomorphization :: Monomorphization
         }
     | TypeVarBinderS
         { loc :: Loc
