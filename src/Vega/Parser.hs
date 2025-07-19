@@ -11,7 +11,7 @@ import Data.Sequence (Seq (..))
 import GHC.IsList (Item)
 import Text.Megaparsec hiding (Token, many, parse, sepBy, sepBy1, sepEndBy, single)
 import Text.Megaparsec qualified as MegaParsec
-import Vega.Lexer as Lexer (Token (..))
+import Vega.Lexer.Token as Lexer (Token (..))
 import Vega.Loc (HasLoc, Loc (MkLoc, endColumn, endLine, file, startColumn, startLine), getLoc)
 import Vega.Syntax qualified as Syntax
 
@@ -309,7 +309,7 @@ typeVarBinder =
                 varName <- identifier
                 _ <- single Colon
                 varKind <- kind
-                endLoc <- single RParen
+                endLoc <- single RBrace
                 pure (TypeVarBinderS{loc = startLoc <> endLoc, monomorphization, varName, kind = varKind, visibility = Inferred})
             ]
 

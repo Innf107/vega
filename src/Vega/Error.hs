@@ -1,6 +1,7 @@
 {-# LANGUAGE RecordWildCards #-}
 
 module Vega.Error (
+    LexicalError(..),
     CompilationError (..),
     RenameError (..),
     RenameErrorSet (..),
@@ -20,15 +21,31 @@ import Data.Text qualified as Text
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
 import Vega.Loc (HasLoc, Loc (..), getLoc)
-import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, keyword, localIdentText, note, number, plain, vsep, (<+>))
+import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, keyword, localIdentText, note, number, plain, vsep, (<+>), intercalateDoc)
 import Vega.Syntax (GlobalName (..), Kind, LocalName, NameKind (..), Type, prettyGlobal, prettyGlobalText, prettyLocal)
+import Text.Megaparsec (ParseErrorBundle, ParseError (..), ErrorFancy (..), ErrorItem (..))
+import Vega.Parser (AdditionalParseError (..))
+import Vega.Lexer.Token (Token)
+import qualified Vega.Parser as Parser
+import Text.Megaparsec.Error (ParseErrorBundle(..))
+import Data.Sequence (Seq(..))
+import Vega.Util (viaList)
+import qualified Data.List.NonEmpty as NonEmpty
 
 data CompilationError
-    = RenameError RenameError
+    = LexicalError LexicalError
+    | ParseError (ParseErrorBundle [(Token, Loc)] AdditionalParseError)
+    | RenameError RenameError
     | TypeError TypeError
     | DriverError DriverError
     | Panic SomeException
     deriving stock (Generic)
+
+data LexicalError
+    = UnexpectedCharacter Loc Char
+    | UnterminatedStringLiteral Loc
+    | InvalidStringEscape Loc Char
+    | EmptyHexEscape Loc
 
 data RenameError
     = NameNotFound
@@ -218,9 +235,11 @@ prettyNameKind =
         TypeConstructorKind -> "type constructor"
         DataConstructorKind -> "data constructor"
 
-renderCompilationError :: CompilationError -> ErrorMessage
+renderCompilationError :: CompilationError -> Seq ErrorMessage
 renderCompilationError = \case
-    RenameError error -> ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
+    LexicalError error -> undefined
+    ParseError error -> fmap ErrorWithLoc $ generateParseErrorMessages error
+    RenameError error -> pure $ ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
         NameNotFound{name, nameKind} -> align do
             emphasis "Unbound" <+> prettyNameKind nameKind <+> prettyGlobalText nameKind name
         AmbiguousGlobal{} -> undefined
@@ -232,7 +251,7 @@ renderCompilationError = \case
                 <> align (foldMap (\candidate -> emphasis "-" <+> prettyGlobal nameKind candidate <> "\n") candidates)
         TypeVariableNotFound{name} -> align do
             emphasis "Unbound type variable" <+> prettyGlobalText VarKind name
-    TypeError error -> ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
+    TypeError error -> pure $ ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
         FunctionDefinedWithIncorrectNumberOfArguments
             { loc = _
             , functionName
@@ -352,7 +371,7 @@ renderCompilationError = \case
             align $ emphasis "Trying to apply" <+> pluralNumber typeArgumentCount "type argument" <+> emphasis "to a monomorphic type"
             <> "\n  In a type application of type" <+> pretty instantiatedType 
 
-    DriverError error -> case error of
+    DriverError error -> pure $ case error of
         EntryPointNotFound entryPoint ->
             PlainError $
                 MkPlainErrorMessage $
@@ -363,9 +382,63 @@ renderCompilationError = \case
                             <> note "  Note: To change the entry point, set the" <+> localIdentText "entry-point" <+> note "field in your "
                             <> keyword "vega.yaml"
                             <> note " file"
-    Panic exception -> do
-        PlainError $ MkPlainErrorMessage $ align $ errorText "PANIC: " <> emphasis (show exception)
+    Panic exception -> pure do
+        PlainError $ MkPlainErrorMessage $ align $ errorText "PANIC (the 'impossible' happened): " <> emphasis (show exception)
 
 pluralNumber :: Int -> Text -> Doc Ann
 pluralNumber 1 text = number @Int 1 <+> emphasis text 
 pluralNumber n text = number n <+> emphasis (text <> "s")
+
+
+
+generateParseErrorMessages :: ParseErrorBundle [(Token, Loc)] Parser.AdditionalParseError -> Seq ErrorMessageWithLoc
+generateParseErrorMessages (ParseErrorBundle{bundleErrors, bundlePosState = _bundlePosState}) =
+    foldMap generateParseErrorMessage (viaList @_ @(Seq _) bundleErrors)
+
+generateParseErrorMessage :: ParseError [(Token, Loc)] Parser.AdditionalParseError -> Seq ErrorMessageWithLoc
+generateParseErrorMessage = \case
+    TrivialError _offset (Just actual) expected -> do
+        let location = errorItemLocation actual
+        [ MkErrorMessageWithLoc
+                { location
+                , contents =
+                    "    Expected: "
+                        <> prettyExpected expected
+                        <> "\n      Actual: "
+                        <> prettyErrorItem actual
+                }
+            ]
+    TrivialError _offset Nothing expected -> error $ "trivial parse error without actual tokens"
+    FancyError _offset errors ->
+        fromList $ map generateFancyParseErrorMessage (toList errors)
+
+generateFancyParseErrorMessage :: ErrorFancy Parser.AdditionalParseError -> ErrorMessageWithLoc
+generateFancyParseErrorMessage = \case
+    ErrorFail message -> error $ "fail called in parser: " <> toText message
+    ErrorIndentation{} -> error $ "ErrorIndentation arising from parser"
+    ErrorCustom error ->
+        MkErrorMessageWithLoc
+            { location = getLoc error
+            , contents =
+                "Parse Error:" <+> case error of
+                    MismatchedFunctionName{typeSignature, definition} -> undefined
+                    _ -> undefined
+            }
+
+prettyErrorItem :: ErrorItem (Token, Loc) -> Doc Ann
+prettyErrorItem (Tokens tokens) = foldMap (pretty . fst) tokens
+prettyErrorItem (Label chars) = plain (viaList chars)
+prettyErrorItem EndOfInput = plain "end of input"
+
+prettyExpected :: Set (ErrorItem (Token, Loc)) -> Doc Ann
+prettyExpected tokens = go (viaList @_ @(Seq _) tokens)
+  where
+    go Empty = ""
+    go (Empty :|> last) = prettyErrorItem last
+    go (rest :|> last) =
+        intercalateDoc ", " (fmap prettyErrorItem rest) <> ", or " <> prettyErrorItem last
+
+errorItemLocation :: ErrorItem (Token, Loc) -> Loc
+errorItemLocation (Tokens tokens) = snd (NonEmpty.head tokens) <> snd (NonEmpty.last tokens)
+errorItemLocation (Label _) = error $ "'Label' in actual part of parse error"
+errorItemLocation EndOfInput = undefined

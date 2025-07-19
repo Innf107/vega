@@ -1,6 +1,6 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.37.0.
+-- This file has been generated from package.yaml by hpack version 0.38.1.
 --
 -- see: https://github.com/sol/hpack
 
@@ -42,8 +42,8 @@ library
       Vega.Effect.Output.Static.Local
       Vega.Effect.Trace
       Vega.Error
-      Vega.Error.ParseError
       Vega.Lexer
+      Vega.Lexer.Token
       Vega.Loc
       Vega.Parser
       Vega.Pretty

@@ -118,10 +118,12 @@ main = do
                         CompilationSuccessful -> pure ()
                         CompilationFailed errors -> do
                             for_ errors \error -> do
-                                doc <- case renderCompilationError error of
-                                    ErrorWithLoc errorWithLoc -> prettyErrorWithLoc errorWithLoc
-                                    PlainError plainError -> pure $ pretty plainError
-                                eprint doc
-                                exitFailure
+                                let errorMessages = renderCompilationError error
+                                for_ errorMessages \errorMessage -> do
+                                    doc <- case errorMessage of
+                                        ErrorWithLoc errorWithLoc -> prettyErrorWithLoc errorWithLoc
+                                        PlainError plainError -> pure $ pretty plainError
+                                    eprint doc
+                                    exitFailure
         Exec{file, mainFunction} -> run InMemory do
             Driver.execute file mainFunction

@@ -21,7 +21,7 @@ import Data.Sequence (Seq (..))
 import Data.Text.Lazy.Builder qualified as TextBuilder
 import Data.Traversable (for)
 import Effectful.Concurrent (Concurrent)
-import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
+import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwError_)
 
 import Effectful.Exception (try)
 import Vega.BuildConfig (BuildConfig (..))
@@ -45,6 +45,11 @@ data CompilationResult
     = CompilationSuccessful
     | CompilationFailed
         {errors :: Seq CompilationError}
+
+addErrors :: CompilationResult -> Seq CompilationError -> CompilationResult
+addErrors result Empty = result
+addErrors CompilationSuccessful errors = CompilationFailed{errors}
+addErrors CompilationFailed{errors} additionalErrors = CompilationFailed{errors = errors <> additionalErrors}
 
 -- TODO: distinguish between new and previous errors
 
@@ -103,17 +108,16 @@ computeImportScope imports = foldMap importScope imports
                         ]
                 }
 
-parseAndDiff :: (Driver es) => FilePath -> Eff es (Seq DiffChange)
+parseAndDiff :: (Driver es, Error CompilationError :> es) => FilePath -> Eff es (Seq DiffChange)
 parseAndDiff filePath = do
     let moduleName = moduleNameForPath filePath
 
     contents <- decodeUtf8 <$> readFileBS filePath
     tokens <- case Lexer.run (toText filePath) contents of
-        Left errors -> undefined
+        Left error -> throwError_ (Error.LexicalError error)
         Right tokens -> pure tokens
     parsedModule <- case Parser.parse moduleName filePath tokens of
-        Left errors -> do
-            undefined
+        Left errors -> throwError_ (Error.ParseError errors)
         Right parsedModule -> pure parsedModule
 
     let importScope = computeImportScope parsedModule.imports
@@ -144,10 +148,10 @@ applyDiffChange = \case
         GraphPersistence.setParsed decl
     Removed decl -> GraphPersistence.removeDeclaration decl
 
-trackSourceChanges :: (Driver es) => Eff es ()
+trackSourceChanges :: (Driver es) => Eff es (Seq CompilationError)
 trackSourceChanges = do
     sourceFiles <- findSourceFiles
-    diffChanges <- fold <$> for sourceFiles parseAndDiff
+    (parseErrors, diffChanges) <- second fold . partitionEithers <$> for (toList sourceFiles) (runErrorNoCallStack . parseAndDiff)
 
     whenTraceEnabled Driver do
         for_ diffChanges \case
@@ -156,6 +160,8 @@ trackSourceChanges = do
             Diff.Changed decl -> trace Driver ("Declaration changed: " <> show decl.name)
 
     for_ diffChanges applyDiffChange
+
+    pure (fromList parseErrors)
 
 performAllRemainingWork :: (Driver es) => Eff es ()
 performAllRemainingWork = do
@@ -173,23 +179,24 @@ performAllRemainingWork = do
                 compileToJS name
 
 rebuild :: (Driver es) => Eff es CompilationResult
-rebuild = try @SomeException go >>= \case
-    Right result -> pure result
-    Left exception -> do
-        errors <- GraphPersistence.getCurrentErrors
-        pure (CompilationFailed{errors = errors <> [Panic exception]})
+rebuild =
+    try @SomeException go >>= \case
+        Right result -> pure result
+        Left exception -> do
+            errors <- GraphPersistence.getCurrentErrors
+            pure (CompilationFailed{errors = errors <> [Panic exception]})
   where
     go = do
-        trackSourceChanges
+        parseErrors <- trackSourceChanges
 
         performAllRemainingWork
         GraphPersistence.getCurrentErrors >>= \case
             [] -> do
                 runErrorNoCallStack compileBackend >>= \case
                     Left error -> do
-                        pure (CompilationFailed{errors = [DriverError error]})
-                    Right () -> pure CompilationSuccessful
-            errors -> pure (CompilationFailed{errors = errors})
+                        pure (addErrors CompilationFailed{errors = [DriverError error]} parseErrors)
+                    Right () -> pure (addErrors CompilationSuccessful parseErrors)
+            errors -> pure (addErrors CompilationFailed{errors = errors} parseErrors)
 
 compileBackend :: (Error Error.DriverError :> es, Driver es) => Eff es ()
 compileBackend = do

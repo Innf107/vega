@@ -1,0 +1,7 @@
+
+malformed;
+malformed = very invalid;
+
+main : () -> ();
+main() = ();
+
