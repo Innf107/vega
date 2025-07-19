@@ -303,7 +303,14 @@ typeVarBinder =
                 _ <- single Colon
                 varKind <- kind
                 endLoc <- single RParen
-                pure (TypeVarBinderS{loc = startLoc <> endLoc, monomorphization, varName, kind = varKind})
+                pure (TypeVarBinderS{loc = startLoc <> endLoc, monomorphization, varName, kind = varKind, visibility = Visible})
+            , do
+                startLoc <- single LBrace
+                varName <- identifier
+                _ <- single Colon
+                varKind <- kind
+                endLoc <- single RParen
+                pure (TypeVarBinderS{loc = startLoc <> endLoc, monomorphization, varName, kind = varKind, visibility = Inferred})
             ]
 
 kind :: Parser (KindSyntax Parsed)

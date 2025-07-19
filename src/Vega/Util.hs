@@ -11,9 +11,11 @@ module Vega.Util (
     viaList,
     constructorNames,
     Untagged (..),
+    assert,
 ) where
 
 import Data.Sequence (Seq (..))
+import GHC.Base qualified
 import GHC.Exts (IsList (..))
 import GHC.Generics (C1, Generic (Rep), M1, Meta (..), (:+:))
 import GHC.TypeLits (KnownSymbol, symbolVal)
@@ -87,3 +89,6 @@ instance {-# OVERLAPPABLE #-} (ConstructorNamesG f) => ConstructorNamesG (M1 _i 
     constructorNamesG = constructorNamesG @f
 
 newtype Untagged a = MkUntagged a
+
+assert :: (HasCallStack, Applicative f) => Bool -> f ()
+assert ~condition = GHC.Base.assert condition (pure ())

@@ -247,13 +247,18 @@ forallS :: Loc -> Seq (ForallBinderS p) -> TypeSyntax p -> TypeSyntax p
 forallS _loc Empty result = result
 forallS loc binders result = ForallS loc binders result
 
-forall_ :: Seq (LocalName, Kind, Monomorphization) -> Type -> Type
+forall_ :: Seq ForallBinder -> Type -> Type
 forall_ Empty result = result
 forall_ binders result = Forall_ binders result
 
 data Monomorphization
     = Monomorphized
     | Parametric
+    deriving (Generic, Show, Eq)
+
+data BinderVisibility
+    = Visible
+    | Inferred
     deriving (Generic, Show, Eq)
 
 data ForallBinderS p
@@ -267,14 +272,17 @@ data ForallBinderS p
         , varName :: XLocalName p
         , monomorphization :: Monomorphization
         , kind :: KindSyntax p
+        , visibility :: BinderVisibility
         }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
 
-varNameInBinder :: ForallBinderS p -> XLocalName p
-varNameInBinder = \case
-    UnspecifiedBinderS{varName} -> varName
-    TypeVarBinderS{varName} -> varName
+data ForallBinder = MkForallBinder
+    { varName :: LocalName
+    , visibility :: BinderVisibility
+    , kind :: Kind
+    , monomorphization :: Monomorphization
+    }
 
 type EffectSyntax = TypeSyntax
 
@@ -282,7 +290,7 @@ data Type
     = TypeConstructor Name
     | TypeApplication Type (Seq Type)
     | TypeVar LocalName
-    | Forall_ (Seq (LocalName, Kind, Monomorphization)) Type
+    | Forall_ (Seq ForallBinder) Type
     | Function (Seq Type) Effect Type
     | Tuple (Seq Type)
     | MetaVar MetaVar
@@ -323,7 +331,7 @@ data Type
 
 -- We override the Forall constructor with a custom pattern synonym to enforce the invariant
 -- that `Forall [] body` is equivalent to just `body`
-pattern Forall :: Seq (LocalName, Kind, Monomorphization) -> Type -> Type
+pattern Forall :: Seq ForallBinder -> Type -> Type
 pattern Forall bindings body <- Forall_ bindings body
     where
         Forall bindings body = forall_ bindings body
@@ -375,7 +383,7 @@ instance Pretty Type where
         TypeApplication typeConstructor argTypes ->
             pretty typeConstructor <> prettyArguments argTypes
         TypeVar name -> prettyLocal VarKind name
-        Forall binders body -> keyword "forall" <+> intercalateDoc " " (fmap prettyTypeVarBinder binders) <> "." <+> pretty body
+        Forall binders body -> keyword "forall" <+> intercalateDoc " " (fmap prettyForallBinder binders) <> "." <+> pretty body
         Function arguments Pure result ->
             prettyArguments arguments <+> keyword "->" <+> pretty result
         Function arguments effect result ->
@@ -394,12 +402,15 @@ instance Pretty Type where
         BoxedRep -> keyword "Boxed"
         Kind -> keyword "Kind"
 
-prettyTypeVarBinder :: (LocalName, Kind, Monomorphization) -> Doc Ann
-prettyTypeVarBinder (name, kind, monomorphization) = do
+prettyForallBinder :: ForallBinder -> Doc Ann
+prettyForallBinder MkForallBinder{varName, kind, monomorphization, visibility} = do
+    let (left, right) = case visibility of
+            Visible -> (lparen "(", rparen ")")
+            Inferred -> (lparen "{", rparen "}")
     let prefix = case monomorphization of
             Parametric -> mempty
             Monomorphized -> keyword "*"
-    prefix <> lparen "(" <> prettyLocal VarKind name <+> keyword ":" <+> pretty kind <> rparen ")"
+    prefix <> left <> prettyLocal VarKind varName <+> keyword ":" <+> pretty kind <> right
 
 instance Pretty MetaVar where
     pretty (MkMetaVar{identity, name}) = meta identity ("?" <> name)

@@ -239,10 +239,10 @@ renameForallBinder env = \case
     UnspecifiedBinderS{loc, monomorphization, varName} -> do
         (varName, envTrans) <- bindTypeVariable varName
         pure (envTrans env, UnspecifiedBinderS{loc, monomorphization, varName})
-    TypeVarBinderS{loc, monomorphization, varName, kind} -> do
+    TypeVarBinderS{loc, visibility, monomorphization, varName, kind} -> do
         kind <- renameKindSyntax env kind
         (varName, envTrans) <- bindTypeVariable varName
-        pure (envTrans env, TypeVarBinderS{loc, monomorphization, varName, kind})
+        pure (envTrans env, TypeVarBinderS{loc, visibility, monomorphization, varName, kind})
 
 renamePattern :: (Rename es) => Env -> Pattern Parsed -> Eff es (Pattern Renamed, Env -> Env)
 renamePattern env = \case
