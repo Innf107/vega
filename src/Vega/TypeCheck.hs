@@ -21,8 +21,9 @@ import Data.Traversable (for)
 import Data.Unique (newUnique)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwError_)
 import Effectful.Writer.Static.Local (runWriter, tell)
+import GHC.List (List)
 import Vega.Debug (showHeadConstructor)
-import Vega.Effect.Output.Static.Local (Output, output, runOutputSeq)
+import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>))
@@ -34,6 +35,9 @@ data Env = MkEnv
     , localTypeVariables :: HashMap LocalName (Type, Kind, Monomorphization)
     , localTypeConstructors :: HashMap LocalName Kind
     }
+
+data DeferredConstraint
+    = AssertMonomorphized Loc Env Type
 
 emptyEnv :: Env
 emptyEnv =
@@ -66,18 +70,46 @@ typeVariableMonomorphization name env =
         Nothing -> error $ "type variable not found in type checker: " <> show name
         Just (_, _, monomorphization) -> monomorphization
 
--- TODO: factor out the reference/unique bits so you don't need full IOE
-type TypeCheck es = (GraphPersistence :> es, Output TypeError :> es, Error TypeError :> es, Trace :> es, IOE :> es)
+type TypeCheckCore es =
+    ( Trace :> es
+    , IOE :> es
+    , Output TypeError :> es
+    , Error TypeError :> es
+    )
 
+-- TODO: factor out the reference/unique bits so you don't need full IOE
+type TypeCheck es =
+    ( GraphPersistence :> es
+    , Output DeferredConstraint :> es
+    , Output TypeError :> es
+    , Error TypeError :> es
+    , Trace :> es
+    , IOE :> es
+    )
+
+-- TODO: does it make sense to return the declaration anyway even if we have errors?
+-- We already have the *renamed* syntax so I'm not sure if this is really beneficial
+-- (in any case, we can't just compile it if it has type errors so there isn't that much
+-- we could do with it anyway. it might help the LSP though)
 checkDeclaration :: (GraphPersistence :> es, Trace :> es, IOE :> es) => Declaration Renamed -> Eff es (Either TypeErrorSet (Declaration Typed))
 checkDeclaration (MkDeclaration{loc, name, syntax}) = withTrace TypeCheck ("Declaration: " <> pretty name) do
-    (syntaxOrFatalError, nonFatalErrors) <-
-        runOutputSeq $
-            runErrorNoCallStack $
-                checkDeclarationSyntax loc syntax
+    ((syntaxOrFatalError, deferredConstraints), nonFatalDirectErrors) <-
+        runOutputSeq @TypeError $
+            runOutputList @DeferredConstraint $
+                runErrorNoCallStack @TypeError $
+                    checkDeclarationSyntax loc syntax
 
-    case syntaxOrFatalError of
-        Left fatalError -> pure (Left (MkTypeErrorSet (nonFatalErrors <> [fatalError])))
+    (fatalSolverError, nonFatalSolverErrors) <- runOutputSeq @TypeError $ runErrorNoCallStack @TypeError $ solveConstraints deferredConstraints
+
+    let nonFatalErrors = nonFatalDirectErrors <> nonFatalSolverErrors
+    let fatalErrorsOrSyntax = case (syntaxOrFatalError, fatalSolverError) of
+            (Left error1, Left error2) -> Left [error1, error2]
+            (Left error1, Right ()) -> Left [error1]
+            (Right _, Left error2) -> Left [error2]
+            (Right syntax, Right ()) -> Right syntax
+
+    case fatalErrorsOrSyntax of
+        Left fatalErrors -> pure (Left (MkTypeErrorSet (nonFatalErrors <> fatalErrors)))
         Right syntax ->
             case nonFatalErrors of
                 [] -> pure (Right (MkDeclaration{loc, name, syntax}))
@@ -174,13 +206,13 @@ checkPattern env expectedType = \case
     OrPattern{} -> undefined
     _ -> undefined
 
-inferPattern :: (TypeCheck es) => Pattern Renamed -> Eff es (Pattern Typed, Type, Env -> Env)
-inferPattern = \case
+inferPattern :: (TypeCheck es) => Env -> Pattern Renamed -> Eff es (Pattern Typed, Type, Env -> Env)
+inferPattern env = \case
     VarPattern loc varName -> do
-        type_ <- MetaVar <$> freshTypeMeta (varName.name) Parametric
+        type_ <- MetaVar <$> freshTypeMeta loc env (varName.name)
         pure (VarPattern loc varName, type_, bindVarType varName type_)
     AsPattern loc innerPattern name -> do
-        (innerPattern, innerType, innerTrans) <- inferPattern innerPattern
+        (innerPattern, innerType, innerTrans) <- inferPattern env innerPattern
         pure (AsPattern loc innerPattern name, innerType, bindVarType name innerType . innerTrans)
     _ -> undefined
 
@@ -307,7 +339,7 @@ infer env expr = do
             case typeParameters of
                 [] -> pure ()
                 _ -> undefined -- error? I don't think we can handle type parameters in infer mode
-            (parameters, parameterTypes, envTransformers) <- unzip3Seq <$> traverse inferPattern parameters
+            (parameters, parameterTypes, envTransformers) <- unzip3Seq <$> traverse (inferPattern env) parameters
 
             (bodyType, body, bodyEffect) <- infer (compose envTransformers env) body
 
@@ -431,9 +463,10 @@ inferType env syntax = do
         KindS loc -> pure (Kind, Kind, KindS loc)
 
 inferTypeRep :: (TypeCheck es) => Env -> TypeSyntax Renamed -> Eff es (Kind, Type, TypeSyntax Typed)
-inferTypeRep env type_ = do
-    rep <- MetaVar <$> freshMeta "r" Monomorphized Rep
-    (type_, typeSyntax) <- checkType env (Type rep) type_
+inferTypeRep env typeSyntax = do
+    rep <- MetaVar <$> freshMeta "r" Rep
+    monomorphized (getLoc typeSyntax) env rep
+    (type_, typeSyntax) <- checkType env (Type rep) typeSyntax
     pure (rep, type_, typeSyntax)
 
 kindOf :: (TypeCheck es) => Env -> Type -> Eff es Kind
@@ -492,9 +525,9 @@ splitFunctionType loc env parameterCount type_ = do
             | length parameters == parameterCount -> pure (parameters, effect, result)
             | otherwise -> undefined
         type_ -> do
-            parameters <- fromList . map MetaVar <$> replicateM parameterCount (freshTypeMeta "a" Parametric)
-            effect <- MetaVar <$> freshTypeMeta "e" Parametric
-            result <- MetaVar <$> freshTypeMeta "b" Parametric
+            parameters <- fromList . map MetaVar <$> replicateM parameterCount (freshTypeMeta loc env "a")
+            effect <- MetaVar <$> freshTypeMeta loc env "e"
+            result <- MetaVar <$> freshTypeMeta loc env "b"
             subsumes loc env type_ (Function parameters effect result)
             pure (parameters, effect, result)
 
@@ -599,8 +632,9 @@ instantiateWith onInferred onRemaining makeOutput loc env arguments type_ = runW
             go substitution (binder@MkForallBinder{varName, kind, monomorphization, visibility = _} :<| binders) Empty = case onRemaining of
                 InstantiateRemainingToMeta -> do
                     kind <- substituteTypeVariables substitution kind
-                    meta <- freshMeta varName.name monomorphization kind
-                    substitution <- applyArgument binder kind (MetaVar meta) substitution
+                    meta <- MetaVar <$> freshMeta varName.name kind
+                    assertMonomorphizability loc env meta monomorphization
+                    substitution <- applyArgument binder kind meta substitution
                     go substitution binders Empty
                 SkolemizeRemaining -> do
                     kind <- substituteTypeVariables substitution kind
@@ -619,8 +653,9 @@ instantiateWith onInferred onRemaining makeOutput loc env arguments type_ = runW
                     go substitution binders arguments
                 InstantiateInferredToMeta -> do
                     kind <- substituteTypeVariables substitution kind
-                    meta <- freshMeta varName.name monomorphization kind
-                    substitution <- applyArgument binder kind (MetaVar meta) substitution
+                    meta <- MetaVar <$> freshMeta varName.name kind
+                    assertMonomorphizability loc env meta monomorphization
+                    substitution <- applyArgument binder kind meta substitution
                     go substitution binders arguments
                 SkolemizeInferred -> do
                     kind <- substituteTypeVariables substitution kind
@@ -776,22 +811,8 @@ occursAndAdjust loc env meta type_ = do
                 | meta == foundMeta ->
                     throwError_ ()
                 -- Because we ran followMetas on type_, this is an unbound meta var that we don't need to look into further
-                | otherwise ->
-                    case (meta.monomorphization, foundMeta.monomorphization) of
-                        (Monomorphized, Parametric) -> do
-                            -- This is a parametric meta variable but it's really supposed to be monomorphized, so
-                            -- we "strengthen" it by binding it to a monomorphized unification variable
-
-                            -- TODO: we only ever really call this when binding our monomorphized meta variable
-                            -- to the result so we could really just swap the order of the meta variables and
-                            -- avoid the extra meta variable and unification
-                            newMeta <- freshMeta foundMeta.name Monomorphized foundMeta.kind
-                            bindMeta loc env foundMeta (MetaVar newMeta)
-                        _ -> pure ()
-            Skolem skolem -> case (meta.monomorphization, skolem.monomorphization) of
-                (Monomorphized, Parametric) -> do
-                    typeError ParametricVariableInMono{loc, varName = skolem.originalName, fullType = Just type_}
-                _ -> pure ()
+                | otherwise -> pure ()
+            Skolem{} -> pure ()
             Pure -> pure ()
             Rep -> pure ()
             Type rep -> go rep
@@ -822,24 +843,25 @@ unionAll :: (TypeCheck es) => Seq Effect -> Eff es Effect
 unionAll Empty = pure Pure
 unionAll (eff :<| rest) = pure eff `unionM` unionAll rest
 
-freshMeta :: (TypeCheck es) => Text -> Monomorphization -> Kind -> Eff es MetaVar
-freshMeta name monomorphization kind = do
+freshMeta :: (TypeCheck es) => Text -> Kind -> Eff es MetaVar
+freshMeta name kind = do
     identity <- liftIO newUnique
     underlying <- newIORef Nothing
-    pure $ MkMetaVar{underlying, identity, name, monomorphization, kind}
+    pure $ MkMetaVar{underlying, identity, name, kind}
 
 -- | Creates a fresh meta variable of kind (Type ?r) where ?r is another fresh meta variable
-freshTypeMeta :: (TypeCheck es) => Text -> Monomorphization -> Eff es MetaVar
-freshTypeMeta name monomorphization = do
-    rep <- MetaVar <$> freshMeta "r" Monomorphized Rep
-    freshMeta name monomorphization (Type rep)
+freshTypeMeta :: (TypeCheck es) => Loc -> Env -> Text -> Eff es MetaVar
+freshTypeMeta loc env name = do
+    rep <- MetaVar <$> freshMeta "r" Rep
+    monomorphized loc env rep
+    freshMeta name (Type rep)
 
 freshSkolem :: (TypeCheck es) => LocalName -> Monomorphization -> Kind -> Eff es Skolem
 freshSkolem originalName monomorphization kind = do
     identity <- liftIO newUnique
     pure $ MkSkolem{identity, originalName, monomorphization, kind}
 
-followMetas :: (TypeCheck es) => Type -> Eff es Type
+followMetas :: (TypeCheckCore es) => Type -> Eff es Type
 followMetas = \case
     type_@(MetaVar meta) -> do
         readIORef meta.underlying >>= \case
@@ -860,40 +882,53 @@ assertMonomorphizability loc env type_ = \case
 monomorphized :: (TypeCheck es) => Loc -> Env -> Type -> Eff es ()
 monomorphized loc env type_ = do
     trace TypeCheck $ emphasis "mono" <+> pretty type_
+    solveMonomorphized (\meta -> output (AssertMonomorphized loc env (MetaVar meta))) loc env type_
+
+solveMonomorphized :: (TypeCheckCore es) => (MetaVar -> Eff es ()) -> Loc -> Env -> Type -> Eff es ()
+solveMonomorphized onMetaVar loc env type_ =
     go type_
   where
-    go = \case
-        -- the interesting cases
-        TypeVar varName -> do
-            case typeVariableMonomorphization varName env of
-                Monomorphized -> pure ()
-                Parametric -> typeError (ParametricVariableInMono{loc, varName, fullType = Nothing})
-        Skolem skolem -> do
-            case skolem.monomorphization of
-                Monomorphized -> pure ()
-                -- TODO: should we use a separate error message for skolems?
-                Parametric -> typeError (ParametricVariableInMono{loc, varName = skolem.originalName, fullType = Nothing})
-        MetaVar{} -> do
-            undefined
-        -- recursive boilerplate
-        TypeConstructor{} -> pure ()
-        TypeApplication constructor arguments -> do
-            go constructor
-            for_ arguments go
-        Forall{} -> undefined -- not entirely sure about this
-        Function parameters effect result -> do
-            for_ parameters go
-            go effect
-            go result
-        Tuple elements -> do
-            for_ elements go
-        Pure -> pure ()
-        Rep -> pure ()
-        Type rep -> go rep
-        Effect -> pure ()
-        SumRep elements -> for_ elements go
-        ProductRep elements -> for_ elements go
-        UnitRep -> pure ()
-        EmptyRep -> pure ()
-        BoxedRep -> pure ()
-        Kind -> pure ()
+    go type_ =
+        followMetas type_ >>= \case
+            -- the interesting cases
+            TypeVar varName -> do
+                case typeVariableMonomorphization varName env of
+                    Monomorphized -> pure ()
+                    Parametric -> typeError (ParametricVariableInMono{loc, varName, fullType = Nothing})
+            Skolem skolem -> do
+                case skolem.monomorphization of
+                    Monomorphized -> pure ()
+                    -- TODO: should we use a separate error message for skolems?
+                    Parametric -> typeError (ParametricVariableInMono{loc, varName = skolem.originalName, fullType = Nothing})
+            MetaVar meta -> onMetaVar meta
+            -- recursive boilerplate
+            TypeConstructor{} -> pure ()
+            TypeApplication constructor arguments -> do
+                go constructor
+                for_ arguments go
+            Forall{} -> undefined -- not entirely sure about this
+            Function parameters effect result -> do
+                for_ parameters go
+                go effect
+                go result
+            Tuple elements -> do
+                for_ elements go
+            Pure -> pure ()
+            Rep -> pure ()
+            Type rep -> go rep
+            Effect -> pure ()
+            SumRep elements -> for_ elements go
+            ProductRep elements -> for_ elements go
+            UnitRep -> pure ()
+            EmptyRep -> pure ()
+            BoxedRep -> pure ()
+            Kind -> pure ()
+
+type SolveConstraints es = (Error TypeError :> es, Output TypeError :> es, Trace :> es, IOE :> es)
+
+solveConstraints :: (SolveConstraints es) => List DeferredConstraint -> Eff es ()
+solveConstraints = \case
+    [] -> pure ()
+    (AssertMonomorphized loc env type_ : rest) -> do
+        solveMonomorphized (\meta -> typeError (AmbiguousMono{loc, type_ = MetaVar meta})) loc env type_
+        solveConstraints rest

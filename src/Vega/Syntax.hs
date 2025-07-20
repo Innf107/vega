@@ -343,7 +343,6 @@ data MetaVar = MkMetaVar
     { underlying :: IORef (Maybe Type)
     , identity :: Unique
     , name :: Text
-    , monomorphization :: Monomorphization
     , kind :: Kind
     }
 
