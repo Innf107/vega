@@ -5,7 +5,7 @@ module Vega.TypeCheck (checkDeclaration) where
 import Vega.Syntax
 
 import Effectful hiding (Effect)
-import Relude hiding (Type, trace)
+import Relude hiding (State, Type, evalState, get, put, runState, trace)
 import Relude.Extra
 
 import Vega.Error (TypeError (..), TypeErrorSet (MkTypeErrorSet))
@@ -20,7 +20,7 @@ import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Data.Unique (newUnique)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwError_)
-import Effectful.Writer.Static.Local (runWriter, tell)
+import Effectful.State.Static.Local (State, evalState, get, put, runState)
 import GHC.List (List)
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
@@ -151,8 +151,7 @@ checkDeclarationSyntax loc = \case
         let env = emptyEnv
         (functionType, typeSignature) <- checkType env (Type BoxedRep) typeSignature
 
-        (envTransformer, remainingType) <- bindTypeParameters loc env declaredTypeParameters functionType
-        env <- pure (envTransformer env)
+        (env, remainingType) <- bindTypeParameters loc env declaredTypeParameters functionType
 
         -- We bound the declared type parameters above and the rest are not accessible in the body
         -- so we can just skolemize them away here
@@ -229,8 +228,7 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
         -- TODO: not entirely sure if this is correct or if we should try to stay in check mode
         VisibleTypeApplication{} -> deferToInference
         Lambda loc typeParameters parameters body -> do
-            (envTrans, typeWithoutBoundParameters) <- bindTypeParameters loc env typeParameters expectedType
-            env <- pure (envTrans env)
+            (env, typeWithoutBoundParameters) <- bindTypeParameters loc env typeParameters expectedType
 
             -- Any type variables *not* bound above are not going to be available in the body
             -- and so are just skolemized away here
@@ -270,27 +268,31 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
         BinaryOperator{} -> undefined
         Match{} -> undefined
 
-bindTypeParameters :: (TypeCheck es) => Loc -> Env -> Seq (Loc, LocalName) -> Type -> Eff es (Env -> Env, Type)
-bindTypeParameters loc env parameters type_ = do
-    (type_, boundVariables) <-
-        instantiateWith
-            SkolemizeInferred
-            SkolemizeRemaining
-            ( \binder argument -> [(argument, binder.kind, binder.monomorphization)]
-            )
-            loc
-            env
-            []
-            type_
+bindTypeParameters :: (TypeCheck es) => Loc -> Env -> Seq (Loc, LocalName) -> Type -> Eff es (Env, Type)
+bindTypeParameters loc env initialParameters polytype = fmap swap $ evalState (toList initialParameters) $ runState env do
+    let onVisible _loc _env MkForallBinder{varName = _typeSignatureVarName, visibility = _, monomorphization, kind} = do
+            parameters <- get @(List (Loc, LocalName))
+            env <- get @Env
+            case parameters of
+                [] -> pure StopInstantiating
+                (_loc, parameterVarName) : rest -> do
+                    skolem <- Skolem <$> freshSkolem parameterVarName monomorphization kind
 
-    -- If length boundVariables > length parameters, we deliberately ignore
-    -- the remaining variables since the programmer didn't bind them here
-    let envTransformers =
-            Seq.zipWith
-                (\(_, name) (argument, kind, monomorphization) -> bindTypeVariable name argument kind monomorphization)
-                parameters
-                boundVariables
-    pure (Util.compose envTransformers, type_)
+                    put (bindTypeVariable parameterVarName skolem kind monomorphization env)
+                    put rest
+                    case rest of
+                        [] -> pure (LastInstantiation skolem)
+                        _ -> pure (InstantiateWith skolem)
+    remainingType <- instantiateGeneric skolemizeStrategy onVisible loc env polytype
+    parameters <- get @(List (Loc, LocalName))
+    case parameters of
+        [] -> pure remainingType
+        _ -> do
+            let actualCount = case normalizeForalls polytype of
+                    Forall binders _ -> length binders
+                    _ -> 0
+            typeError (TryingToBindTooManyTypeParameters{loc, boundCount = length initialParameters, actualCount, type_ = polytype})
+            pure remainingType
 
 varType :: (HasCallStack) => (TypeCheck es) => Env -> Name -> Eff es Type
 varType env name = case name of
@@ -333,7 +335,7 @@ infer env expr = do
             -- It probably makes more sense to check the arguments directly against their kinds
             -- but if we want to do that, we need to duplicate the instantiateWith logic again.
             (_kinds, typeArguments, typeArgumentSyntax) <- unzip3Seq <$> for typeArguments (inferType env)
-            (type_, ()) <- instantiateWith InstantiateInferredToMeta InstantiateRemainingToMeta (\_ _ -> ()) loc env typeArguments type_
+            type_ <- instantiateWith loc env type_ typeArguments
             pure (type_, VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax}, Pure)
         Lambda loc typeParameters parameters body -> do
             case typeParameters of
@@ -576,102 +578,91 @@ substituteTypeVariables substitution type_ =
         type_@BoxedRep -> pure type_
         type_@Kind -> pure type_
 
-data OnInferred
-    = -- | Instantiate inferred parameters to fresh meta variables
-      InstantiateInferredToMeta
-    | -- | Turn inferred parameters into fresh skolems
-      SkolemizeInferred
-    | -- | Instantiate inferred parameters with the given arguments
-      -- as if they were visible
-      ApplyInferred
+data InstantiationResult
+    = -- | Stop instantiating and keep the affected binder intact
+      StopInstantiating
+    | -- | Instantiate this parameter with the given type but stop after it
+      LastInstantiation Type
+    | -- | Instantiate this type parameter with the given type and keep going
+      InstantiateWith Type
 
-data OnRemaining
-    = -- | Instantiate remaining parameters (visible or inferred) to fresh meta variables
-      InstantiateRemainingToMeta
-    | -- | Turn remaining parameters (visible or inferred) into fresh skolems
-      SkolemizeRemaining
-    | -- | Leave any remaining type parameters after the last one that was applied as they are
-      IgnoreRemaining
+instantiateToMetaStrategy :: (TypeCheck es) => Loc -> Env -> ForallBinder -> Eff es InstantiationResult
+instantiateToMetaStrategy loc env MkForallBinder{varName, visibility = _, kind, monomorphization} = do
+    meta <- MetaVar <$> freshMeta varName.name kind
+    assertMonomorphizability loc env meta monomorphization
+    pure (InstantiateWith meta)
 
-{- | Fill in the type parameters of a polytype with the given argument types.
+skolemizeStrategy :: (TypeCheck es) => Loc -> Env -> ForallBinder -> Eff es InstantiationResult
+skolemizeStrategy loc env MkForallBinder{varName, visibility = _, kind, monomorphization} = do
+    skolem <- Skolem <$> freshSkolem varName monomorphization kind
+    pure (InstantiateWith skolem)
 
-The 'OnInferred' argument specifies what to do with inferred type parameters leading up to the
-last applied parameter.
-
-The 'OnRemaining' argument specifies what to do with remaining type parameters after all 'arguments' have been applied.
-
-The third argument can be used to get a side output from bound type parameters. In particular, with m ~ Endo Env this can
-be used to build up an environment transformer that binds type variables
--}
-instantiateWith ::
-    (TypeCheck es, Monoid m) =>
-    OnInferred ->
-    OnRemaining ->
-    (ForallBinder -> Type -> m) ->
+instantiateGeneric ::
+    forall es.
+    (TypeCheck es) =>
+    (Loc -> Env -> ForallBinder -> Eff es InstantiationResult) ->
+    (Loc -> Env -> ForallBinder -> Eff es InstantiationResult) ->
     Loc ->
     Env ->
-    Seq Type ->
     Type ->
-    Eff es (Type, m)
-instantiateWith onInferred onRemaining makeOutput loc env arguments type_ = runWriter case normalizeForalls type_ of
+    Eff es Type
+instantiateGeneric onInferred onVisible loc env type_ = case normalizeForalls type_ of
     Forall binders body -> do
-        -- We take the kind as a second parameter here since we need to apply the substitution to it
-        -- and we don't want to duplicate that work if we have already done so before calling this.
-        --
-        -- Notably, this function does *NOT* apply the substitution itself, so make sure you apply it yourself
-        -- before calling this
-        let applyArgument binder@MkForallBinder{varName, monomorphization, visibility = _} kind argument substitution = do
-                checkEvaluatedType loc env kind argument
-                assertMonomorphizability loc env argument monomorphization
-
-                tell (makeOutput binder{kind} argument)
-                pure (insert varName argument substitution)
-
-        let go substitution Empty Empty = substituteTypeVariables substitution body
-            go substitution Empty _ = undefined
-            go substitution (binder@MkForallBinder{varName, kind, monomorphization, visibility = _} :<| binders) Empty = case onRemaining of
-                InstantiateRemainingToMeta -> do
-                    kind <- substituteTypeVariables substitution kind
-                    meta <- MetaVar <$> freshMeta varName.name kind
-                    assertMonomorphizability loc env meta monomorphization
-                    substitution <- applyArgument binder kind meta substitution
-                    go substitution binders Empty
-                SkolemizeRemaining -> do
-                    kind <- substituteTypeVariables substitution kind
-                    skolem <- freshSkolem varName monomorphization kind
-                    substitution <- applyArgument binder kind (Skolem skolem) substitution
-                    go substitution binders Empty
-                IgnoreRemaining -> substituteTypeVariables substitution (Forall (binder :<| binders) body)
-            go substitution (binder@MkForallBinder{visibility = Visible, kind} :<| binders) (argument :<| arguments) = do
+        let substituteBinder substitution MkForallBinder{varName, visibility, kind, monomorphization} = do
                 kind <- substituteTypeVariables substitution kind
-                substitution <- applyArgument binder kind argument substitution
-                go substitution binders arguments
-            go substitution (binder@MkForallBinder{visibility = Inferred, varName, kind, monomorphization} :<| binders) (argument :<| arguments) = case onInferred of
-                ApplyInferred -> do
-                    kind <- substituteTypeVariables substitution kind
-                    substitution <- applyArgument binder kind argument substitution
-                    go substitution binders arguments
-                InstantiateInferredToMeta -> do
-                    kind <- substituteTypeVariables substitution kind
-                    meta <- MetaVar <$> freshMeta varName.name kind
-                    assertMonomorphizability loc env meta monomorphization
-                    substitution <- applyArgument binder kind meta substitution
-                    go substitution binders arguments
-                SkolemizeInferred -> do
-                    kind <- substituteTypeVariables substitution kind
-                    skolem <- freshSkolem varName monomorphization kind
-                    substitution <- applyArgument binder kind (Skolem skolem) substitution
-                    go substitution binders arguments
-        go mempty binders arguments
-    _ -> case arguments of
+                pure (MkForallBinder{varName, visibility, kind, monomorphization})
+
+        let go substitution = \case
+                Empty -> substituteTypeVariables substitution body
+                binder :<| remainingBinders -> do
+                    binder <- substituteBinder substitution binder
+
+                    result <- case binder.visibility of
+                        Inferred -> onInferred loc env binder
+                        Visible -> onVisible loc env binder
+                    case result of
+                        StopInstantiating -> substituteTypeVariables substitution (Forall (binder :<| remainingBinders) body)
+                        LastInstantiation type_ -> substituteTypeVariables (insert binder.varName type_ substitution) (Forall remainingBinders body)
+                        InstantiateWith type_ -> go (insert binder.varName type_ substitution) remainingBinders
+        go mempty binders
+    type_ -> pure type_
+
+instantiateWith :: (TypeCheck es) => Loc -> Env -> Type -> Seq Type -> Eff es Type
+instantiateWith loc env polytype initialArguments = evalState initialArguments do
+    let onVisible _loc _env _forallBinder = do
+            arguments <- get @(Seq Type)
+            case arguments of
+                Empty -> pure StopInstantiating
+                (argument :<| Empty) -> do
+                    put @(Seq Type) Empty
+                    pure (LastInstantiation argument)
+                (argument :<| rest) -> do
+                    put rest
+                    pure (InstantiateWith argument)
+
+    type_ <- instantiateGeneric instantiateToMetaStrategy onVisible loc env polytype
+    remainingArguments <- get @(Seq Type)
+    case remainingArguments of
         Empty -> pure type_
-        _ -> undefined
+        _ -> do
+            let parameterCount = case normalizeForalls polytype of
+                    Forall binders _ -> length binders
+                    _ -> 0
+            typeError
+                ( TypeApplicationWithTooFewParameters
+                    { loc
+                    , parameterCount
+                    , typeArgumentCount = length initialArguments
+                    , instantiatedType = polytype
+                    }
+                )
+            pure type_
 
 instantiate :: (TypeCheck es) => Loc -> Env -> Type -> Eff es Type
-instantiate loc env type_ = fst <$> instantiateWith InstantiateInferredToMeta InstantiateRemainingToMeta (\_ _ _ -> ()) loc env [] type_
+instantiate loc env type_ = instantiateGeneric instantiateToMetaStrategy instantiateToMetaStrategy loc env type_
 
 skolemize :: (TypeCheck es) => Loc -> Env -> Type -> Eff es Type
-skolemize loc env type_ = fst <$> instantiateWith SkolemizeInferred SkolemizeRemaining (\_ _ _ -> ()) loc env [] type_
+skolemize loc env type_ = instantiateGeneric skolemizeStrategy skolemizeStrategy loc env type_
 
 {- | Collect repeated foralls into a single one.
 For example, this will turn `forall a b. forall c d. Int` into `forall a b c d. Int`

@@ -124,9 +124,10 @@ data TypeError
         { loc :: Loc
         , type_ :: Type
         }
-    | TryingToBindTypeParameterOfMonotype
+    | TryingToBindTooManyTypeParameters
         { loc :: Loc
-        , parameter :: LocalName
+        , boundCount :: Int
+        , actualCount :: Int
         , type_ :: Type
         }
     | TypeApplicationWithTooFewParameters
@@ -134,11 +135,6 @@ data TypeError
         , typeArgumentCount :: Int
         , instantiatedType :: Type
         , parameterCount :: Int
-        }
-    | TypeApplicationToMonoType
-        { loc :: Loc
-        , instantiatedType :: Type
-        , typeArgumentCount :: Int
         }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
@@ -359,17 +355,20 @@ renderCompilationError = \case
                 emphasis "Unable to monomorphize ambiguous type" <+> pretty type_
                     <> "\n"
                     <> note "    Try adding a type signature"
-        TryingToBindTypeParameterOfMonotype{loc = _, type_, parameter} ->
+        TryingToBindTooManyTypeParameters{loc = _, type_, boundCount, actualCount=0} ->
             align $
-                emphasis "Trying to bind type parameter" <+> prettyLocal VarKind parameter <+> emphasis "of a type that doesn't have any remaining type parameters."
-                    <> "\n  Type" <+> pretty type_
-                    <> "\n  does not include a top-level" <+> keyword "forall"
-        TypeApplicationWithTooFewParameters{loc=_, typeArgumentCount, parameterCount, instantiatedType} ->
-            align $ emphasis "Trying to apply" <+> pluralNumber typeArgumentCount "type argument" <+> emphasis "to a type that only expects" <+> number parameterCount
-            <> "\n  In a type application of type" <+> pretty instantiatedType
-        TypeApplicationToMonoType{loc=_, typeArgumentCount, instantiatedType} ->
+                emphasis "Trying to bind" <+> pluralNumber boundCount "type parameter" <+> emphasis"of the" <+> emphasis "monomorphic type"
+                    <> "\n  " <> pretty type_
+        TryingToBindTooManyTypeParameters{loc = _, type_, boundCount, actualCount} ->
+            align $
+                emphasis "Trying to bind" <+> pluralNumber boundCount "type parameter" <+> emphasis "of a type that only has" <+> number actualCount
+                    <> "\n  While trying to bind type parameters of type" <+> pretty type_
+        TypeApplicationWithTooFewParameters{loc=_, parameterCount=0, typeArgumentCount, instantiatedType} ->
             align $ emphasis "Trying to apply" <+> pluralNumber typeArgumentCount "type argument" <+> emphasis "to a monomorphic type"
             <> "\n  In a type application of type" <+> pretty instantiatedType 
+        TypeApplicationWithTooFewParameters{loc=_, parameterCount, typeArgumentCount, instantiatedType} ->
+            align $ emphasis "Trying to apply" <+> pluralNumber typeArgumentCount "type argument" <+> emphasis "to a type that only expects" <+> number parameterCount
+            <> "\n  In a type application of type" <+> pretty instantiatedType
 
     DriverError error -> pure $ case error of
         EntryPointNotFound entryPoint ->
