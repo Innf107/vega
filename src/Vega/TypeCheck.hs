@@ -1,5 +1,7 @@
 {-# OPTIONS_GHC -Wno-ambiguous-fields #-}
 
+-- TODO: fill in all unification variables before returning errors
+
 module Vega.TypeCheck (checkDeclaration) where
 
 import Vega.Syntax
@@ -263,13 +265,14 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
         SequenceBlock{loc, statements} -> do
             undefined
         TupleLiteral loc elements -> do
-            elementTypes <- followMetas expectedType >>= \case
-                Tuple elementTypes -> pure elementTypes
-                _ -> do
-                    elementTypes <- for elements \_ -> do
-                        MetaVar <$> freshTypeMeta loc env "t" 
-                    subsumes loc env (Tuple elementTypes) expectedType
-                    pure elementTypes
+            elementTypes <-
+                followMetas expectedType >>= \case
+                    Tuple elementTypes -> pure elementTypes
+                    _ -> do
+                        elementTypes <- for elements \_ -> do
+                            MetaVar <$> freshTypeMeta loc env "t"
+                        subsumes loc env (Tuple elementTypes) expectedType
+                        pure elementTypes
             when (length elementTypes /= length elements) do
                 undefined
 
@@ -342,13 +345,29 @@ infer env expr = do
             (arguments, argumentEffects) <- Seq.unzip <$> zipWithSeqM checkArguments arguments argumentTypes
             finalEffect <- pure functionExprEffect `unionM` unionAll argumentEffects `unionM` pure functionEffect
             pure (returnType, Application{loc, functionExpr, arguments}, finalEffect)
-        VisibleTypeApplication{loc, varName, typeArguments} -> do
+        VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax} -> do
             type_ <- varType env varName
 
-            -- TODO: we're currently inferring the arguments first and then calling into instantiate.
-            -- It probably makes more sense to check the arguments directly against their kinds
-            -- but if we want to do that, we need to duplicate the instantiateWith logic again.
-            (_kinds, typeArguments, typeArgumentSyntax) <- unzip3Seq <$> for typeArguments (inferType env)
+            let kinds = case normalizeForalls type_ of
+                    Forall binders _ -> fromList [kind | MkForallBinder{visibility = Visible, kind} <- toList binders]
+                    _ -> []
+
+            when (length kinds < length typeArgumentSyntax) do
+                typeError
+                    ( TypeApplicationWithTooFewParameters
+                        { loc
+                        , typeArgumentCount = length typeArgumentSyntax
+                        , instantiatedType = type_
+                        , parameterCount = length kinds
+                        }
+                    )
+
+            -- If we have fewer arguments than the type has parameters, that is okay.
+            -- `zip` will ignore the kinds of the parameters coming after it
+            (typeArguments, typeArgumentSyntax) <-
+                Seq.unzip <$> for (Seq.zip typeArgumentSyntax kinds) \(argument, kind) -> do
+                    checkType env kind argument
+
             type_ <- instantiateWith loc env type_ typeArguments
             pure (type_, VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax}, Pure)
         Lambda loc typeParameters parameters body -> do
@@ -668,6 +687,7 @@ instantiateWith loc env polytype initialArguments = evalState initialArguments d
             let parameterCount = case normalizeForalls polytype of
                     Forall binders _ -> length binders
                     _ -> 0
+            -- TODO: this might not be a type application
             typeError
                 ( TypeApplicationWithTooFewParameters
                     { loc

@@ -323,8 +323,7 @@ renderCompilationError = \case
         AmbiguousMono{loc = _, type_} ->
             align $
                 emphasis "Unable to monomorphize ambiguous type" <+> pretty type_
-                    <> "\n"
-                    <> note "    Try adding a type signature"
+                    <> "\n    Try adding a type signature"
         TryingToBindTooManyTypeParameters{loc = _, type_, boundCount, actualCount=0} ->
             align $
                 emphasis "Trying to bind" <+> pluralNumber boundCount "type parameter" <+> emphasis"of the" <+> emphasis "monomorphic type"
