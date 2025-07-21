@@ -61,7 +61,6 @@ import Data.Text.IO qualified as Text
 import Data.Unique (Unique, hashUnique, newUnique)
 import Data.Vector ((!))
 import GHC.Generics
-import System.IO.Unsafe (unsafePerformIO)
 
 data Ann
     = LocalIdent

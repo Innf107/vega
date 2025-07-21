@@ -372,7 +372,7 @@ infer env expr = do
                 Seq.unzip <$> for (Seq.zip typeArgumentSyntax kinds) \(argument, kind) -> do
                     checkType env kind argument
 
-            type_ <- instantiateWith loc env type_ typeArguments
+            type_ <- instantiate loc env =<< instantiateWith loc env type_ typeArguments
             pure (type_, VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax}, Pure)
         Lambda loc typeParameters parameters body -> do
             case typeParameters of
