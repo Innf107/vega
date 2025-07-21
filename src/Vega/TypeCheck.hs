@@ -263,7 +263,21 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
         SequenceBlock{loc, statements} -> do
             undefined
         TupleLiteral loc elements -> do
-            undefined
+            elementTypes <- followMetas expectedType >>= \case
+                Tuple elementTypes -> pure elementTypes
+                _ -> do
+                    elementTypes <- for elements \_ -> do
+                        MetaVar <$> freshTypeMeta loc env "t" 
+                    subsumes loc env (Tuple elementTypes) expectedType
+                    pure elementTypes
+            when (length elementTypes /= length elements) do
+                undefined
+
+            (elements, effects) <- fmap Seq.unzip $ for (Seq.zip elements elementTypes) \(element, elementType) -> do
+                check env elementType element
+
+            effect <- unionAll effects
+            pure (TupleLiteral loc elements, effect)
         PartialApplication{} -> undefined
         BinaryOperator{} -> undefined
         Match{} -> undefined
