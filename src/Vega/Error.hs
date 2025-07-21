@@ -1,7 +1,7 @@
 {-# LANGUAGE RecordWildCards #-}
 
 module Vega.Error (
-    LexicalError(..),
+    LexicalError (..),
     CompilationError (..),
     RenameError (..),
     RenameErrorSet (..),
@@ -17,20 +17,20 @@ module Vega.Error (
 
 import Relude hiding (Type)
 
+import Data.List.NonEmpty qualified as NonEmpty
+import Data.Sequence (Seq (..))
 import Data.Text qualified as Text
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
-import Vega.Loc (HasLoc, Loc (..), getLoc)
-import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, keyword, localIdentText, note, number, plain, vsep, (<+>), intercalateDoc)
-import Vega.Syntax (GlobalName (..), Kind, LocalName, NameKind (..), Type, prettyGlobal, prettyGlobalText, prettyLocal)
-import Text.Megaparsec (ParseErrorBundle, ParseError (..), ErrorFancy (..), ErrorItem (..))
-import Vega.Parser (AdditionalParseError (..))
+import Text.Megaparsec (ErrorFancy (..), ErrorItem (..), ParseError (..), ParseErrorBundle)
+import Text.Megaparsec.Error (ParseErrorBundle (..))
 import Vega.Lexer.Token (Token)
-import qualified Vega.Parser as Parser
-import Text.Megaparsec.Error (ParseErrorBundle(..))
-import Data.Sequence (Seq(..))
+import Vega.Loc (HasLoc, Loc (..), getLoc)
+import Vega.Parser (AdditionalParseError (..))
+import Vega.Parser qualified as Parser
+import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, note, number, plain, vsep, (<+>))
+import Vega.Syntax (GlobalName (..), Kind, LocalName, NameKind (..), Type, prettyGlobal, prettyGlobalText, prettyLocal)
 import Vega.Util (viaList)
-import qualified Data.List.NonEmpty as NonEmpty
 
 data CompilationError
     = LexicalError LexicalError
@@ -131,6 +131,7 @@ data TypeError
     deriving anyclass (HasLoc)
 
 newtype TypeErrorSet = MkTypeErrorSet (Seq TypeError)
+    deriving stock (Generic)
 
 data DriverError
     = EntryPointNotFound GlobalName
@@ -300,7 +301,8 @@ renderCompilationError = \case
             } ->
                 align $
                     emphasis "Type constructor applied to an incorrect number of arguments.\n"
-                        <> emphasis "  expected     " <+> pluralNumber expectedNumber "argument" <> "\n"
+                        <> emphasis "  expected     " <+> pluralNumber expectedNumber "argument"
+                        <> "\n"
                         <> emphasis "  but received " <+> number actualNumber
                         <> "\n"
                         <> "    In an application of type" <+> pretty type_
@@ -324,21 +326,23 @@ renderCompilationError = \case
             align $
                 emphasis "Unable to monomorphize ambiguous type" <+> pretty type_
                     <> "\n    Try adding a type signature"
-        TryingToBindTooManyTypeParameters{loc = _, type_, boundCount, actualCount=0} ->
+        TryingToBindTooManyTypeParameters{loc = _, type_, boundCount, actualCount = 0} ->
             align $
-                emphasis "Trying to bind" <+> pluralNumber boundCount "type parameter" <+> emphasis"of the" <+> emphasis "monomorphic type"
-                    <> "\n  " <> pretty type_
+                emphasis "Trying to bind" <+> pluralNumber boundCount "type parameter" <+> emphasis "of the" <+> emphasis "monomorphic type"
+                    <> "\n  "
+                    <> pretty type_
         TryingToBindTooManyTypeParameters{loc = _, type_, boundCount, actualCount} ->
             align $
                 emphasis "Trying to bind" <+> pluralNumber boundCount "type parameter" <+> emphasis "of a type that only has" <+> number actualCount
                     <> "\n  While trying to bind type parameters of type" <+> pretty type_
-        TypeApplicationWithTooFewParameters{loc=_, parameterCount=0, typeArgumentCount, instantiatedType} ->
-            align $ emphasis "Trying to apply" <+> pluralNumber typeArgumentCount "type argument" <+> emphasis "to a monomorphic type"
-            <> "\n  In a type application of type" <+> pretty instantiatedType 
-        TypeApplicationWithTooFewParameters{loc=_, parameterCount, typeArgumentCount, instantiatedType} ->
-            align $ emphasis "Trying to apply" <+> pluralNumber typeArgumentCount "type argument" <+> emphasis "to a type that only expects" <+> number parameterCount
-            <> "\n  In a type application of type" <+> pretty instantiatedType
-
+        TypeApplicationWithTooFewParameters{loc = _, parameterCount = 0, typeArgumentCount, instantiatedType} ->
+            align $
+                emphasis "Trying to apply" <+> pluralNumber typeArgumentCount "type argument" <+> emphasis "to a monomorphic type"
+                    <> "\n  In a type application of type" <+> pretty instantiatedType
+        TypeApplicationWithTooFewParameters{loc = _, parameterCount, typeArgumentCount, instantiatedType} ->
+            align $
+                emphasis "Trying to apply" <+> pluralNumber typeArgumentCount "type argument" <+> emphasis "to a type that only expects" <+> number parameterCount
+                    <> "\n  In a type application of type" <+> pretty instantiatedType
     DriverError error -> pure $ case error of
         EntryPointNotFound entryPoint ->
             PlainError $
@@ -354,10 +358,8 @@ renderCompilationError = \case
         PlainError $ MkPlainErrorMessage $ align $ errorText "PANIC (the 'impossible' happened): " <> emphasis (show exception)
 
 pluralNumber :: Int -> Text -> Doc Ann
-pluralNumber 1 text = number @Int 1 <+> emphasis text 
+pluralNumber 1 text = number @Int 1 <+> emphasis text
 pluralNumber n text = number n <+> emphasis (text <> "s")
-
-
 
 generateParseErrorMessages :: ParseErrorBundle [(Token, Loc)] Parser.AdditionalParseError -> Seq ErrorMessageWithLoc
 generateParseErrorMessages (ParseErrorBundle{bundleErrors, bundlePosState = _bundlePosState}) =

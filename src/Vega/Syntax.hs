@@ -282,7 +282,7 @@ data ForallBinder = MkForallBinder
     , visibility :: BinderVisibility
     , kind :: Kind
     , monomorphization :: Monomorphization
-    }
+    } deriving stock Generic
 
 type EffectSyntax = TypeSyntax
 
