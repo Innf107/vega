@@ -147,7 +147,7 @@ globalConstructorKind name = do
     GraphPersistence.getGlobalKind name >>= \case
         Left cachedKind -> pure cachedKind
         Right syntax -> do
-            (kind, _synax) <- checkType emptyEnv Kind syntax
+            (kind, _synax) <- checkType emptyEnv Parametric Kind syntax
             GraphPersistence.cacheGlobalKind name kind
             pure kind
 
@@ -155,7 +155,7 @@ checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> 
 checkDeclarationSyntax loc = \case
     DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body} -> do
         let env = emptyEnv
-        (functionType, typeSignature) <- checkType env (Type BoxedRep) typeSignature
+        (functionType, typeSignature) <- checkType env Parametric (Type BoxedRep) typeSignature
 
         (env, remainingType) <- bindTypeParameters loc env declaredTypeParameters functionType
 
@@ -352,25 +352,25 @@ infer env expr = do
         VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax} -> do
             type_ <- varType env varName
 
-            let kinds = case normalizeForalls type_ of
-                    Forall binders _ -> fromList [kind | MkForallBinder{visibility = Visible, kind} <- toList binders]
+            let visibleBinders = case normalizeForalls type_ of
+                    Forall binders _ -> fromList [binder | binder@MkForallBinder{visibility = Visible} <- toList binders]
                     _ -> []
 
-            when (length kinds < length typeArgumentSyntax) do
+            when (length visibleBinders < length typeArgumentSyntax) do
                 typeError
                     ( TypeApplicationWithTooFewParameters
                         { loc
                         , typeArgumentCount = length typeArgumentSyntax
                         , instantiatedType = type_
-                        , parameterCount = length kinds
+                        , parameterCount = length visibleBinders
                         }
                     )
 
             -- If we have fewer arguments than the type has parameters, that is okay.
-            -- `zip` will ignore the kinds of the parameters coming after it
+            -- `zip` will ignore the binders of excess parameters
             (typeArguments, typeArgumentSyntax) <-
-                Seq.unzip <$> for (Seq.zip typeArgumentSyntax kinds) \(argument, kind) -> do
-                    checkType env kind argument
+                Seq.unzip <$> for (Seq.zip typeArgumentSyntax visibleBinders) \(argument, binder) -> do
+                    checkType env binder.monomorphization binder.kind argument
 
             type_ <- instantiate loc env =<< instantiateWith loc env type_ typeArguments
             pure (type_, VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax}, Pure)
@@ -416,10 +416,11 @@ constructorKind env name = case name of
         Nothing -> error $ "local type constructor " <> show name <> " not found in type checker"
         Just kind -> pure kind
 
-checkType :: (TypeCheck es) => Env -> Kind -> TypeSyntax Renamed -> Eff es (Type, TypeSyntax Typed)
-checkType env expectedKind syntax = withTrace KindCheck ("checkType: " <> showHeadConstructor syntax <> keyword " <= " <> pretty expectedKind) do
+checkType :: (TypeCheck es) => Env -> Monomorphization -> Kind -> TypeSyntax Renamed -> Eff es (Type, TypeSyntax Typed)
+checkType env expectedMonomorphizability expectedKind syntax = withTrace KindCheck ("checkType: " <> showHeadConstructor syntax <> keyword " <= " <> pretty expectedKind) do
     (kind, type_, syntax) <- inferType env syntax
     subsumes (getLoc syntax) env kind expectedKind
+    assertMonomorphizability (getLoc syntax) env type_ expectedMonomorphizability
     pure (type_, syntax)
 
 inferType :: (TypeCheck es) => Env -> TypeSyntax Renamed -> Eff es (Kind, Type, TypeSyntax Typed)
@@ -437,7 +438,7 @@ inferType env syntax = do
             case constructorKind of
                 Function argumentKinds Pure resultKind
                     | length argumentKinds == length argumentsSyntax -> do
-                        (arguments, argumentsSyntax) <- Seq.unzip <$> zipWithSeqM (checkType env) argumentKinds argumentsSyntax
+                        (arguments, argumentsSyntax) <- Seq.unzip <$> zipWithSeqM (checkType env Parametric) argumentKinds argumentsSyntax
                         pure
                             ( resultKind
                             , TypeApplication typeConstructor arguments
@@ -479,7 +480,7 @@ inferType env syntax = do
             pure (Type BoxedRep, Function parameterTypes Pure resultType, PureFunctionS loc parameterTypeSyntax resultTypeSyntax)
         FunctionS loc parameters effect result -> do
             (_parameterReps, parameterTypes, parameterTypeSyntax) <- unzip3Seq <$> traverse (inferTypeRep env) parameters
-            (effect, effectSyntax) <- checkType env Effect effect
+            (effect, effectSyntax) <- checkType env Parametric Effect effect
             (_resultRep, resultType, resultTypeSyntax) <- inferTypeRep env result
             pure (Type BoxedRep, Function parameterTypes effect resultType, FunctionS loc parameterTypeSyntax effectSyntax resultTypeSyntax)
         TupleS loc elements -> do
@@ -487,14 +488,14 @@ inferType env syntax = do
             pure (Type (ProductRep elementReps), Tuple elementTypes, TupleS loc elementTypeSyntax)
         RepS loc -> pure (Kind, Rep, RepS loc)
         TypeS loc repSyntax -> do
-            (rep, repSyntax) <- checkType env Rep repSyntax
+            (rep, repSyntax) <- checkType env Parametric Rep repSyntax
             pure (Kind, Type rep, TypeS loc repSyntax)
         EffectS loc -> pure (Kind, Effect, EffectS loc)
         SumRepS loc elementSyntax -> do
-            (elements, elementSyntax) <- Seq.unzip <$> traverse (checkType env Rep) elementSyntax
+            (elements, elementSyntax) <- Seq.unzip <$> traverse (checkType env Parametric Rep) elementSyntax
             pure (Rep, SumRep elements, SumRepS loc elementSyntax)
         ProductRepS loc elementSyntax -> do
-            (elements, elementSyntax) <- Seq.unzip <$> traverse (checkType env Rep) elementSyntax
+            (elements, elementSyntax) <- Seq.unzip <$> traverse (checkType env Parametric Rep) elementSyntax
             pure (Rep, ProductRep elements, ProductRepS loc elementSyntax)
         UnitRepS loc -> pure (Rep, UnitRep, UnitRepS loc)
         EmptyRepS loc -> pure (Rep, EmptyRep, EmptyRepS loc)
@@ -504,14 +505,14 @@ inferType env syntax = do
 inferTypeRep :: (TypeCheck es) => Env -> TypeSyntax Renamed -> Eff es (Kind, Type, TypeSyntax Typed)
 inferTypeRep env typeSyntax = do
     rep <- MetaVar <$> freshMeta "r" Rep
-    -- We don't need a 'monomorphized' constraint here. It might seem like we would, but
+    -- We don't need a 'monomorphized' constraint on rep here. It might seem like we would, but
     -- since we check against (Type rep), we will only unify `rep` if the infererd kind has
     -- the form ̀`Type _` and in that case the argument to Type will have to
     -- have been checked for monomorphizability already.
     --
     -- Skipping the extra constraint here reduces the number of duplicated error messages
     -- for the same issue.
-    (type_, typeSyntax) <- checkType env (Type rep) typeSyntax
+    (type_, typeSyntax) <- checkType env Parametric (Type rep) typeSyntax
     pure (rep, type_, typeSyntax)
 
 kindOf :: (TypeCheck es) => Env -> Type -> Eff es Kind
@@ -555,7 +556,7 @@ applyForallBinder :: (TypeCheck es) => Env -> ForallBinderS Renamed -> Eff es (E
 applyForallBinder env = \case
     UnspecifiedBinderS{loc, varName, monomorphization} -> undefined
     TypeVarBinderS{loc, visibility, monomorphization, varName, kind = kindSyntax} -> do
-        (kind, kindSyntax) <- checkType env Kind kindSyntax
+        (kind, kindSyntax) <- checkType env Parametric Kind kindSyntax
         -- TODO: not entirely sure if this is the right place for this
         monomorphized loc env kind
         pure
