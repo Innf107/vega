@@ -3,7 +3,7 @@
 
 module Vega.Parser (Parser, AdditionalParseError (..), parse) where
 
-import Relude hiding (many)
+import Relude hiding (many, NonEmpty)
 
 import Vega.Syntax hiding (forall_)
 
@@ -14,6 +14,7 @@ import Text.Megaparsec qualified as MegaParsec
 import Vega.Lexer.Token as Lexer (Token (..))
 import Vega.Loc (HasLoc, Loc (MkLoc, endColumn, endLine, file, startColumn, startLine), getLoc)
 import Vega.Syntax qualified as Syntax
+import Vega.Seq.NonEmpty (NonEmpty, pattern (:<||))
 
 data AdditionalParseError
     = MismatchedFunctionName
@@ -89,11 +90,12 @@ constructor = fmap fst constructorWithLoc
 many :: (IsList l, Item l ~ a, MonadPlus m) => m a -> m l
 many parser = fromList <$> MegaParsec.many parser
 
-many1 :: (IsList l, Item l ~ a, MonadPlus m) => m a -> m l
-many1 parser = do
+many1Seq :: (MonadPlus m) => m a -> m (NonEmpty a)
+many1Seq parser = do
     first <- parser
     rest <- many parser
-    pure $ fromList (first : rest)
+    pure $ (first :<|| rest)
+
 
 sepBy :: (MonadPlus m, IsList l, Item l ~ a) => m a -> m sep -> m l
 sepBy item separator = fromList <$> MegaParsec.sepBy item separator
@@ -284,7 +286,7 @@ effectArrow = do
 forall_ :: Parser (TypeSyntax Parsed)
 forall_ = do
     startLoc <- single Lexer.Forall
-    vars <- many1 typeVarBinder
+    vars <- many1Seq typeVarBinder
     _ <- single Lexer.Period
     remainingType <- type_
     pure (ForallS (startLoc <> getLoc remainingType) vars remainingType)

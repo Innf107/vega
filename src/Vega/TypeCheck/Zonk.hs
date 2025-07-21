@@ -2,7 +2,7 @@
 
 module Vega.TypeCheck.Zonk (Zonkable, zonk) where
 
-import Relude hiding (Type)
+import Relude hiding (NonEmpty, Type)
 import Vega.Syntax
 
 import Data.Unique (Unique)
@@ -11,6 +11,7 @@ import GHC.Generics (Generic)
 import GHC.Generics qualified as Generics
 import Vega.Error (TypeError, TypeErrorSet)
 import Vega.Loc (Loc)
+import Vega.Seq.NonEmpty (NonEmpty)
 
 class Zonkable a where
     default zonk :: (IOE :> es) => (Generic a, ZonkableGeneric (Generics.Rep a)) => a -> Eff es a
@@ -53,6 +54,9 @@ instance (Generic a, ZonkableGeneric (Generics.Rep a)) => Zonkable (Generics.Gen
     zonk (Generics.Generically x) = Generics.Generically . Generics.to <$> zonkGeneric (Generics.from x)
 
 instance (Zonkable a) => Zonkable (Seq a) where
+    zonk seq = traverse zonk seq
+
+instance (Zonkable a) => Zonkable (NonEmpty a) where
     zonk seq = traverse zonk seq
 
 instance (Zonkable a) => Zonkable (Maybe a)

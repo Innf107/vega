@@ -231,7 +231,7 @@ renameTypeSyntax env = \case
 renameKindSyntax :: (Rename es) => Env -> KindSyntax Parsed -> Eff es (KindSyntax Renamed)
 renameKindSyntax = renameTypeSyntax
 
-renameTypeVarBinders :: (Rename es) => Env -> Seq (ForallBinderS Parsed) -> Eff es (Env, Seq (ForallBinderS Renamed))
+renameTypeVarBinders :: (Traversable t, Rename es) => Env -> t (ForallBinderS Parsed) -> Eff es (Env, t (ForallBinderS Renamed))
 renameTypeVarBinders env binders = mapAccumLM renameForallBinder env binders
 
 renameForallBinder :: (Rename es) => Env -> ForallBinderS Parsed -> Eff es (Env, ForallBinderS Renamed)

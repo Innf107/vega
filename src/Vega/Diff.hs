@@ -2,7 +2,7 @@
 
 module Vega.Diff (DiffChange (..), Diff (..), diffDeclarations, reportNewModule) where
 
-import Relude hiding (Type, evalState, get, put)
+import Relude hiding (Type, evalState, get, put, NonEmpty)
 
 import Vega.Syntax (
     BinaryOperator,
@@ -34,6 +34,7 @@ import Data.Sequence qualified as Seq
 import Effectful.State.Static.Local (evalState, get, put)
 import Vega.Effect.Output.Static.Local (execOutputSeq, output, outputAll)
 import Vega.Util qualified as Util
+import Vega.Seq.NonEmpty (NonEmpty, toSeq)
 
 data DiffChange
     = Added (Declaration Parsed)
@@ -105,6 +106,9 @@ instance (Diff a) => Diff (Seq a) where
     diff seq1 seq2 =
         (Seq.length seq1 /= Seq.length seq2)
             || Util.seqAny2 diff seq1 seq2
+
+instance Diff a => Diff (NonEmpty a) where
+    diff seq1 seq2 = diff (toSeq seq1) (toSeq seq2)
 
 deriving via Generically (Maybe a) instance (Diff a) => Diff (Maybe a)
 deriving via Generically (Either a b) instance (Diff a, Diff b) => Diff (Either a b)

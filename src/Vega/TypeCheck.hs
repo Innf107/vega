@@ -31,6 +31,8 @@ import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>))
 import Vega.TypeCheck.Zonk (zonk)
 import Vega.Util (assert)
 import Vega.Util qualified as Util
+import qualified Vega.Seq.NonEmpty as NonEmpty
+import Vega.Seq.NonEmpty (toSeq)
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -463,7 +465,7 @@ inferType env syntax = do
             pure (kind, actualType, TypeVarS loc localName)
         ForallS loc typeVarBinders body -> do
             (env, typeVarBindersAndSyntax) <- mapAccumLM applyForallBinder env typeVarBinders
-            let (typeVarBinders, typeVarBinderSyntax) = Seq.unzip typeVarBindersAndSyntax
+            let (typeVarBinders, typeVarBinderSyntax) = NonEmpty.unzip typeVarBindersAndSyntax
 
             (kind, body, bodySyntax) <- inferType env body
 
@@ -665,10 +667,10 @@ instantiateGeneric onInferred onVisible loc env type_ = case normalizeForalls ty
                         Inferred -> onInferred loc env binder
                         Visible -> onVisible loc env binder
                     case result of
-                        StopInstantiating -> substituteTypeVariables substitution (Forall (binder :<| remainingBinders) body)
-                        LastInstantiation type_ -> substituteTypeVariables (insert binder.varName type_ substitution) (Forall remainingBinders body)
+                        StopInstantiating -> substituteTypeVariables substitution (forall_ (binder :<| remainingBinders) body)
+                        LastInstantiation type_ -> substituteTypeVariables (insert binder.varName type_ substitution) (forall_ remainingBinders body)
                         InstantiateWith type_ -> go (insert binder.varName type_ substitution) remainingBinders
-        go mempty binders
+        go mempty (toSeq binders)
     type_ -> pure type_
 
 instantiateWith :: (TypeCheck es) => Loc -> Env -> Type -> Seq Type -> Eff es Type
@@ -717,8 +719,8 @@ This is a very cheap operation (O(#foralls))
 normalizeForalls :: Type -> Type
 normalizeForalls = go []
   where
-    go totalBinders (Forall binders body) = go (totalBinders <> binders) body
-    go totalBinders type_ = Forall totalBinders type_
+    go totalBinders (Forall binders body) = go (totalBinders <> toSeq binders) body
+    go totalBinders type_ = forall_ totalBinders type_
 
 subsumes :: (TypeCheck es) => Loc -> Env -> Type -> Type -> Eff es ()
 subsumes loc env subtype supertype = do

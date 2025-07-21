@@ -3,7 +3,7 @@
 module Vega.Syntax where
 
 import Data.Unique (Unique)
-import Relude hiding (Type)
+import Relude hiding (Type, NonEmpty)
 import Vega.Loc (HasLoc, Loc)
 
 import Data.Sequence (Seq (..))
@@ -11,6 +11,7 @@ import GHC.Generics (Generically (..))
 import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, localConstructorText, localIdentText, lparen, meta, rparen, skolem, (<+>))
 import Effectful (IOE, (:>), Eff, runEff)
 import System.IO.Unsafe (unsafePerformIO)
+import Vega.Seq.NonEmpty (NonEmpty (..))
 
 newtype ModuleName = MkModuleName Text
     deriving stock (Generic, Eq, Show)
@@ -222,7 +223,7 @@ data TypeSyntax p
     = TypeConstructorS Loc (XName p)
     | TypeApplicationS Loc (TypeSyntax p) (Seq (TypeSyntax p))
     | TypeVarS Loc (XLocalName p)
-    | ForallS Loc (Seq (ForallBinderS p)) (TypeSyntax p)
+    | ForallS Loc (NonEmpty (ForallBinderS p)) (TypeSyntax p)
     | PureFunctionS Loc (Seq (TypeSyntax p)) (TypeSyntax p)
     | FunctionS Loc (Seq (TypeSyntax p)) (EffectSyntax p) (TypeSyntax p)
     | TupleS Loc (Seq (TypeSyntax p))
@@ -247,11 +248,11 @@ typeApplicationS loc constructor arguments = TypeApplicationS loc constructor ar
 
 forallS :: Loc -> Seq (ForallBinderS p) -> TypeSyntax p -> TypeSyntax p
 forallS _loc Empty result = result
-forallS loc binders result = ForallS loc binders result
+forallS loc (x :<| xs) result = ForallS loc (x :<|| xs) result
 
 forall_ :: Seq ForallBinder -> Type -> Type
 forall_ Empty result = result
-forall_ binders result = Forall_ binders result
+forall_ (x :<| xs) result = Forall (x :<|| xs) result
 
 data Monomorphization
     = Monomorphized
@@ -292,7 +293,7 @@ data Type
     = TypeConstructor Name
     | TypeApplication Type (Seq Type)
     | TypeVar LocalName
-    | Forall_ (Seq ForallBinder) Type
+    | Forall (NonEmpty ForallBinder) Type
     | Function (Seq Type) Effect Type
     | Tuple (Seq Type)
     | MetaVar MetaVar
@@ -310,33 +311,6 @@ data Type
     | Kind
     deriving (Generic)
 
-{-# COMPLETE
-    TypeConstructor
-    , TypeApplication
-    , TypeVar
-    , Forall
-    , Function
-    , Tuple
-    , MetaVar
-    , Skolem
-    , Pure
-    , Rep
-    , Type
-    , Effect
-    , SumRep
-    , ProductRep
-    , UnitRep
-    , EmptyRep
-    , BoxedRep
-    , Kind
-    #-}
-
--- We override the Forall constructor with a custom pattern synonym to enforce the invariant
--- that `Forall [] body` is equivalent to just `body`
-pattern Forall :: Seq ForallBinder -> Type -> Type
-pattern Forall bindings body <- Forall_ bindings body
-    where
-        Forall bindings body = forall_ bindings body
 
 type Kind = Type
 
