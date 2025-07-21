@@ -50,6 +50,7 @@ library
       Vega.Rename
       Vega.Syntax
       Vega.TypeCheck
+      Vega.TypeCheck.Zonk
       Vega.Util
   other-modules:
       Paths_vega

@@ -9,6 +9,8 @@ import Vega.Loc (HasLoc, Loc)
 import Data.Sequence (Seq (..))
 import GHC.Generics (Generically (..))
 import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, localConstructorText, localIdentText, lparen, meta, rparen, skolem, (<+>))
+import Effectful (IOE, (:>), Eff, runEff)
+import System.IO.Unsafe (unsafePerformIO)
 
 newtype ModuleName = MkModuleName Text
     deriving stock (Generic, Eq, Show)
@@ -346,6 +348,19 @@ data MetaVar = MkMetaVar
     , kind :: Kind
     }
 
+followMetas :: (IOE :> es) => Type -> Eff es Type
+followMetas = \case
+    type_@(MetaVar meta) -> do
+        readIORef meta.underlying >>= \case
+            Nothing -> pure type_
+            Just substitution -> do
+                actualType <- followMetas substitution
+                -- path compression
+                writeIORef meta.underlying (Just actualType)
+
+                pure actualType
+    type_ -> pure type_
+
 instance Eq MetaVar where
     meta1 == meta2 = meta1.identity == meta2.identity
 
@@ -388,7 +403,12 @@ instance Pretty Type where
         Function arguments effect result ->
             prettyArguments arguments <+> keyword "-{" <> pretty effect <> keyword "}>" <+> pretty result
         Tuple elements -> prettyArguments elements
-        MetaVar meta -> pretty meta
+        MetaVar meta -> 
+            -- The use of unsafePerformIO here is pretty benign since we only use it to
+            -- read from a mutable reference
+            case unsafePerformIO (runEff (followMetas (MetaVar meta))) of
+                MetaVar meta -> pretty meta
+                type_ -> pretty type_
         Skolem skolem -> pretty skolem
         Pure -> keyword "Pure"
         Rep -> keyword "Rep"
