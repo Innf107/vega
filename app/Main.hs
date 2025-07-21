@@ -124,6 +124,6 @@ main = do
                                         ErrorWithLoc errorWithLoc -> prettyErrorWithLoc errorWithLoc
                                         PlainError plainError -> pure $ pretty plainError
                                     eprint doc
-                                    exitFailure
+                            exitFailure
         Exec{file, mainFunction} -> run InMemory do
             Driver.execute file mainFunction

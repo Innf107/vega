@@ -418,8 +418,8 @@ inferType env syntax = do
                                 , actualNumber = length argumentsSyntax
                                 }
                             )
-                -- TODO: make this non-fatal
-                kind -> fatalTypeError (ApplicationOfNonFunctionKind{loc, kind})
+                kind -> do
+                    undefined
         TypeVarS loc localName -> do
             let (actualType, kind, _mono) = lookupTypeVariable localName env
             pure (kind, actualType, TypeVarS loc localName)
@@ -467,7 +467,13 @@ inferType env syntax = do
 inferTypeRep :: (TypeCheck es) => Env -> TypeSyntax Renamed -> Eff es (Kind, Type, TypeSyntax Typed)
 inferTypeRep env typeSyntax = do
     rep <- MetaVar <$> freshMeta "r" Rep
-    monomorphized (getLoc typeSyntax) env rep
+    -- We don't need a 'monomorphized' constraint here. It might seem like we would, but
+    -- since we check against (Type rep), we will only unify `rep` if the infererd kind has
+    -- the form ̀`Type _` and in that case the argument to Type will have to
+    -- have been checked for monomorphizability already.
+    --
+    -- Skipping the extra constraint here reduces the number of duplicated error messages
+    -- for the same issue.
     (type_, typeSyntax) <- checkType env (Type rep) typeSyntax
     pure (rep, type_, typeSyntax)
 
@@ -816,8 +822,12 @@ occursAndAdjust loc env meta type_ = do
             Kind -> pure ()
 
 subsumesEffect :: (TypeCheck es) => Effect -> Effect -> Eff es ()
-subsumesEffect Pure _ = pure ()
-subsumesEffect _ _ = undefined
+subsumesEffect eff1 eff2 = do
+    eff1 <- followMetas eff1
+    eff2 <- followMetas eff2
+    case (eff1, eff2) of
+        (Pure, _) -> pure ()
+        _ -> undefined
 
 union :: (TypeCheck es) => Effect -> Effect -> Eff es Effect
 union Pure eff = pure eff

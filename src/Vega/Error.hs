@@ -94,19 +94,10 @@ data TypeError
         , expected :: Int
         , actual :: Int
         }
-    | KindMismatch
-        { loc :: Loc
-        , expectedKind :: Kind
-        , actualKind :: Kind
-        }
     | UnableToUnify
         { loc :: Loc
         , expectedType :: Type
         , actualType :: Type
-        }
-    | ApplicationOfNonFunctionKind
-        { loc :: Loc
-        , kind :: Kind
         }
     | TypeConstructorAppliedToIncorrectNumberOfArguments
         { loc :: Loc
@@ -283,21 +274,6 @@ renderCompilationError = \case
             , expected
             , actual
             } -> undefined
-        -- TODO: special case this a little and provide some nicer error messages
-        KindMismatch
-            { loc = _
-            , expectedKind
-            , actualKind
-            } ->
-                align $
-                    emphasis "Kind mismatch\n"
-                        <> "  Unable to unify\n"
-                        <> "    "
-                        <> emphasis "expected" <+> "kind    "
-                        <> pretty expectedKind
-                        <> "\n"
-                        <> "    with" <+> emphasis "actual" <+> "kind "
-                        <> pretty actualKind
         UnableToUnify
             { loc = _
             , expectedType
@@ -315,12 +291,6 @@ renderCompilationError = \case
                         <> emphasis "actual"
                             <+> "type"
                             <+> pretty actualType
-        ApplicationOfNonFunctionKind
-            { loc = _
-            , kind
-            } ->
-                align $
-                    emphasis "Trying to apply a type of non-function kind" <+> pretty kind
         TypeConstructorAppliedToIncorrectNumberOfArguments
             { loc = _
             , type_
