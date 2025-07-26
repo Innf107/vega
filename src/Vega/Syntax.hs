@@ -3,14 +3,14 @@
 module Vega.Syntax where
 
 import Data.Unique (Unique)
-import Relude hiding (Type, NonEmpty)
+import Relude hiding (NonEmpty, Type)
 import Vega.Loc (HasLoc, Loc)
 
 import Data.Sequence (Seq (..))
+import Effectful (Eff, IOE, runEff, (:>))
 import GHC.Generics (Generically (..))
-import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, localConstructorText, localIdentText, lparen, meta, rparen, skolem, (<+>))
-import Effectful (IOE, (:>), Eff, runEff)
 import System.IO.Unsafe (unsafePerformIO)
+import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, localConstructorText, localIdentText, lparen, meta, rparen, skolem, (<+>))
 import Vega.Seq.NonEmpty (NonEmpty (..))
 
 newtype ModuleName = MkModuleName Text
@@ -51,8 +51,14 @@ unqualifiedName = \case
     Global global -> global.name
     Local local -> local.name
 
+internalModuleName :: ModuleName
+internalModuleName = MkModuleName "<<internal>>"
+
 internalName :: Text -> GlobalName
-internalName name = MkGlobalName{name, moduleName = MkModuleName "<<internal>>"}
+internalName name = MkGlobalName{name, moduleName = internalModuleName}
+
+isInternalName :: GlobalName -> Bool
+isInternalName globalName = globalName.moduleName == internalModuleName
 
 data Pass = Parsed | Renamed | Typed
 
@@ -236,6 +242,7 @@ data TypeSyntax p
     | UnitRepS Loc
     | EmptyRepS Loc
     | BoxedRepS Loc
+    | IntRepS Loc
     | KindS Loc
     deriving stock (Generic)
     deriving anyclass (HasLoc)
@@ -285,7 +292,8 @@ data ForallBinder = MkForallBinder
     , visibility :: BinderVisibility
     , kind :: Kind
     , monomorphization :: Monomorphization
-    } deriving stock Generic
+    }
+    deriving stock (Generic)
 
 type EffectSyntax = TypeSyntax
 
@@ -308,9 +316,9 @@ data Type
     | UnitRep
     | EmptyRep
     | BoxedRep
+    | IntRep
     | Kind
     deriving (Generic)
-
 
 type Kind = Type
 
@@ -352,7 +360,7 @@ instance Eq Skolem where
 type Effect = Type
 
 newtype ImportScope
-    = ImportScope
+    = MkImportScope
     { imports :: HashMap ModuleName ImportedItems
     }
     deriving stock (Eq, Generic)
@@ -377,7 +385,7 @@ instance Pretty Type where
         Function arguments effect result ->
             prettyArguments arguments <+> keyword "-{" <> pretty effect <> keyword "}>" <+> pretty result
         Tuple elements -> prettyArguments elements
-        MetaVar meta -> 
+        MetaVar meta ->
             -- The use of unsafePerformIO here is pretty benign since we only use it to
             -- read from a mutable reference
             case unsafePerformIO (runEff (followMetas (MetaVar meta))) of
@@ -393,6 +401,7 @@ instance Pretty Type where
         UnitRep -> keyword "Unit"
         EmptyRep -> keyword "Empty"
         BoxedRep -> keyword "Boxed"
+        IntRep -> keyword "IntRep"
         Kind -> keyword "Kind"
 
 prettyForallBinder :: ForallBinder -> Doc Ann

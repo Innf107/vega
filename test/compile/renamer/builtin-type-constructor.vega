@@ -1,0 +1,9 @@
+
+f : Int -> Int;
+f(x) = x;
+
+g : String -> String;
+g(x) = x;
+
+main : () -> ();
+main() = main();

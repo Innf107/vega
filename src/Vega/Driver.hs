@@ -77,7 +77,7 @@ computeImportScope imports = foldMap importScope imports
   where
     importScope = \case
         ImportUnqualified{moduleName, importedDeclarations} -> do
-            ImportScope
+            MkImportScope
                 { imports =
                     fromList
                         [
@@ -90,7 +90,7 @@ computeImportScope imports = foldMap importScope imports
                         ]
                 }
         ImportQualified{moduleName, importedAs} -> do
-            ImportScope
+            MkImportScope
                 { imports =
                     fromList
                         [

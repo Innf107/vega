@@ -21,6 +21,7 @@ import Vega.Error (RenameError (..), RenameErrorSet (..))
 import Vega.Loc (Loc)
 import Vega.Util (mapAccumLM)
 import Vega.Util qualified as Util
+import Vega.Builtins (builtinGlobals, defaultImportScope)
 
 type Rename es =
     ( GraphPersistence :> es
@@ -67,14 +68,18 @@ findGlobalUnregistered :: (Rename es) => NameKind -> Text -> Eff es GlobalVariab
 findGlobalUnregistered nameKind name = do
     parent <- ask @DeclarationName
 
-    importScope <- getModuleImportScope parent.moduleName
+    let builtinCandidates = case lookup name builtinGlobals of
+            Nothing -> []
+            Just global -> [global]
+
+    importScope <- (defaultImportScope <>) <$> getModuleImportScope parent.moduleName
     candidatesOfAllKinds <- findMatchingNames name
 
     let takeVarCandidate = \case
             (name, candidateKind)
                 | candidateKind == nameKind -> Just name
             _ -> Nothing
-    let candidates = mapMaybe takeVarCandidate (HashMap.toList candidatesOfAllKinds)
+    let candidates = mapMaybe takeVarCandidate (builtinCandidates <> HashMap.toList candidatesOfAllKinds)
 
     case filter (\name -> name.moduleName == parent.moduleName || isInScope name importScope) candidates of
         [] -> case candidates of
@@ -87,12 +92,13 @@ findGlobal :: (Rename es) => NameKind -> Text -> Eff es GlobalVariableOccurance
 findGlobal nameKind name = do
     findGlobalUnregistered nameKind name >>= \case
         Found globalName -> do
-            dependencyDeclarationName <-
-                getDefiningDeclaration globalName >>= \case
-                    Nothing -> error $ "declaration of name not found: " <> show globalName
-                    Just name -> pure name
+            when (globalName.moduleName /= internalModuleName) do
+                dependencyDeclarationName <-
+                    getDefiningDeclaration globalName >>= \case
+                        Nothing -> error $ "declaration of name not found: " <> show globalName
+                        Just name -> pure name
+                output dependencyDeclarationName
 
-            output dependencyDeclarationName
             pure (Found globalName)
         NotFound -> pure NotFound
         Inaccessible candidates -> pure $ Inaccessible candidates
@@ -226,6 +232,7 @@ renameTypeSyntax env = \case
     UnitRepS loc -> pure (UnitRepS loc)
     EmptyRepS loc -> pure (EmptyRepS loc)
     BoxedRepS loc -> pure (BoxedRepS loc)
+    IntRepS loc -> pure (IntRepS loc)
     KindS loc -> pure (KindS loc)
 
 renameKindSyntax :: (Rename es) => Env -> KindSyntax Parsed -> Eff es (KindSyntax Renamed)
@@ -349,3 +356,4 @@ renameMatchCase env (MkMatchCase{loc, pattern_, body}) = do
     (pattern_, envTrans) <- renamePattern env pattern_
     body <- renameExpr (envTrans env) body
     pure (MkMatchCase{loc, pattern_, body})
+

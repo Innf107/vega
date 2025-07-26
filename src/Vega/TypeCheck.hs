@@ -33,6 +33,7 @@ import Vega.Util (assert)
 import Vega.Util qualified as Util
 import qualified Vega.Seq.NonEmpty as NonEmpty
 import Vega.Seq.NonEmpty (toSeq)
+import Vega.Builtins (builtinKinds)
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -146,12 +147,17 @@ getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobal VarKi
 
 globalConstructorKind :: (TypeCheck es) => GlobalName -> Eff es Kind
 globalConstructorKind name = do
-    GraphPersistence.getGlobalKind name >>= \case
-        Left cachedKind -> pure cachedKind
-        Right syntax -> do
-            (kind, _synax) <- checkType emptyEnv Parametric Kind syntax
-            GraphPersistence.cacheGlobalKind name kind
-            pure kind
+    if isInternalName name then
+        case lookup name builtinKinds of
+            Nothing -> error $ "builtin type without a kind: " <> show name
+            Just kind -> pure kind 
+    else 
+        GraphPersistence.getGlobalKind name >>= \case
+            Left cachedKind -> pure cachedKind
+            Right syntax -> do
+                (kind, _synax) <- checkType emptyEnv Parametric Kind syntax
+                GraphPersistence.cacheGlobalKind name kind
+                pure kind
 
 checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
 checkDeclarationSyntax loc = \case
@@ -502,6 +508,7 @@ inferType env syntax = do
         UnitRepS loc -> pure (Rep, UnitRep, UnitRepS loc)
         EmptyRepS loc -> pure (Rep, EmptyRep, EmptyRepS loc)
         BoxedRepS loc -> pure (Rep, BoxedRep, BoxedRepS loc)
+        IntRepS loc -> pure (Rep, IntRep, IntRepS loc)
         KindS loc -> pure (Kind, Kind, KindS loc)
 
 inferTypeRep :: (TypeCheck es) => Env -> TypeSyntax Renamed -> Eff es (Kind, Type, TypeSyntax Typed)
@@ -546,6 +553,7 @@ kindOf env = \case
     UnitRep -> pure Rep
     EmptyRep -> pure Rep
     BoxedRep -> pure Rep
+    IntRep -> pure Rep
     Kind -> pure Kind
 
 -- | Like checkType but on evaluated `Type`s rather than TypeSyntax
@@ -622,6 +630,7 @@ substituteTypeVariables substitution type_ =
         type_@UnitRep -> pure type_
         type_@EmptyRep -> pure type_
         type_@BoxedRep -> pure type_
+        type_@IntRep -> pure type_
         type_@Kind -> pure type_
 
 data InstantiationResult
@@ -803,6 +812,9 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
                     BoxedRep -> case type2 of
                         BoxedRep -> pure ()
                         _ -> unificationFailure
+                    IntRep -> case type2 of
+                        IntRep -> pure ()
+                        _ -> unificationFailure
                     Kind -> case type2 of
                         Kind -> pure ()
                         _ -> unificationFailure
@@ -860,6 +872,7 @@ occursAndAdjust loc env meta type_ = do
             UnitRep -> pure ()
             EmptyRep -> pure ()
             BoxedRep -> pure ()
+            IntRep -> pure ()
             Kind -> pure ()
 
 subsumesEffect :: (TypeCheck es) => Effect -> Effect -> Eff es ()
@@ -952,6 +965,7 @@ solveMonomorphized onMetaVar loc env type_ =
             UnitRep -> pure ()
             EmptyRep -> pure ()
             BoxedRep -> pure ()
+            IntRep -> pure ()
             Kind -> pure ()
 
 type SolveConstraints es = (Error TypeError :> es, Output TypeError :> es, Trace :> es, IOE :> es)

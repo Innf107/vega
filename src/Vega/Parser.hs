@@ -248,6 +248,7 @@ type_ =
                                 "Unit" -> UnitRepS loc
                                 "Empty" -> EmptyRepS loc
                                 "Boxed" -> BoxedRepS loc
+                                "IntRep" -> IntRepS loc
                                 "Kind" -> KindS loc
                                 _ -> TypeConstructorS loc name
                         pure $
