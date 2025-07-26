@@ -1,3 +1,6 @@
-
-aaa : () -> ();
-aaa = aaa();
+$FILE:3:5: ERROR:
+    Expected: (, or [
+      Actual: =
+  ┃ 
+3 ┃ aaa = aaa();
+  ┃     ▔

@@ -46,12 +46,7 @@ data CompilationResult
     | CompilationFailed
         {errors :: Seq CompilationError}
 
-addErrors :: CompilationResult -> Seq CompilationError -> CompilationResult
-addErrors result Empty = result
-addErrors CompilationSuccessful errors = CompilationFailed{errors}
-addErrors CompilationFailed{errors} additionalErrors = CompilationFailed{errors = errors <> additionalErrors}
-
--- TODO: distinguish between new and previous errors
+-- TODO: distinguish between new and repeated errors
 
 type Driver es =
     ( Reader BuildConfig :> es
@@ -190,13 +185,14 @@ rebuild =
         parseErrors <- trackSourceChanges
 
         performAllRemainingWork
-        GraphPersistence.getCurrentErrors >>= \case
+        nonParseErrors <- GraphPersistence.getCurrentErrors
+        case parseErrors <> nonParseErrors of 
             [] -> do
                 runErrorNoCallStack compileBackend >>= \case
                     Left error -> do
-                        pure (addErrors CompilationFailed{errors = [DriverError error]} parseErrors)
-                    Right () -> pure (addErrors CompilationSuccessful parseErrors)
-            errors -> pure (addErrors CompilationFailed{errors = errors} parseErrors)
+                        pure (CompilationFailed{errors = [DriverError error]})
+                    Right () -> pure (CompilationSuccessful)
+            errors -> pure (CompilationFailed{errors = errors})
 
 compileBackend :: (Error Error.DriverError :> es, Driver es) => Eff es ()
 compileBackend = do

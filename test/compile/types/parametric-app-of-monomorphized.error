@@ -1,9 +1,7 @@
-$FILE:6:23: ERROR:
+$FILE:6:12: ERROR:
 Parametric type variable a cannot be monomorphized
   Only type variables bound in monomorphizable bindings can appear in kinds of bound type variables
   or be used to instantiate monomorphizable bindings
-    Trying to unify type a
-    with a monomorphizable type parameter
   ┃ 
 6 ┃ usage(x) = idVeryMono(x);
-  ┃                       ▔
+  ┃            ▔▔▔▔▔▔▔▔▔▔

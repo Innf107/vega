@@ -428,7 +428,7 @@ checkType env expectedMonomorphizability expectedKind syntax = withTrace KindChe
 inferType :: (TypeCheck es) => Env -> TypeSyntax Renamed -> Eff es (Kind, Type, TypeSyntax Typed)
 inferType env syntax = do
     (kind, type_, syntax) <- withTrace KindCheck ("inferType: " <> showHeadConstructor syntax) go
-    trace KindCheck ("inferType: " <> showHeadConstructor syntax <+> keyword "<=" <+> pretty kind <+> keyword "~>" <+> pretty type_)
+    trace KindCheck ("inferType: " <> showHeadConstructor syntax <+> keyword ">=" <+> pretty kind <+> keyword "~>" <+> pretty type_)
     pure (kind, type_, syntax)
   where
     go = case syntax of
@@ -895,6 +895,7 @@ freshMeta name kind = do
 freshTypeMeta :: (TypeCheck es) => Loc -> Env -> Text -> Eff es MetaVar
 freshTypeMeta loc env name = do
     rep <- MetaVar <$> freshMeta "r" Rep
+    -- TODO: I'm not sure if we actually need this?
     monomorphized loc env rep
     freshMeta name (Type rep)
 
