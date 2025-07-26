@@ -1,0 +1,6 @@
+$FILE:2:10: ERROR:
+    Expected: :
+      Actual: ;
+  ┃ 
+2 ┃ malformed;
+  ┃          ▔

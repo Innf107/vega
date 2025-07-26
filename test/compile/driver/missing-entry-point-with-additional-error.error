@@ -1,0 +1,8 @@
+$FILE:4:8: ERROR:
+Type mismatch
+  Unable to unify
+    expected type b
+      actual type a
+  ┃ 
+4 ┃ f(x) = x;
+  ┃        ▔
