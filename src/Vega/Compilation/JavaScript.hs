@@ -8,7 +8,7 @@
 -}
 module Vega.Compilation.JavaScript (compileDeclaration, assembleFromEntryPoint) where
 
-import Relude hiding (State, evalState, get, modify, put, trace)
+import Relude hiding (State, evalState, get, intercalate, modify, put, trace)
 
 import Effectful
 import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
@@ -55,6 +55,8 @@ compileDeclarationSyntax = \case
             let compileParameter = \case
                     VarPattern _ localName -> compileLocalName localName
                     TypePattern _ inner _ -> compileParameter inner
+                    WildcardPattern _loc -> "_"
+                    TuplePattern _ patterns -> "[" <> intercalate "," (fmap compileParameter patterns) <> "]"
                     _ -> undefined
             -- TODO: we need to support actual decision tree compilation for non-variable patterns
             for_ parameters \parameter -> do
@@ -73,9 +75,9 @@ compileDeclarationSyntax = \case
                     let parameters = ["x" <> show i | i <- [1 .. length arguments]]
 
                     tell $ "const " <> compileGlobalName constructorName <> " = ("
-                    tell $ TextBuilder.fromText $ Text.intercalate ", " parameters
+                    tell $ intercalate ", " parameters
                     tell $ ") => ({ tag: \"" <> compileGlobalName constructorName <> "\", payload: ["
-                    tell $ TextBuilder.fromText $ Text.intercalate ", " parameters
+                    tell $ intercalate ", " parameters
                     tell $ "] })\n"
 
 compileExpr :: (Compile es) => Expr Typed -> Eff es ()
@@ -197,3 +199,11 @@ compileName :: Name -> TextBuilder.Builder
 compileName = \case
     Local localName -> compileLocalName localName
     Global globalName -> compileGlobalName globalName
+
+intercalate :: (Foldable f) => TextBuilder.Builder -> f TextBuilder.Builder -> TextBuilder.Builder
+intercalate separator elements = go (toList elements)
+  where
+    go = \case
+        [] -> ""
+        [x] -> x
+        (x : xs) -> x <> separator <> go xs

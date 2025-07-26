@@ -6,4 +6,4 @@ g : String -> String;
 g(x) = x;
 
 main : () -> ();
-main() = main();
+main() = ();

@@ -1,0 +1,6 @@
+
+f : ((Int, String)) -> Int;
+f((x, y, z)) = x;
+
+main : () -> ();
+main() = ();

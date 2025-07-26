@@ -94,6 +94,12 @@ data TypeError
         , expected :: Int
         , actual :: Int
         }
+    | TuplePatternOfIncorrectNumberOfArgs
+        { loc :: Loc
+        , expected :: Int
+        , actual :: Int
+        , expectedType :: Type
+        }
     | UnableToUnify
         { loc :: Loc
         , expectedType :: Type
@@ -275,6 +281,15 @@ renderCompilationError = \case
             , expected
             , actual
             } -> undefined
+        TuplePatternOfIncorrectNumberOfArgs
+            { loc = _
+            , expected
+            , actual
+            , expectedType
+            } ->
+                align $
+                    emphasis "Tuple pattern binds" <+> pluralNumber actual "element" <+> emphasis "but its type expects it to bind" <+> number expected
+                        <> "\n    The pattern is expected to have type" <+> pretty expectedType
         UnableToUnify
             { loc = _
             , expectedType
@@ -360,6 +375,13 @@ renderCompilationError = \case
 pluralNumber :: Int -> Text -> Doc Ann
 pluralNumber 1 text = number @Int 1 <+> emphasis text
 pluralNumber n text = number n <+> emphasis (text <> "s")
+
+differenceDirection :: Int -> Int -> Text
+differenceDirection expected actual
+    | expected < actual = "too many"
+    | expected > actual = "too few"
+    -- Technically this case shouldn't happen unless we have an error, but it's nice to have anyway
+    | otherwise = "the same number of"
 
 generateParseErrorMessages :: ParseErrorBundle [(Token, Loc)] Parser.AdditionalParseError -> Seq ErrorMessageWithLoc
 generateParseErrorMessages (ParseErrorBundle{bundleErrors, bundlePosState = _bundlePosState}) =

@@ -3,7 +3,7 @@
 
 module Vega.Parser (Parser, AdditionalParseError (..), parse) where
 
-import Relude hiding (many, NonEmpty)
+import Relude hiding (NonEmpty, many)
 
 import Vega.Syntax hiding (forall_)
 
@@ -13,8 +13,8 @@ import Text.Megaparsec hiding (Token, many, parse, sepBy, sepBy1, sepEndBy, sing
 import Text.Megaparsec qualified as MegaParsec
 import Vega.Lexer.Token as Lexer (Token (..))
 import Vega.Loc (HasLoc, Loc (MkLoc, endColumn, endLine, file, startColumn, startLine), getLoc)
-import Vega.Syntax qualified as Syntax
 import Vega.Seq.NonEmpty (NonEmpty, pattern (:<||))
+import Vega.Syntax qualified as Syntax
 
 data AdditionalParseError
     = MismatchedFunctionName
@@ -95,7 +95,6 @@ many1Seq parser = do
     first <- parser
     rest <- many parser
     pure $ (first :<|| rest)
-
 
 sepBy :: (MonadPlus m, IsList l, Item l ~ a) => m a -> m sep -> m l
 sepBy item separator = fromList <$> MegaParsec.sepBy item separator
@@ -363,6 +362,9 @@ pattern_ = do
                 case patterns of
                     (pattern_ :<| Empty) -> pure pattern_
                     _ -> pure $ TuplePattern loc patterns
+            , do
+                loc <- single Underscore
+                pure (WildcardPattern loc)
             ]
 
 expr :: Parser (Expr Parsed)

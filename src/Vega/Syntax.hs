@@ -441,7 +441,7 @@ prettyGlobalText kind raw = case kind of
     DataConstructorKind -> globalConstructorText raw
 
 prettyArguments :: (Foldable list, Functor list, Pretty a) => list a -> Doc Ann
-prettyArguments list = lparen "(" <> intercalateDoc (keyword ",") (fmap pretty list) <> rparen ")"
+prettyArguments list = lparen "(" <> intercalateDoc (keyword "," <> " ") (fmap pretty list) <> rparen ")"
 
 definedGlobals :: DeclarationSyntax p -> Seq (GlobalName, NameKind)
 definedGlobals = \case

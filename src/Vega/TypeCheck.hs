@@ -9,7 +9,7 @@ import Relude hiding (State, Type, evalState, get, put, runState, trace)
 import Relude.Extra
 
 import Vega.Error (TypeError (..), TypeErrorSet (MkTypeErrorSet))
-import Vega.Util (compose, mapAccumLM, unzip3Seq, viaList, zipWithSeqM)
+import Vega.Util (compose, for2, mapAccumLM, unzip3Seq, viaList, zipWithSeqM)
 
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
@@ -23,17 +23,17 @@ import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwErro
 import Effectful.State.Static.Local (State, evalState, get, put, runState)
 import GHC.Generics qualified as Generics
 import GHC.List (List)
+import Vega.Builtins (builtinKinds)
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>))
+import Vega.Seq.NonEmpty (toSeq)
+import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.TypeCheck.Zonk (zonk)
 import Vega.Util (assert)
 import Vega.Util qualified as Util
-import qualified Vega.Seq.NonEmpty as NonEmpty
-import Vega.Seq.NonEmpty (toSeq)
-import Vega.Builtins (builtinKinds)
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -147,17 +147,17 @@ getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobal VarKi
 
 globalConstructorKind :: (TypeCheck es) => GlobalName -> Eff es Kind
 globalConstructorKind name = do
-    if isInternalName name then
-        case lookup name builtinKinds of
+    if isInternalName name
+        then case lookup name builtinKinds of
             Nothing -> error $ "builtin type without a kind: " <> show name
-            Just kind -> pure kind 
-    else 
-        GraphPersistence.getGlobalKind name >>= \case
-            Left cachedKind -> pure cachedKind
-            Right syntax -> do
-                (kind, _synax) <- checkType emptyEnv Parametric Kind syntax
-                GraphPersistence.cacheGlobalKind name kind
-                pure kind
+            Just kind -> pure kind
+        else
+            GraphPersistence.getGlobalKind name >>= \case
+                Left cachedKind -> pure cachedKind
+                Right syntax -> do
+                    (kind, _synax) <- checkType emptyEnv Parametric Kind syntax
+                    GraphPersistence.cacheGlobalKind name kind
+                    pure kind
 
 checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
 checkDeclarationSyntax loc = \case
@@ -217,7 +217,27 @@ checkPattern env expectedType = \case
         subsumes loc env innerType expectedType
         pure (TypePattern loc innerPattern innerTypeSyntax, innerTrans)
     OrPattern{} -> undefined
-    _ -> undefined
+    WildcardPattern loc -> do
+        pure (WildcardPattern loc, id)
+    TuplePattern loc elementPatterns -> do
+        elementTypes <-
+            followMetas expectedType >>= \case
+                Tuple elementTypes -> pure elementTypes
+                _ -> for elementPatterns \element -> do
+                    MetaVar <$> freshTypeMeta (getLoc element) env "e"
+        when (length elementPatterns /= length elementTypes) do
+            typeError
+                ( TuplePatternOfIncorrectNumberOfArgs
+                    { loc
+                    , expected = length elementTypes
+                    , actual = length elementPatterns
+                    , expectedType
+                    }
+                )
+
+        (patterns, envTransformers) <- for2 elementPatterns elementTypes \pattern_ type_ -> do
+            checkPattern env type_ pattern_
+        pure (TuplePattern loc patterns, Util.compose envTransformers)
 
 inferPattern :: (TypeCheck es) => Env -> Pattern Renamed -> Eff es (Pattern Typed, Type, Env -> Env)
 inferPattern env = \case

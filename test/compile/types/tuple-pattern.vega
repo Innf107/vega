@@ -1,0 +1,5 @@
+f : ((Int, String)) -> String;
+f((_, y)) = y;
+
+main : () -> ();
+main() = ();

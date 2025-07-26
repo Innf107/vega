@@ -12,6 +12,7 @@ module Vega.Util (
     constructorNames,
     Untagged (..),
     assert,
+    for2,
 ) where
 
 import Data.Sequence (Seq (..))
@@ -92,3 +93,12 @@ newtype Untagged a = MkUntagged a
 
 assert :: (HasCallStack, Applicative f) => Bool -> f ()
 assert ~condition = GHC.Base.assert condition (pure ())
+
+for2 :: forall f a b c d. (Monad f) => Seq a -> Seq b -> (a -> b -> f (c, d)) -> f (Seq c, Seq d)
+for2 xs ys f = go [] [] xs ys
+  where
+    go leftAcc rightAcc Empty _ = pure (leftAcc, rightAcc)
+    go leftAcc rightAcc _ Empty = pure (leftAcc, rightAcc)
+    go leftAcc rightAcc (x :<| xs) (y :<| ys) = do
+        (x', y') <- f x y
+        go (leftAcc :|> x') (rightAcc :|> y') xs ys
