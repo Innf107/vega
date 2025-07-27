@@ -186,8 +186,7 @@ checkDeclarationSyntax loc = \case
         (parameters, transformers) <- Seq.unzip <$> zipWithSeqM checkParameter parameters parameterTypes
         env <- pure (compose transformers env)
 
-        (body, bodyEffect) <- check env returnType body
-        subsumesEffect bodyEffect effect
+        body <- check env effect returnType body
 
         pure DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body}
     DefineVariantType{name, typeParameters, constructors} -> do
@@ -255,12 +254,12 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
         pure (TypePattern loc innerPattern typeSyntax, type_, envTrans)
     OrPattern{} -> undefined
 
-check :: (TypeCheck es) => Env -> Type -> Expr Renamed -> Eff es (Expr Typed, Effect)
-check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstructor expr <+> keyword "<=" <+> pretty expectedType) do
+check :: (TypeCheck es) => Env -> Effect -> Type -> Expr Renamed -> Eff es (Expr Typed)
+check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstructor expr <+> keyword "<=" <+> pretty expectedType <> keyword " | " <> pretty ambientEffect) do
     let deferToInference = do
-            (actualType, expr, effect) <- infer env expr
+            (actualType, expr) <- infer env ambientEffect expr
             subsumes (getLoc expr) env actualType expectedType
-            pure (expr, effect)
+            pure expr
     case expr of
         Var{} -> deferToInference
         DataConstructor{} -> undefined
@@ -287,27 +286,23 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
             let checkParameter parameter parameterType = do
                     checkPattern env parameterType parameter
             (parameters, envTransformers) <- Seq.unzip <$> zipWithSeqM checkParameter parameters parameterTypes
-            (body, bodyEffect) <- check (compose envTransformers env) returnType body
-            subsumesEffect bodyEffect expectedEffect
-            pure (Lambda loc typeParameters parameters body, Pure)
+            body <- check (compose envTransformers env) expectedEffect returnType body
+            pure (Lambda loc typeParameters parameters body)
         StringLiteral{} -> deferToInference
         IntLiteral{} -> deferToInference
         DoubleLiteral{} -> deferToInference
         If{loc, condition, thenBranch, elseBranch} -> do
-            (condition, conditionEffect) <- check env Builtins.boolType condition
-            (thenBranch, thenEffect) <- check env expectedType thenBranch
-            (elseBranch, elseEffect) <- check env expectedType elseBranch
+            (condition) <- check env ambientEffect Builtins.boolType condition
+            (thenBranch) <- check env ambientEffect expectedType thenBranch
+            (elseBranch) <- check env ambientEffect expectedType elseBranch
 
-            effect <- unionAll [conditionEffect, thenEffect, elseEffect]
-            pure (If{loc, condition, thenBranch, elseBranch}, effect)
+            pure (If{loc, condition, thenBranch, elseBranch})
         SequenceBlock{loc, statements} -> do
             case statements of
                 (realStatements :|> Run lastLoc lastExpression) -> do
-                    (env, realStatements) <- checkStatements env realStatements
-                    (lastExpression, finalEffect) <- check env expectedType lastExpression
-                    -- TODO: this ignores the intermediate effects but we actually want to switch to checking
-                    -- effects anyway
-                    pure (SequenceBlock{loc, statements = realStatements :|> Run lastLoc lastExpression}, finalEffect)
+                    (env, realStatements) <- checkStatements env ambientEffect realStatements
+                    (lastExpression) <- check env ambientEffect expectedType lastExpression
+                    pure (SequenceBlock{loc, statements = realStatements :|> Run lastLoc lastExpression})
                 _ -> deferToInference
         TupleLiteral loc elements -> do
             elementTypes <-
@@ -327,27 +322,26 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
                         , expectedType
                         }
 
-            (elements, effects) <- fmap Seq.unzip $ for (Seq.zip elements elementTypes) \(element, elementType) -> do
-                check env elementType element
+            elements <- for (Seq.zip elements elementTypes) \(element, elementType) -> do
+                check env ambientEffect elementType element
 
-            effect <- unionAll effects
-            pure (TupleLiteral loc elements, effect)
+            pure (TupleLiteral loc elements)
         PartialApplication{} -> undefined
         BinaryOperator{} -> undefined
         Match{} -> undefined
 
-infer :: (TypeCheck es) => Env -> Expr Renamed -> Eff es (Type, Expr Typed, Effect)
-infer env expr = do
-    (type_, expr, effect) <- withTrace TypeCheck ("infer " <> showHeadConstructor expr) go
-    trace TypeCheck ("infer" <> showHeadConstructor expr <> keyword " => " <> pretty type_ <> keyword " | " <> pretty effect)
-    pure (type_, expr, effect)
+infer :: (TypeCheck es) => Env -> Effect -> Expr Renamed -> Eff es (Type, Expr Typed)
+infer env ambientEffect expr = do
+    (type_, expr) <- withTrace TypeCheck ("infer " <> showHeadConstructor expr <> keyword " | " <> pretty ambientEffect) go
+    trace TypeCheck ("infer" <> showHeadConstructor expr <> keyword " => " <> pretty type_)
+    pure (type_, expr)
   where
     go = case expr of
         Var loc name -> do
             type_ <- instantiate loc env =<< varType env name
-            pure (type_, Var loc name, Pure)
+            pure (type_, Var loc name)
         Application{loc, functionExpr, arguments} -> do
-            (functionType, functionExpr, functionExprEffect) <- infer env functionExpr
+            (functionType, functionExpr) <- infer env ambientEffect functionExpr
             (argumentTypes, functionEffect, returnType) <- splitFunctionType loc env (length arguments) functionType
             when (length argumentTypes /= length arguments) do
                 typeError $
@@ -358,10 +352,9 @@ infer env expr = do
                         , functionType
                         }
             let checkArguments argumentExpr argumentType = do
-                    check env argumentType argumentExpr
-            (arguments, argumentEffects) <- Seq.unzip <$> zipWithSeqM checkArguments arguments argumentTypes
-            finalEffect <- pure functionExprEffect `unionM` unionAll argumentEffects `unionM` pure functionEffect
-            pure (returnType, Application{loc, functionExpr, arguments}, finalEffect)
+                    check env ambientEffect argumentType argumentExpr
+            arguments <- zipWithSeqM checkArguments arguments argumentTypes
+            pure (returnType, Application{loc, functionExpr, arguments})
         VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax} -> do
             type_ <- varType env varName
 
@@ -386,50 +379,50 @@ infer env expr = do
                     checkType env binder.monomorphization binder.kind argument
 
             type_ <- instantiate loc env =<< instantiateWith loc env type_ typeArguments
-            pure (type_, VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax}, Pure)
+            pure (type_, VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax})
         Lambda loc typeParameters parameters body -> do
             case typeParameters of
                 [] -> pure ()
                 _ -> undefined -- error? I don't think we can handle type parameters in infer mode
             (parameters, parameterTypes, envTransformers) <- unzip3Seq <$> traverse (inferPattern env) parameters
 
-            (bodyType, body, bodyEffect) <- infer (compose envTransformers env) body
+            bodyEffect <- MetaVar <$> freshMeta "e" Effect
+            (bodyType, body) <- infer (compose envTransformers env) bodyEffect body
 
-            pure (Function parameterTypes bodyEffect bodyType, Lambda loc typeParameters parameters body, Pure)
-        StringLiteral loc literal -> pure (Builtins.stringType, StringLiteral loc literal, Pure)
-        IntLiteral loc literal -> pure (Builtins.intType, IntLiteral loc literal, Pure)
-        DoubleLiteral loc literal -> pure (Builtins.doubleType, DoubleLiteral loc literal, Pure)
+            pure (Function parameterTypes bodyEffect bodyType, Lambda loc typeParameters parameters body)
+        StringLiteral loc literal -> pure (Builtins.stringType, StringLiteral loc literal)
+        IntLiteral loc literal -> pure (Builtins.intType, IntLiteral loc literal)
+        DoubleLiteral loc literal -> pure (Builtins.doubleType, DoubleLiteral loc literal)
         BinaryOperator{} -> undefined
         If{loc, condition, thenBranch, elseBranch} -> do
-            (condition, conditionEffect) <- check env Builtins.boolType condition
-            (thenType, thenBranch, thenEffect) <- infer env thenBranch
-            (elseType, elseBranch, elseEffect) <- infer env elseBranch
+            (condition) <- check env ambientEffect Builtins.boolType condition
+            (thenType, thenBranch) <- infer env ambientEffect thenBranch
+            (elseType, elseBranch) <- infer env ambientEffect elseBranch
             subsumes loc env thenType elseType
             subsumes loc env elseType thenType
-            effect <- unionAll [conditionEffect, thenEffect, elseEffect]
-            pure (thenType, If{loc, condition, thenBranch, elseBranch}, effect)
+            pure (thenType, If{loc, condition, thenBranch, elseBranch})
         SequenceBlock{loc, statements} ->
             case statements of
                 (realStatements :|> Run lastLoc lastExpression) -> do
-                    (env, realStatements) <- checkStatements env realStatements
-                    (type_, lastExpression, finalEffect) <- infer env lastExpression
-                    pure (type_, SequenceBlock{loc, statements = realStatements :|> Run lastLoc lastExpression}, finalEffect)
+                    (env, realStatements) <- checkStatements env ambientEffect realStatements
+                    (type_, lastExpression) <- infer env ambientEffect lastExpression
+                    pure (type_, SequenceBlock{loc, statements = realStatements :|> Run lastLoc lastExpression})
                 _ -> do
-                    (_env, statements) <- checkStatements env statements
-                    pure (Tuple [], SequenceBlock{loc, statements}, Pure)
+                    (_env, statements) <- checkStatements env ambientEffect statements
+                    pure (Tuple [], SequenceBlock{loc, statements})
         _ -> undefined
 
-checkStatements :: (TypeCheck es) => Env -> Seq (Statement Renamed) -> Eff es (Env, Seq (Statement Typed))
-checkStatements env statements = mapAccumLM checkStatement env statements
+checkStatements :: (TypeCheck es) => Env -> Effect -> Seq (Statement Renamed) -> Eff es (Env, Seq (Statement Typed))
+checkStatements env ambientEffect statements = mapAccumLM (\env -> checkStatement env ambientEffect) env statements
 
-checkStatement :: (TypeCheck es) => Env -> Statement Renamed -> Eff es (Env, Statement Typed)
-checkStatement env statement = withTrace TypeCheck ("checkStatement " <> showHeadConstructor statement) $ case statement of
+checkStatement :: (TypeCheck es) => Env -> Effect -> Statement Renamed -> Eff es (Env, Statement Typed)
+checkStatement env ambientEffect statement = withTrace TypeCheck ("checkStatement " <> showHeadConstructor statement) $ case statement of
     Run loc expr -> do
-        (expr, _effect) <- check env (Tuple []) expr
+        expr <- check env ambientEffect (Tuple []) expr
         pure (env, Run loc expr)
     Let loc pattern_ body -> do
         (pattern_, type_, envTrans) <- inferPattern env pattern_
-        (body, _effect) <- check env type_ body
+        body <- check env ambientEffect type_ body
         pure (envTrans env, Let loc pattern_ body)
     LetFunction{} -> undefined
     Use{} -> undefined
