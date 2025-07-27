@@ -100,6 +100,12 @@ data TypeError
         , actual :: Int
         , expectedType :: Type
         }
+    | TupleLiteralOfIncorrectNumberOfArgs
+        { loc :: Loc
+        , expected :: Int
+        , actual :: Int
+        , expectedType :: Type
+        }
     | UnableToUnify
         { loc :: Loc
         , expectedType :: Type
@@ -236,13 +242,18 @@ renderCompilationError = \case
     RenameError error -> pure $ ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
         NameNotFound{name, nameKind} -> align do
             emphasis "Unbound" <+> prettyNameKind nameKind <+> prettyGlobalText nameKind name
-        AmbiguousGlobal{} -> undefined
+        AmbiguousGlobal{name, nameKind, candidates} ->
+            align do
+                emphasis "Ambiguous" <+> prettyNameKind nameKind <+> prettyGlobalText nameKind name <> "\n"
+                <> "  The following definitions are in scope:\n"
+                <> "    "
+                <> align (intercalateDoc "\n" $ fmap (\candidate -> emphasis "-" <+> prettyGlobal nameKind candidate) (toList candidates))
         InaccessibleGlobal{name, nameKind, candidates} ->
             align do
                 emphasis "Inaccessible" <+> prettyNameKind nameKind <+> prettyGlobalText nameKind name <> "\n"
                 <> "  The following definitions are available but not imported:\n"
                 <> "    "
-                <> align (foldMap (\candidate -> emphasis "-" <+> prettyGlobal nameKind candidate <> "\n") candidates)
+                <> align (intercalateDoc "\n" $ fmap (\candidate -> emphasis "-" <+> prettyGlobal nameKind candidate) (toList candidates))
         TypeVariableNotFound{name} -> align do
             emphasis "Unbound type variable" <+> prettyGlobalText VarKind name
     TypeError error -> pure $ ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
@@ -290,6 +301,15 @@ renderCompilationError = \case
                 align $
                     emphasis "Tuple pattern binds" <+> pluralNumber actual "element" <+> emphasis "but its type expects it to bind" <+> number expected
                         <> "\n    The pattern is expected to have type" <+> pretty expectedType
+        TupleLiteralOfIncorrectNumberOfArgs
+            { loc = _
+            , expected
+            , actual
+            , expectedType
+            } ->
+                align $
+                    emphasis "Tuple literal has" <+> pluralNumber actual "element" <+> emphasis "but its type expects it to have" <+> number expected
+                        <> "\n    The tuple is expected to have type" <+> pretty expectedType
         UnableToUnify
             { loc = _
             , expectedType

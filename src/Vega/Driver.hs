@@ -23,7 +23,9 @@ import Data.Traversable (for)
 import Effectful.Concurrent (Concurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwError_)
 
+import Data.Text qualified as Text
 import Effectful.Exception (try)
+import System.FilePath qualified as FilePath
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
 import Vega.Compilation.JavaScript qualified as JavaScript
@@ -37,6 +39,7 @@ import Vega.Error qualified as Error
 import Vega.Lexer qualified as Lexer
 import Vega.Parser qualified as Parser
 import Vega.Rename qualified as Rename
+import Vega.Seq.NonEmpty (NonEmpty (..))
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
@@ -72,40 +75,53 @@ findSourceFiles = do
                     | takeExtension file == ".vega" -> pure [filePath]
                     | otherwise -> pure []
 
-computeImportScope :: Seq Import -> ImportScope
-computeImportScope imports = foldMap importScope imports
+computeImportScope :: (Driver es) => Seq Import -> Eff es ImportScope
+computeImportScope imports = foldMapM toImportScope imports
   where
-    importScope = \case
+    -- TODO: allow importing from other packages without explicitly spelling out their module name
+    resolveModuleName MkParsedModuleName{package, subModules} = case package of
+        Nothing -> do
+            buildConfig <- ask @BuildConfig
+            let package = MkPackageName (buildConfig.contents.name)
+            pure (MkModuleName{package, subModules})
+        Just package -> pure (MkModuleName{package, subModules})
+
+    toImportScope = \case
         ImportUnqualified{moduleName, importedDeclarations} -> do
-            MkImportScope
-                { imports =
-                    fromList
-                        [
-                            ( moduleName
-                            , MkImportedItems
-                                { qualifiedAliases = mempty
-                                , unqualifiedItems = viaList importedDeclarations
-                                }
-                            )
-                        ]
-                }
+            moduleName <- resolveModuleName moduleName
+            pure $
+                MkImportScope
+                    { imports =
+                        fromList
+                            [
+                                ( moduleName
+                                , MkImportedItems
+                                    { qualifiedAliases = mempty
+                                    , unqualifiedItems = viaList importedDeclarations
+                                    }
+                                )
+                            ]
+                    }
         ImportQualified{moduleName, importedAs} -> do
-            MkImportScope
-                { imports =
-                    fromList
-                        [
-                            ( moduleName
-                            , MkImportedItems
-                                { qualifiedAliases = [importedAs]
-                                , unqualifiedItems = mempty
-                                }
-                            )
-                        ]
-                }
+            moduleName <- resolveModuleName moduleName
+            pure $
+                MkImportScope
+                    { imports =
+                        fromList
+                            [
+                                ( moduleName
+                                , MkImportedItems
+                                    { qualifiedAliases = [importedAs]
+                                    , unqualifiedItems = mempty
+                                    }
+                                )
+                            ]
+                    }
 
 parseAndDiff :: (Driver es, Error CompilationError :> es) => FilePath -> Eff es (Seq DiffChange)
 parseAndDiff filePath = do
-    let moduleName = moduleNameForPath filePath
+    buildConfig <- ask @BuildConfig
+    let moduleName = BuildConfig.moduleNameForPath buildConfig filePath
 
     contents <- decodeUtf8 <$> readFileBS filePath
     tokens <- case Lexer.run (toText filePath) contents of
@@ -115,7 +131,7 @@ parseAndDiff filePath = do
         Left errors -> throwError_ (Error.ParseError errors)
         Right parsedModule -> pure parsedModule
 
-    let importScope = computeImportScope parsedModule.imports
+    importScope <- computeImportScope parsedModule.imports
     previousDeclarations <- GraphPersistence.lastKnownDeclarations filePath
     GraphPersistence.setKnownDeclarations filePath (viaList (fmap (\decl -> (decl.name, decl)) parsedModule.declarations))
     case previousDeclarations of
@@ -131,10 +147,6 @@ parseAndDiff filePath = do
                     pure $ fmap (\decl -> Changed decl) parsedModule.declarations
                 else
                     Diff.diffDeclarations parsedModule.declarations previous
-
--- TODO: figure out something more reasonable here
-moduleNameForPath :: FilePath -> ModuleName
-moduleNameForPath path = MkModuleName (toText path)
 
 applyDiffChange :: (Driver es) => DiffChange -> Eff es ()
 applyDiffChange = \case
@@ -186,7 +198,7 @@ rebuild =
 
         performAllRemainingWork
         nonParseErrors <- GraphPersistence.getCurrentErrors
-        case parseErrors <> nonParseErrors of 
+        case parseErrors <> nonParseErrors of
             [] -> do
                 runErrorNoCallStack compileBackend >>= \case
                     Left error -> do

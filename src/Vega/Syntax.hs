@@ -7,18 +7,35 @@ import Relude hiding (NonEmpty, Type)
 import Vega.Loc (HasLoc, Loc)
 
 import Data.Sequence (Seq (..))
+import Data.Text qualified as Text
 import Effectful (Eff, IOE, runEff, (:>))
 import GHC.Generics (Generically (..))
 import System.IO.Unsafe (unsafePerformIO)
-import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, localConstructorText, localIdentText, lparen, meta, rparen, skolem, (<+>))
+import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, lparen, meta, rparen, skolem, (<+>))
 import Vega.Seq.NonEmpty (NonEmpty (..))
 
-newtype ModuleName = MkModuleName Text
+newtype PackageName = MkPackageName Text
     deriving stock (Generic, Eq, Show)
     deriving newtype (Hashable)
 
+renderPackageName :: PackageName -> Text
+renderPackageName (MkPackageName name) = name
+
+data ModuleName = MkModuleName
+    { package :: PackageName
+    , subModules :: NonEmpty Text
+    }
+    deriving stock (Generic, Eq, Show)
+    deriving anyclass (Hashable)
+
+data ParsedModuleName = MkParsedModuleName
+    { package :: Maybe PackageName
+    , subModules :: NonEmpty Text
+    }
+
 renderModuleName :: ModuleName -> Text
-renderModuleName (MkModuleName name) = name
+renderModuleName (MkModuleName{package, subModules}) =
+    renderPackageName package <> ":" <> Text.intercalate "/" (toList subModules)
 
 data DeclarationName = MkDeclarationName {moduleName :: ModuleName, name :: Text}
     deriving stock (Generic, Eq, Show)
@@ -52,7 +69,7 @@ unqualifiedName = \case
     Local local -> local.name
 
 internalModuleName :: ModuleName
-internalModuleName = MkModuleName "<<internal>>"
+internalModuleName = MkModuleName{package = MkPackageName "internal", subModules = "Internal" :<|| []}
 
 internalName :: Text -> GlobalName
 internalName name = MkGlobalName{name, moduleName = internalModuleName}
@@ -214,12 +231,12 @@ data Import
     = ImportUnqualified
         { -- TODO: really just Text?
           loc :: Loc
-        , moduleName :: ModuleName
+        , moduleName :: ParsedModuleName
         , importedDeclarations :: Seq Text
         }
     | ImportQualified
         { loc :: Loc
-        , moduleName :: ModuleName
+        , moduleName :: ParsedModuleName
         , importedAs :: Text
         }
     deriving stock (Generic)

@@ -8,12 +8,14 @@ import Relude hiding (NonEmpty, many)
 import Vega.Syntax hiding (forall_)
 
 import Data.Sequence (Seq (..))
+import Data.Text qualified as Text
 import GHC.IsList (Item)
 import Text.Megaparsec hiding (Token, many, parse, sepBy, sepBy1, sepEndBy, single)
 import Text.Megaparsec qualified as MegaParsec
 import Vega.Lexer.Token as Lexer (Token (..))
 import Vega.Loc (HasLoc, Loc (MkLoc, endColumn, endLine, file, startColumn, startLine), getLoc)
-import Vega.Seq.NonEmpty (NonEmpty, pattern (:<||))
+import Vega.Seq.NonEmpty (NonEmpty (..), pattern (:<||))
+import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax qualified as Syntax
 
 data AdditionalParseError
@@ -99,8 +101,11 @@ many1Seq parser = do
 sepBy :: (MonadPlus m, IsList l, Item l ~ a) => m a -> m sep -> m l
 sepBy item separator = fromList <$> MegaParsec.sepBy item separator
 
-sepBy1 :: (MonadPlus m, IsList l, Item l ~ a) => m a -> m sep -> m l
-sepBy1 item separator = fromList <$> MegaParsec.sepBy1 item separator
+sepBy1 :: (MonadPlus m) => m a -> m sep -> m (NonEmpty a)
+sepBy1 item separator =
+    MegaParsec.sepBy1 item separator >>= \case
+        [] -> error "sepBy1 returned empty list"
+        (x : xs) -> pure (x :<|| fromList xs)
 
 sepEndBy :: (MonadPlus m, IsList l, Item l ~ a) => m a -> m sep -> m l
 sepEndBy item separator = fromList <$> MegaParsec.sepEndBy item separator
@@ -179,6 +184,7 @@ defineFunction = do
             }
         )
 
+-- TODO: allow empty definitions
 defineVariantType :: Parser (Declaration Parsed)
 defineVariantType = do
     startLoc <- single Data
@@ -188,8 +194,7 @@ defineVariantType = do
     _ <- optional (single Pipe)
     constructors <- constructorDefinition `sepBy1` (single Pipe)
     let endLoc = case constructors of
-            Empty -> error "sepBy returned empty?"
-            (_ :|> (_, _, endLoc)) -> endLoc
+            (_ :||> (_, _, endLoc)) -> endLoc
 
     (declarationName, name) <- globalNamesForCurrentModule name
     pure
@@ -199,7 +204,7 @@ defineVariantType = do
                 DefineVariantType
                     { name
                     , typeParameters
-                    , constructors = fmap (\(name, arguments, loc) -> (loc, name, arguments)) constructors
+                    , constructors = fmap (\(name, arguments, loc) -> (loc, name, arguments)) (NonEmpty.toSeq constructors)
                     }
             , loc = startLoc <> endLoc
             }
@@ -553,11 +558,26 @@ import_ = do
             pure (ImportUnqualified (startLoc <> endLoc) module_ identifiers)
         ]
 
-moduleName :: Parser (ModuleName, Loc)
+moduleName :: Parser (ParsedModuleName, Loc)
 moduleName = do
-    -- TODO: do something sensible
-    (literal, loc) <- stringLit
-    pure (MkModuleName literal, loc)
+    packageName <- optional $ try $ (identifierWithLoc <|> constructorWithLoc) <* single Colon
+
+    subModules <- (identifierWithLoc <|> constructorWithLoc) `sepBy1` (single Slash)
+
+    case packageName of
+        Nothing ->
+            pure
+                ( MkParsedModuleName{package = Nothing, subModules = fmap fst subModules}
+                , snd (NonEmpty.first subModules) <> snd (NonEmpty.last subModules)
+                )
+        Just (package, startLoc) ->
+            pure
+                ( MkParsedModuleName
+                    { package = Just (MkPackageName package)
+                    , subModules = fmap fst subModules
+                    }
+                , startLoc <> snd (NonEmpty.last subModules)
+                )
 
 argumentsWithLoc :: Parser a -> Parser (Seq a, Loc)
 argumentsWithLoc parser = do

@@ -9,21 +9,19 @@ import Relude hiding (State, Type, evalState, get, put, runState, trace)
 import Relude.Extra
 
 import Vega.Error (TypeError (..), TypeErrorSet (MkTypeErrorSet))
-import Vega.Util (compose, for2, mapAccumLM, unzip3Seq, viaList, zipWithSeqM)
+import Vega.Util (compose, for2, mapAccumLM, unzip3Seq, zipWithSeqM)
 
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 
-import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
-import Data.Unique (Unique, newUnique)
-import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwError_)
-import Effectful.State.Static.Local (State, evalState, get, put, runState)
-import GHC.Generics qualified as Generics
+import Data.Unique (newUnique)
+import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
+import Effectful.State.Static.Local (evalState, get, put, runState)
 import GHC.List (List)
-import Vega.Builtins (builtinKinds)
+import Vega.Builtins qualified as Builtins
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
@@ -32,7 +30,6 @@ import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>))
 import Vega.Seq.NonEmpty (toSeq)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.TypeCheck.Zonk (zonk)
-import Vega.Util (assert)
 import Vega.Util qualified as Util
 
 data Env = MkEnv
@@ -148,7 +145,7 @@ getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobal VarKi
 globalConstructorKind :: (TypeCheck es) => GlobalName -> Eff es Kind
 globalConstructorKind name = do
     if isInternalName name
-        then case lookup name builtinKinds of
+        then case lookup name Builtins.builtinKinds of
             Nothing -> error $ "builtin type without a kind: " <> show name
             Just kind -> pure kind
         else
@@ -288,7 +285,7 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
         IntLiteral{} -> deferToInference
         DoubleLiteral{} -> deferToInference
         If{loc, condition, thenBranch, elseBranch} -> do
-            (condition, conditionEffect) <- check env boolType condition
+            (condition, conditionEffect) <- check env Builtins.boolType condition
             (thenBranch, thenEffect) <- check env expectedType thenBranch
             (elseBranch, elseEffect) <- check env expectedType elseBranch
 
@@ -306,7 +303,13 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
                         subsumes loc env (Tuple elementTypes) expectedType
                         pure elementTypes
             when (length elementTypes /= length elements) do
-                undefined
+                typeError
+                    TupleLiteralOfIncorrectNumberOfArgs
+                        { loc
+                        , expected = length elementTypes
+                        , actual = length elements
+                        , expectedType
+                        }
 
             (elements, effects) <- fmap Seq.unzip $ for (Seq.zip elements elementTypes) \(element, elementType) -> do
                 check env elementType element
@@ -411,12 +414,12 @@ infer env expr = do
             (bodyType, body, bodyEffect) <- infer (compose envTransformers env) body
 
             pure (Function parameterTypes bodyEffect bodyType, Lambda loc typeParameters parameters body, Pure)
-        StringLiteral loc literal -> pure (stringType, StringLiteral loc literal, Pure)
-        IntLiteral loc literal -> pure (intType, IntLiteral loc literal, Pure)
-        DoubleLiteral loc literal -> pure (doubleType, DoubleLiteral loc literal, Pure)
+        StringLiteral loc literal -> pure (Builtins.stringType, StringLiteral loc literal, Pure)
+        IntLiteral loc literal -> pure (Builtins.intType, IntLiteral loc literal, Pure)
+        DoubleLiteral loc literal -> pure (Builtins.doubleType, DoubleLiteral loc literal, Pure)
         BinaryOperator{} -> undefined
         If{loc, condition, thenBranch, elseBranch} -> do
-            (condition, conditionEffect) <- check env boolType condition
+            (condition, conditionEffect) <- check env Builtins.boolType condition
             (thenType, thenBranch, thenEffect) <- infer env thenBranch
             (elseType, elseBranch, elseEffect) <- infer env elseBranch
             subsumes loc env thenType elseType
@@ -424,18 +427,6 @@ infer env expr = do
             effect <- unionAll [conditionEffect, thenEffect, elseEffect]
             pure (thenType, If{loc, condition, thenBranch, elseBranch}, effect)
         _ -> undefined
-
-stringType :: Type
-stringType = TypeConstructor (Global (internalName "String"))
-
-intType :: Type
-intType = TypeConstructor (Global (internalName "Int"))
-
-doubleType :: Type
-doubleType = TypeConstructor (Global (internalName "Double"))
-
-boolType :: Type
-boolType = TypeConstructor (Global (internalName "Bool"))
 
 constructorKind :: (TypeCheck es) => Env -> Name -> Eff es Kind
 constructorKind env name = case name of
@@ -463,7 +454,7 @@ inferType env syntax = do
             pure (kind, TypeConstructor name, TypeConstructorS loc name)
         TypeApplicationS loc typeConstructorSyntax argumentsSyntax -> do
             (constructorKind, typeConstructor, typeConstructorSyntax) <- inferType env typeConstructorSyntax
-            case constructorKind of
+            followMetas constructorKind >>= \case
                 Function argumentKinds Pure resultKind
                     | length argumentKinds == length argumentsSyntax -> do
                         (arguments, argumentsSyntax) <- Seq.unzip <$> zipWithSeqM (checkType env Parametric) argumentKinds argumentsSyntax

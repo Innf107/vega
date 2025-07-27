@@ -21,7 +21,7 @@ import Vega.Syntax (
     Pattern,
     Statement,
     TypeSyntax,
-    ForallBinderS, Monomorphization, BinderVisibility,
+    ForallBinderS, Monomorphization, BinderVisibility, PackageName,
  )
 
 import Effectful
@@ -133,6 +133,7 @@ deriving via Generically GlobalName instance Diff GlobalName
 deriving via Generically DeclarationName instance Diff DeclarationName
 deriving via Generically Name instance Diff Name
 deriving via Generically ModuleName instance Diff ModuleName
+deriving via Generically PackageName instance Diff PackageName
 
 deriving via DiffFromEq Text instance Diff Text
 deriving via DiffFromEq Int instance Diff Int

@@ -1,6 +1,6 @@
 $FILE:3:3: ERROR:
 Tuple pattern binds 3 elements but its type expects it to bind 2
-    The pattern is expected to have type (<<internal>>:Int, <<internal>>:String)
+    The pattern is expected to have type (internal:Internal:Int, internal:Internal:String)
   ┃ 
 3 ┃ f((x, y, z)) = x;
   ┃   ▔▔▔▔▔▔▔▔▔

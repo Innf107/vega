@@ -1,0 +1,6 @@
+$FILE:3:8: ERROR:
+Tuple literal has 2 elements but its type expects it to have 3
+    The tuple is expected to have type (internal:Internal:Int, internal:Internal:Int, internal:Internal:Int)
+  ┃ 
+3 ┃ f(x) = (x, x);
+  ┃        ▔▔▔▔▔▔

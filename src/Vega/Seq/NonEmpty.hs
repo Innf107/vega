@@ -1,13 +1,24 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 
-module Vega.Seq.NonEmpty (NonEmpty ((:<||), (:||>)), toSeq, castToSeq, unzip) where
+module Vega.Seq.NonEmpty (NonEmpty ((:<||), (:||>)), toSeq, castToSeq, unzip, first, last) where
 
-import Relude hiding (NonEmpty, unzip)
+import Relude hiding (NonEmpty, unzip, first, last)
 
 import Data.Sequence qualified as Seq
 
 newtype NonEmpty a = MkNonEmpty (Seq a)
-    deriving newtype (Functor, Applicative, Monad, Semigroup, Monoid, Foldable)
+    deriving newtype
+        ( Functor
+        , Applicative
+        , Monad
+        , Semigroup
+        , Monoid
+        , Foldable
+        , Eq
+        , Ord
+        , Show
+        , Hashable
+        )
 
 instance Traversable NonEmpty where
     traverse f (MkNonEmpty xs) = MkNonEmpty <$> traverse f xs
@@ -30,3 +41,9 @@ pattern xs :||> x = MkNonEmpty (xs Seq.:|> x)
 
 unzip :: NonEmpty (a, b) -> (NonEmpty a, NonEmpty b)
 unzip (MkNonEmpty seq) = coerce (Seq.unzip seq)
+
+first :: NonEmpty a -> a
+first (x :<|| _) = x
+
+last :: NonEmpty a -> a
+last (_ :||> x) = x

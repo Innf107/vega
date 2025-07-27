@@ -184,9 +184,13 @@ includeDeclarationRecursively name = do
 
 -- | Render global names into a format suitable for JS names
 compileGlobalName :: GlobalName -> TextBuilder.Builder
-compileGlobalName (MkGlobalName{moduleName = MkModuleName moduleName, name}) = do
-    -- TODO: update this when module names are more sensible (and do something less naive)
-    let escapedModuleName = Text.replace "-" "____" $ Text.replace "." "___" $ Text.replace "/" "__" moduleName
+compileGlobalName (MkGlobalName{moduleName, name}) = do
+    -- TODO: do something less naive
+    let escapedModuleName =
+            renderModuleName moduleName
+                & Text.replace "-" "____"
+                & Text.replace "." "___"
+                & Text.replace "/" "__"
     TextBuilder.fromText escapedModuleName <> "$" <> TextBuilder.fromText name
 
 compileLocalName :: LocalName -> TextBuilder.Builder

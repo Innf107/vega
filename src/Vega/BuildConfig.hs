@@ -9,6 +9,7 @@ module Vega.BuildConfig (
     entryPoint,
     backend,
     Backend (..),
+    moduleNameForPath,
 ) where
 
 import Relude
@@ -20,8 +21,11 @@ import Effectful.FileSystem (FileSystem, canonicalizePath, listDirectory)
 import Data.Aeson qualified as Aeson
 import Data.Yaml as Yaml hiding (object)
 
+import Data.Text qualified as Text
 import System.FilePath ((</>))
-import Vega.Syntax (GlobalName (..), ModuleName (..), DeclarationName (..))
+import System.FilePath qualified as FilePath
+import Vega.Seq.NonEmpty (NonEmpty (..))
+import Vega.Syntax (DeclarationName (..), GlobalName (..), ModuleName (..), PackageName (..))
 
 data BuildConfigContents = MkBuildConfigContents
     { name :: Text
@@ -32,6 +36,7 @@ data BuildConfigContents = MkBuildConfigContents
     deriving (Generic, Show)
 
 instance FromJSON BuildConfigContents where
+    parseJSON :: Value -> Parser BuildConfigContents
     parseJSON =
         Aeson.genericParseJSON
             ( Aeson.defaultOptions
@@ -66,8 +71,7 @@ sourceDirectory config = case config.contents.sourceDirectory of
 
 entryPoint :: BuildConfig -> GlobalName
 entryPoint config = case config.contents.entryPoint of
-    -- TODO: change this once you make module names more sensible
-    Nothing -> MkGlobalName{moduleName = MkModuleName (toText (sourceDirectory config </> "Main.vega")), name = "main"}
+    Nothing -> MkGlobalName{moduleName = moduleNameForPath config (sourceDirectory config </> "Main.vega"), name = "main"}
     -- TODO: figure out how exactly to parse declaration names here
     Just name -> undefined
 
@@ -99,3 +103,18 @@ findBuildConfig directory = do
                 then -- We have hit the root directory
                     pure Missing
                 else findBuildConfig parentDirectory
+
+moduleNameForPath :: (HasCallStack) => BuildConfig -> FilePath -> ModuleName
+moduleNameForPath buildConfig path = do
+    -- TODO: validate that the path is actually relative to the project root
+    let relativePath = FilePath.makeRelative (sourceDirectory buildConfig) path
+
+    let package = MkPackageName (buildConfig.contents.name)
+    -- TODO: validate that the path components are valid identifiers, etc.
+    let rawSubModules = case Text.splitOn "/" (toText relativePath) of
+            [] -> error "empty file path after root"
+            (x : xs) -> (x :<|| fromList xs)
+
+    let subModules = case rawSubModules of
+            (rest :||> last) -> rest :||> toText (FilePath.dropExtension (toString last))
+    MkModuleName{package, subModules}
