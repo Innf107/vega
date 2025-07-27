@@ -410,7 +410,12 @@ infer env ambientEffect expr = do
                 _ -> do
                     (_env, statements) <- checkStatements env ambientEffect statements
                     pure (Tuple [], SequenceBlock{loc, statements})
-        _ -> undefined
+        DataConstructor{} -> undefined
+        PartialApplication{} -> undefined
+        TupleLiteral loc elements -> do
+            (elementTypes, elements) <- Seq.unzip <$> for elements (infer env ambientEffect)
+            pure (Tuple elementTypes, TupleLiteral loc elements)
+        Match{} -> undefined
 
 checkStatements :: (TypeCheck es) => Env -> Effect -> Seq (Statement Renamed) -> Eff es (Env, Seq (Statement Typed))
 checkStatements env ambientEffect statements = mapAccumLM (\env -> checkStatement env ambientEffect) env statements
