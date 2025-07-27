@@ -1,0 +1,7 @@
+
+
+f : Int -> Int;
+f(x) = {
+    let y : String = x;
+    y
+}

@@ -226,6 +226,7 @@ lexIdentifier chars state = case state of
             "match" -> pure (Match, state)
             "use" -> pure (Use, state)
             "import" -> pure (Import, state)
+            "let" -> pure (Let, state)
             "_" -> pure (Underscore, state)
             ident -> pure (Ident ident, state)
 

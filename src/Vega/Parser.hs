@@ -462,7 +462,7 @@ expr = exprLogical
                 pure (Syntax.If{loc = startLoc <> getLoc elseBranch, condition, thenBranch, elseBranch})
             , do
                 startLoc <- single Lexer.LBrace
-                statements <- fromList <$> statement `sepEndBy` (single Lexer.Comma)
+                statements <- fromList <$> statement `sepEndBy` (single Lexer.Semicolon)
                 endLoc <- single Lexer.RBrace
                 pure (SequenceBlock (startLoc <> endLoc) statements)
             , do

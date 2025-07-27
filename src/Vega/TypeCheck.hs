@@ -202,7 +202,7 @@ checkDeclarationSyntax loc = \case
         pure (DefineVariantType{name, typeParameters, constructors})
 
 checkPattern :: (TypeCheck es) => Env -> Type -> Pattern Renamed -> Eff es (Pattern Typed, Env -> Env)
-checkPattern env expectedType = \case
+checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <> showHeadConstructor pattern_) case pattern_ of
     VarPattern loc var -> pure (VarPattern loc var, bindVarType var expectedType)
     AsPattern loc pattern_ name -> do
         (pattern_, innerTrans) <- checkPattern env expectedType pattern_
@@ -237,14 +237,23 @@ checkPattern env expectedType = \case
         pure (TuplePattern loc patterns, Util.compose envTransformers)
 
 inferPattern :: (TypeCheck es) => Env -> Pattern Renamed -> Eff es (Pattern Typed, Type, Env -> Env)
-inferPattern env = \case
+inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadConstructor pattern_) $ case pattern_ of
+    WildcardPattern loc -> do
+        type_ <- MetaVar <$> freshTypeMeta loc env "w"
+        pure (WildcardPattern loc, type_, id)
     VarPattern loc varName -> do
         type_ <- MetaVar <$> freshTypeMeta loc env (varName.name)
         pure (VarPattern loc varName, type_, bindVarType varName type_)
     AsPattern loc innerPattern name -> do
         (innerPattern, innerType, innerTrans) <- inferPattern env innerPattern
         pure (AsPattern loc innerPattern name, innerType, bindVarType name innerType . innerTrans)
-    _ -> undefined
+    ConstructorPattern{} -> undefined
+    TuplePattern{} -> undefined
+    TypePattern loc innerPattern typeSyntax -> do
+        (_kind, type_, typeSyntax) <- inferTypeRep env typeSyntax
+        (innerPattern, envTrans) <- checkPattern env type_ innerPattern
+        pure (TypePattern loc innerPattern typeSyntax, type_, envTrans)
+    OrPattern{} -> undefined
 
 check :: (TypeCheck es) => Env -> Type -> Expr Renamed -> Eff es (Expr Typed, Effect)
 check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstructor expr <+> keyword "<=" <+> pretty expectedType) do
@@ -292,7 +301,14 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
             effect <- unionAll [conditionEffect, thenEffect, elseEffect]
             pure (If{loc, condition, thenBranch, elseBranch}, effect)
         SequenceBlock{loc, statements} -> do
-            undefined
+            case statements of
+                (realStatements :|> Run lastLoc lastExpression) -> do
+                    (env, realStatements) <- checkStatements env realStatements
+                    (lastExpression, finalEffect) <- check env expectedType lastExpression
+                    -- TODO: this ignores the intermediate effects but we actually want to switch to checking
+                    -- effects anyway
+                    pure (SequenceBlock{loc, statements = realStatements :|> Run lastLoc lastExpression}, finalEffect)
+                _ -> deferToInference
         TupleLiteral loc elements -> do
             elementTypes <-
                 followMetas expectedType >>= \case
@@ -319,40 +335,6 @@ check env expectedType expr = withTrace TypeCheck ("check:" <+> showHeadConstruc
         PartialApplication{} -> undefined
         BinaryOperator{} -> undefined
         Match{} -> undefined
-
-bindTypeParameters :: (TypeCheck es) => Loc -> Env -> Seq (Loc, LocalName) -> Type -> Eff es (Env, Type)
-bindTypeParameters loc env initialParameters polytype = fmap swap $ evalState (toList initialParameters) $ runState env do
-    let onVisible _loc _env MkForallBinder{varName = _typeSignatureVarName, visibility = _, monomorphization, kind} = do
-            parameters <- get @(List (Loc, LocalName))
-            env <- get @Env
-            case parameters of
-                [] -> pure StopInstantiating
-                (_loc, parameterVarName) : rest -> do
-                    skolem <- Skolem <$> freshSkolem parameterVarName monomorphization kind
-
-                    put (bindTypeVariable parameterVarName skolem kind monomorphization env)
-                    put rest
-                    case rest of
-                        [] -> pure (LastInstantiation skolem)
-                        _ -> pure (InstantiateWith skolem)
-    remainingType <- instantiateGeneric skolemizeStrategy onVisible loc env polytype
-    parameters <- get @(List (Loc, LocalName))
-    case parameters of
-        [] -> pure remainingType
-        _ -> do
-            let actualCount = case normalizeForalls polytype of
-                    Forall binders _ -> length binders
-                    _ -> 0
-            typeError (TryingToBindTooManyTypeParameters{loc, boundCount = length initialParameters, actualCount, type_ = polytype})
-            pure remainingType
-
-varType :: (HasCallStack) => (TypeCheck es) => Env -> Name -> Eff es Type
-varType env name = case name of
-    Global globalName -> getGlobalType globalName
-    Local localName -> do
-        case lookup localName env.localTypes of
-            Just type_ -> pure type_
-            Nothing -> error ("variable not found in renamer: " <> show name)
 
 infer :: (TypeCheck es) => Env -> Expr Renamed -> Eff es (Type, Expr Typed, Effect)
 infer env expr = do
@@ -426,7 +408,65 @@ infer env expr = do
             subsumes loc env elseType thenType
             effect <- unionAll [conditionEffect, thenEffect, elseEffect]
             pure (thenType, If{loc, condition, thenBranch, elseBranch}, effect)
+        SequenceBlock{loc, statements} ->
+            case statements of
+                (realStatements :|> Run lastLoc lastExpression) -> do
+                    (env, realStatements) <- checkStatements env realStatements
+                    (type_, lastExpression, finalEffect) <- infer env lastExpression
+                    pure (type_, SequenceBlock{loc, statements = realStatements :|> Run lastLoc lastExpression}, finalEffect)
+                _ -> do
+                    (_env, statements) <- checkStatements env statements
+                    pure (Tuple [], SequenceBlock{loc, statements}, Pure)
         _ -> undefined
+
+checkStatements :: (TypeCheck es) => Env -> Seq (Statement Renamed) -> Eff es (Env, Seq (Statement Typed))
+checkStatements env statements = mapAccumLM checkStatement env statements
+
+checkStatement :: (TypeCheck es) => Env -> Statement Renamed -> Eff es (Env, Statement Typed)
+checkStatement env statement = withTrace TypeCheck ("checkStatement " <> showHeadConstructor statement) $ case statement of
+    Run loc expr -> do
+        (expr, _effect) <- check env (Tuple []) expr
+        pure (env, Run loc expr)
+    Let loc pattern_ body -> do
+        (pattern_, type_, envTrans) <- inferPattern env pattern_
+        (body, _effect) <- check env type_ body
+        pure (envTrans env, Let loc pattern_ body)
+    LetFunction{} -> undefined
+    Use{} -> undefined
+
+bindTypeParameters :: (TypeCheck es) => Loc -> Env -> Seq (Loc, LocalName) -> Type -> Eff es (Env, Type)
+bindTypeParameters loc env initialParameters polytype = fmap swap $ evalState (toList initialParameters) $ runState env do
+    let onVisible _loc _env MkForallBinder{varName = _typeSignatureVarName, visibility = _, monomorphization, kind} = do
+            parameters <- get @(List (Loc, LocalName))
+            env <- get @Env
+            case parameters of
+                [] -> pure StopInstantiating
+                (_loc, parameterVarName) : rest -> do
+                    skolem <- Skolem <$> freshSkolem parameterVarName monomorphization kind
+
+                    put (bindTypeVariable parameterVarName skolem kind monomorphization env)
+                    put rest
+                    case rest of
+                        [] -> pure (LastInstantiation skolem)
+                        _ -> pure (InstantiateWith skolem)
+    remainingType <- instantiateGeneric skolemizeStrategy onVisible loc env polytype
+    parameters <- get @(List (Loc, LocalName))
+    case parameters of
+        [] -> pure remainingType
+        _ -> do
+            let actualCount = case normalizeForalls polytype of
+                    Forall binders _ -> length binders
+                    _ -> 0
+            typeError (TryingToBindTooManyTypeParameters{loc, boundCount = length initialParameters, actualCount, type_ = polytype})
+            pure remainingType
+
+varType :: (HasCallStack) => (TypeCheck es) => Env -> Name -> Eff es Type
+varType env name = case name of
+    Global globalName -> getGlobalType globalName
+    Local localName -> do
+        case lookup localName env.localTypes of
+            Just type_ -> pure type_
+            Nothing -> error ("variable not found in renamer: " <> show name)
 
 constructorKind :: (TypeCheck es) => Env -> Name -> Eff es Kind
 constructorKind env name = case name of

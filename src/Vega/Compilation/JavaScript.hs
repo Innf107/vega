@@ -19,6 +19,7 @@ import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 
 import Data.HashSet qualified as HashSet
+import Data.Sequence (Seq (..))
 import Data.Text qualified as Text
 import Effectful.Error.Static (Error)
 import Vega.Effect.Trace (Category (..), Trace, trace)
@@ -41,6 +42,15 @@ compileDeclaration :: (GraphPersistence :> es, Trace :> es) => Declaration Typed
 compileDeclaration declaration = fmap (TextBuilder.toLazyText . snd) $ runWriter @TextBuilder.Builder do
     compileDeclarationSyntax declaration.syntax
 
+-- TODO: we need to support actual decision tree compilation for non-variable patterns
+compilePattern :: Pattern Typed -> TextBuilder.Builder
+compilePattern = \case
+    VarPattern _ localName -> compileLocalName localName
+    TypePattern _ inner _ -> compilePattern inner
+    WildcardPattern _loc -> "_"
+    TuplePattern _ patterns -> "[" <> intercalate "," (fmap compilePattern patterns) <> "]"
+    _ -> undefined
+
 compileDeclarationSyntax :: (Compile es) => DeclarationSyntax Typed -> Eff es ()
 compileDeclarationSyntax = \case
     DefineFunction
@@ -52,15 +62,8 @@ compileDeclarationSyntax = \case
         } -> do
             tell ("const " <> compileGlobalName name <> " = " <> "(")
 
-            let compileParameter = \case
-                    VarPattern _ localName -> compileLocalName localName
-                    TypePattern _ inner _ -> compileParameter inner
-                    WildcardPattern _loc -> "_"
-                    TuplePattern _ patterns -> "[" <> intercalate "," (fmap compileParameter patterns) <> "]"
-                    _ -> undefined
-            -- TODO: we need to support actual decision tree compilation for non-variable patterns
             for_ parameters \parameter -> do
-                tell (compileParameter parameter)
+                tell (compilePattern parameter)
                 tell ", "
             tell ") => "
             compileExpr body
@@ -133,11 +136,39 @@ compileExpr = \case
         } -> undefined
     SequenceBlock
         { statements
-        } -> undefined
+        } -> do
+            tell "((() => "
+            compileStatements statements
+            tell ")())"
     Match
         { scrutinee
         , cases
         } -> undefined
+
+compileStatements :: (Compile es) => Seq (Statement Typed) -> Eff es ()
+compileStatements Empty = tell "return []"
+compileStatements (statements :|> Run _loc lastExpression) = do
+    for_ statements \statement -> do
+        compileStatement statement
+        tell "; "
+    tell "return "
+    compileExpr lastExpression
+compileStatements statements = do
+    for_ statements \statement -> do
+        compileStatement statement
+        tell "; "
+    tell "return []"
+
+compileStatement :: (Compile es) => Statement Typed -> Eff es ()
+compileStatement = \case
+    Run _ expr -> do
+        tell "const _ = "
+        compileExpr expr
+    Let _ pattern_ body -> do
+        tell $ "const " <> compilePattern pattern_ <> " = "
+        compileExpr body 
+    LetFunction{} -> undefined
+    Use{} -> undefined
 
 {- | Assemble all the alrady compiled JS declarations into a single JS file.
 This assumes that

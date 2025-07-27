@@ -32,7 +32,9 @@ type instance DispatchOf (Output o) = Static NoSideEffects
 newtype instance StaticRep (Output o) = OutputRep ([o])
 
 runOutputList :: forall o a es. Eff (Output o ': es) a -> Eff es (a, [o])
-runOutputList eff = coerce $ runStaticRep (OutputRep []) eff
+runOutputList eff = do
+    (result, OutputRep list) <- runStaticRep (OutputRep []) eff
+    pure (result, reverse list)
 
 runOutputSeq :: forall o a es. Eff (Output o ': es) a -> Eff es (a, Seq o)
 runOutputSeq eff = do
