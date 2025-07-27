@@ -326,7 +326,7 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
                 check env ambientEffect elementType element
 
             pure (TupleLiteral loc elements)
-        PartialApplication{} -> undefined
+        PartialApplication{} -> deferToInference
         BinaryOperator{} -> undefined
         Match{} -> undefined
 
@@ -351,6 +351,8 @@ infer env ambientEffect expr = do
                         , actual = length arguments
                         , functionType
                         }
+            subsumesEffect functionEffect ambientEffect
+
             let checkArguments argumentExpr argumentType = do
                     check env ambientEffect argumentType argumentExpr
             arguments <- zipWithSeqM checkArguments arguments argumentTypes
