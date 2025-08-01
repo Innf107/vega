@@ -1,6 +1,6 @@
 module Vega.SCC (SCCId, computeSCC) where
 
-import Relude hiding (State, evalState, get, modify, put)
+import Relude hiding (State, evalState, get, modify, put, trace)
 import Relude.Extra
 
 import Effectful
@@ -8,6 +8,9 @@ import Effectful
 import Data.HashSet qualified as HashSet
 import Data.UUID (UUID)
 import Data.UUID.V4 (nextRandom)
+
+import Vega.Effect.Trace (Trace, trace, Category(..))
+import Vega.Pretty (number)
 
 -- TODO: try to use something more efficient (maybe twitter-style snowflakes?)
 newtype SCCId = MkSCCId UUID
@@ -21,13 +24,13 @@ newSCCId = MkSCCId <$> liftIO nextRandom
 -- (and also every place we use this in is in IOE anyway so it doesn't really matter).
 computeSCC ::
     forall node es.
-    (Show node, Hashable node, IOE :> es) =>
+    (Show node, Hashable node, Trace :> es, IOE :> es) =>
     -- | Return a list of nodes only if the node has not been assigned an SCC already
     (node -> Eff es (Maybe [node])) ->
     node ->
     Eff es (HashMap node SCCId)
 computeSCC outEdgesOrPrecomputedSCC node = do
-    visited :: IORef (HashSet node) <- newIORef mempty
+    visited :: IORef (HashSet node) <- newIORef [node]
     currentDFSNum :: IORef Int <- newIORef 0
     dfsNums :: IORef (HashMap node Int) <- newIORef mempty
 
@@ -38,6 +41,7 @@ computeSCC outEdgesOrPrecomputedSCC node = do
 
     let go node = do
             dfsNum <- readIORef currentDFSNum
+            trace SCC ("(" <> number dfsNum <> ") " <> show node)
             writeIORef currentDFSNum (dfsNum + 1)
             modifyIORef' dfsNums (insert node dfsNum)
             outEdgesOrPrecomputedSCC node >>= \case

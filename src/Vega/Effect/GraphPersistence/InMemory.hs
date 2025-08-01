@@ -4,7 +4,7 @@
 
 module Vega.Effect.GraphPersistence.InMemory (runInMemory) where
 
-import Relude hiding (Reader, Type, ask, runReader)
+import Relude hiding (Reader, Type, ask, runReader, trace)
 import Relude.Extra
 
 import Data.HashSet qualified as HashSet
@@ -57,6 +57,8 @@ import Data.Traversable (for)
 import Effectful.Concurrent.Async (forConcurrently, runConcurrent)
 import Vega.BuildConfig (Backend (JavaScript))
 import Vega.SCC (SCCId, computeSCC)
+import Vega.Effect.Trace (Trace, trace, Category (SCC))
+import Vega.Pretty (Pretty(pretty))
 
 -- TODO: this currently isn't thread safe
 
@@ -79,7 +81,7 @@ type DeclarationStore = CuckooHashTable DeclarationName DeclarationData
 
 type LastKnownDeclarations = IORef (HashMap FilePath (HashMap DeclarationName (Declaration Parsed)))
 
-type NameResolution = CuckooHashTable Text (HashMap GlobalName NameKind)
+type NameResolution = CuckooHashTable (Text, NameKind) (HashSet GlobalName)
 
 type ImportScopes = CuckooHashTable ModuleName ImportScope
 
@@ -87,6 +89,7 @@ type DefiningDeclarations = CuckooHashTable GlobalName DeclarationName
 
 type InMemory es =
     ( IOE :> es
+    , Trace :> es
     , Reader DeclarationStore :> es
     , Reader LastKnownDeclarations :> es
     , Reader NameResolution :> es
@@ -225,7 +228,7 @@ removeDeclaration name = do
     liftIO $ HashTable.delete dependencies name
 
     globals <- getDefinedGlobals name
-    for_ globals \(name, _) -> removeNameResolutionAssociation name
+    for_ globals \(name, kind) -> removeNameResolutionAssociation name kind
 
 getDefinedGlobals :: (InMemory es) => DeclarationName -> Eff es (Seq (GlobalName, NameKind))
 getDefinedGlobals name = do
@@ -239,17 +242,17 @@ addNameResolutionAssociation :: (HasCallStack, InMemory es) => GlobalName -> Nam
 addNameResolutionAssociation name kind = do
     nameResolution <- ask @NameResolution
 
-    liftIO $ HashTable.mutate nameResolution name.name \case
-        Nothing -> (Just [(name, kind)], ())
-        Just entries -> (Just (insert name kind entries), ())
+    liftIO $ HashTable.mutate nameResolution (name.name, kind) \case
+        Nothing -> (Just [name], ())
+        Just entries -> (Just (HashSet.insert name entries), ())
 
-removeNameResolutionAssociation :: (HasCallStack, InMemory es) => GlobalName -> Eff es ()
-removeNameResolutionAssociation name = do
+removeNameResolutionAssociation :: (HasCallStack, InMemory es) => GlobalName -> NameKind -> Eff es ()
+removeNameResolutionAssociation name kind = do
     nameResolution <- ask @NameResolution
-    liftIO $ HashTable.mutate nameResolution name.name \case
+    liftIO $ HashTable.mutate nameResolution (name.name, kind) \case
         Nothing -> error $ "removing name association that was never tracked: " <> show name
         Just entries -> do
-            let remaining = HashMap.delete name entries
+            let remaining = HashSet.delete name entries
             if null remaining
                 then
                     (Nothing, ())
@@ -320,6 +323,7 @@ addDependency dependent dependency = do
 
 getSCC :: forall es. (InMemory es) => DeclarationName -> Eff es SCCId
 getSCC declarationName = do
+    trace SCC $ "getSCC " <> pretty declarationName
     data_ <- declarationData declarationName
     readIORef data_.scc >>= \case
         Just scc -> pure scc
@@ -341,7 +345,6 @@ getSCC declarationName = do
 
             for_ (HashMap.toList sccs) \(declaration, scc) -> do
                 setSCCId declaration scc
-            
             case lookup declarationName sccs of
                 Nothing -> error $ "SCC map for declaration " <> show declarationName <> " is missing its own binding.\nSCCs: " <> show sccs
                 Just scc -> pure scc
@@ -387,12 +390,13 @@ cacheGlobalKind name kind = do
     cachedKinds <- ask @CachedKinds
     liftIO $ HashTable.insert cachedKinds name (Right kind)
 
-findMatchingNames :: (InMemory es) => Text -> Eff es (HashMap GlobalName NameKind)
-findMatchingNames text = do
+findMatchingNames :: (InMemory es) => Text -> NameKind -> Eff es (HashSet GlobalName)
+findMatchingNames text kind = do
     nameResolution <- ask @NameResolution
 
-    liftIO (HashTable.lookup nameResolution text) >>= \case
-        Just candidates -> pure candidates
+    liftIO (HashTable.lookup nameResolution (text, kind)) >>= \case
+        Just candidates -> do
+            pure candidates
         Nothing -> mempty
 
 getErrors :: (InMemory es) => DeclarationName -> Eff es (Seq CompilationError)
@@ -472,7 +476,7 @@ setDefiningDeclaration global declaration = do
     definingDeclarations <- ask @DefiningDeclarations
     liftIO $ HashTable.insert definingDeclarations global declaration
 
-runInMemory :: forall a es. (IOE :> es) => Eff (GraphPersistence : es) a -> Eff es a
+runInMemory :: forall a es. (Trace :> es, IOE :> es) => Eff (GraphPersistence : es) a -> Eff es a
 runInMemory action = do
     lastKnownDeclarationsPerFile :: LastKnownDeclarations <- liftIO $ newIORef mempty
 
@@ -526,7 +530,7 @@ runInMemory action = do
                 CacheGlobalType name type_ -> cacheGlobalType name type_
                 GetCachedGlobalKind name -> getCachedGlobalKind name
                 CacheGlobalKind name kind -> cacheGlobalKind name kind
-                FindMatchingNames name -> findMatchingNames name
+                FindMatchingNames name kind -> findMatchingNames name kind
                 GetErrors name -> getErrors name
                 -- Compilation
                 GetCurrentErrors -> getCurrentErrors

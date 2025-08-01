@@ -70,18 +70,15 @@ findGlobalUnregistered :: (Rename es) => NameKind -> Text -> Eff es GlobalVariab
 findGlobalUnregistered nameKind name = do
     parent <- ask @DeclarationName
 
-    let builtinCandidates = case lookup name builtinGlobals of
+    -- We can assume that builtins are never going to cause name conflicts
+    let builtinCandidates = case lookup (name, nameKind) builtinGlobals of
             Nothing -> []
             Just global -> [global]
 
     importScope <- (defaultImportScope <>) <$> getModuleImportScope parent.moduleName
-    candidatesOfAllKinds <- findMatchingNames name
+    userDefinedCandidates <- findMatchingNames name nameKind
 
-    let takeVarCandidate = \case
-            (name, candidateKind)
-                | candidateKind == nameKind -> Just name
-            _ -> Nothing
-    let candidates = mapMaybe takeVarCandidate (builtinCandidates <> HashMap.toList candidatesOfAllKinds)
+    let candidates = builtinCandidates <> toList userDefinedCandidates
 
     case filter (\name -> name.moduleName == parent.moduleName || isInScope name importScope) candidates of
         [] -> case candidates of

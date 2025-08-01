@@ -34,6 +34,7 @@ data Category
     | KindCheck
     | Unify
     | Instantiate
+    | SCC
     deriving (Generic, Show, Enum, Bounded)
 
 data Trace :: Effect where
@@ -57,6 +58,7 @@ data Traces = MkTraces
     , kindCheck :: Bool
     , unify :: Bool
     , instantiate :: Bool
+    , scc :: Bool
     }
 
 defaultTraces :: Traces
@@ -70,6 +72,7 @@ defaultTraces =
         , kindCheck = False
         , unify = False
         , instantiate = False
+        , scc = False
         }
 
 categoryWidth :: Traces -> Int
@@ -112,6 +115,7 @@ traceEnabledIn category enabledTraces = case category of
     KindCheck -> enabledTraces.kindCheck
     Unify -> enabledTraces.unify
     Instantiate -> enabledTraces.instantiate
+    SCC -> enabledTraces.scc
 
 getTraces :: (MonadIO io) => io Traces
 getTraces =
@@ -132,6 +136,7 @@ getTraces =
         ("kinds" : rest) -> go (traces{kindCheck = True}) rest
         ("unify" : rest) -> go (traces{unify = True}) rest
         ("instantiate" : rest) -> go (traces{instantiate = True}) rest
+        ("scc" : rest) -> go (traces{scc = True}) rest
         (trace_ : rest) -> do
             -- TODO: make the warning prettier
             putTextLn $ "WARNING: unrecognized trace category: " <> trace_

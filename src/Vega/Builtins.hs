@@ -11,8 +11,8 @@ module Vega.Builtins (
 import Relude hiding (Type)
 import Vega.Syntax
 
-builtinGlobals :: HashMap Text (GlobalName, NameKind)
-builtinGlobals = fromList [(name, (internalName name, kind)) | (name, kind) <- globals]
+builtinGlobals :: HashMap (Text, NameKind) GlobalName
+builtinGlobals = fromList [((name, kind), internalName name) | (name, kind) <- globals]
   where
     globals =
         [ ("Int", TypeConstructorKind)

@@ -1,4 +1,8 @@
 #!/usr/bin/env polaris
+options {
+    "--pre-print-cases" as prePrintCases: "Print the name of a test case before running it. This is useful to find infinite loops in tests"
+}
+
 module List = import("@std/list.pls")
 
 let testdir = !readlink "-f" (scriptLocal("."))
@@ -14,6 +18,10 @@ let compileYmlFile(name) = "name: ${name}\nsource-directory: \".\""
 
 let failures = ref 0
 List.for(compileTests, \testFile -> {
+    if prePrintCases then {
+        print("\e[30m[${testFile}]\e[0m")
+    } else {}
+
     chdir(testdir)
 
     let testName = !basename "-s" ".vega" testFile

@@ -94,7 +94,7 @@ data NameKind
     = VarKind
     | TypeConstructorKind
     | DataConstructorKind
-    deriving stock (Generic, Eq)
+    deriving stock (Generic, Eq, Show)
     deriving anyclass (Hashable)
 
 data Declaration p = MkDeclaration

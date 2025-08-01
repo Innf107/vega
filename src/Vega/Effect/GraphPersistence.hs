@@ -58,7 +58,7 @@ data GraphPersistence :: Effect where
     CacheGlobalType :: GlobalName -> Type -> GraphPersistence m ()
     GetCachedGlobalKind :: GlobalName -> GraphPersistence m (GraphData TypeErrorSet Kind)
     CacheGlobalKind :: GlobalName -> Kind -> GraphPersistence m ()
-    FindMatchingNames :: Text -> GraphPersistence m (HashMap GlobalName NameKind)
+    FindMatchingNames :: Text -> NameKind -> GraphPersistence m (HashSet GlobalName)
     GetErrors :: DeclarationName -> GraphPersistence m (Seq CompilationError)
     -- Compilation
     GetCurrentErrors :: GraphPersistence m (Seq CompilationError)

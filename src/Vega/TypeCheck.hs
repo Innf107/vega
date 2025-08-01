@@ -165,7 +165,7 @@ globalConstructorKind name = do
 computeAndCacheKind :: forall es. (TypeCheck es) => Declaration Renamed -> Eff es Kind
 computeAndCacheKind declaration = case declaration.syntax of
     DefineFunction{} -> error "trying to compute kind of a function"
-    DefineVariantType{name, typeParameters, constructors} -> do
+    DefineVariantType{name=_, typeParameters, constructors} -> do
         ownSCC <- GraphPersistence.getSCC declaration.name
 
         let inSameSCC :: Name -> Eff es Bool
