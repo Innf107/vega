@@ -1,0 +1,7 @@
+
+data A = A(B);
+
+data B = B(A);
+
+main : () -> ();
+main() = ();

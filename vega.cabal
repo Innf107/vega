@@ -48,6 +48,7 @@ library
       Vega.Parser
       Vega.Pretty
       Vega.Rename
+      Vega.SCC
       Vega.Seq.NonEmpty
       Vega.Syntax
       Vega.TypeCheck
@@ -94,6 +95,7 @@ library
     , text
     , time
     , unordered-containers
+    , uuid
     , vector
     , witherable
     , yaml
@@ -142,6 +144,7 @@ executable vega
     , text
     , time
     , unordered-containers
+    , uuid
     , vector
     , vega
     , witherable
@@ -192,6 +195,7 @@ test-suite vega-test
     , text
     , time
     , unordered-containers
+    , uuid
     , vector
     , vega
     , witherable

@@ -222,6 +222,7 @@ compileGlobalName (MkGlobalName{moduleName, name}) = do
                 & Text.replace "-" "____"
                 & Text.replace "." "___"
                 & Text.replace "/" "__"
+                & Text.replace ":" "$"
     TextBuilder.fromText escapedModuleName <> "$" <> TextBuilder.fromText name
 
 compileLocalName :: LocalName -> TextBuilder.Builder

@@ -3,12 +3,13 @@
 module Vega.Syntax where
 
 import Data.Unique (Unique)
-import Relude hiding (NonEmpty, Type)
+import Relude hiding (NonEmpty, State, Type, evalState, get, put)
 import Vega.Loc (HasLoc, Loc)
 
 import Data.Sequence (Seq (..))
 import Data.Text qualified as Text
 import Effectful (Eff, IOE, runEff, (:>))
+import Effectful.State.Static.Local (State, evalState, get, put)
 import GHC.Generics (Generically (..))
 import System.IO.Unsafe (unsafePerformIO)
 import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, lparen, meta, rparen, skolem, (<+>))
@@ -476,19 +477,10 @@ typeOfGlobal global = \case
             Nothing -> error $ "global (term) variable not found in variant definition '" <> show variantName <> ": " <> show global
             Just (loc, _, parameterTypes) -> do
                 let boundVar = \case
-                        -- TODO: kind applications??? ughhh maybe Type : Type would be better
-                        _ -> undefined
+                        UnspecifiedBinderS{loc, varName} -> TypeVarS loc varName
+                        TypeVarBinderS{loc, varName} -> TypeVarS loc varName
 
-                forallS
-                    loc
-                    typeParameters
-                    (PureFunctionS loc parameterTypes (typeApplicationS loc (TypeConstructorS loc (Global variantName)) (fmap boundVar typeParameters)))
-
-kindOfGlobal :: (HasCallStack) => Declaration Renamed -> KindSyntax Renamed
-kindOfGlobal declaration = case declaration.syntax of
-    DefineFunction{} -> error "trying to access 'kind' of a function"
-    DefineVariantType{name = _, typeParameters, constructors = _} -> do
-        let argumentKinds =
-                typeParameters & fmap \case
-                    _ -> undefined
-        PureFunctionS declaration.loc argumentKinds (TypeS declaration.loc undefined)
+                let appliedType = typeApplicationS loc (TypeConstructorS loc (Global variantName)) (fmap boundVar typeParameters)
+                case parameterTypes of
+                    Empty -> forallS loc typeParameters $ appliedType
+                    _ -> forallS loc typeParameters $ PureFunctionS loc parameterTypes appliedType

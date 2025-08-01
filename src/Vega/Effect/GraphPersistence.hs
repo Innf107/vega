@@ -11,6 +11,7 @@ import Effectful.TH (makeEffect)
 
 import Vega.BuildConfig (Backend)
 import Vega.Error (CompilationError, RenameErrorSet, TypeErrorSet)
+import Vega.SCC (SCCId)
 
 data GraphData error a
     = Ok a
@@ -51,10 +52,11 @@ data GraphPersistence :: Effect where
     AddDependency :: DeclarationName -> DeclarationName -> GraphPersistence m ()
     ---------------- ^ dependent   ^
     ------------------------------ | dependency
+    GetSCC :: DeclarationName -> GraphPersistence m SCCId
     -- Specific accesses
     GetGlobalType :: GlobalName -> GraphPersistence m (Either Type (TypeSyntax Renamed))
     CacheGlobalType :: GlobalName -> Type -> GraphPersistence m ()
-    GetGlobalKind :: GlobalName -> GraphPersistence m (Either Kind (KindSyntax Renamed))
+    GetCachedGlobalKind :: GlobalName -> GraphPersistence m (GraphData TypeErrorSet Kind)
     CacheGlobalKind :: GlobalName -> Kind -> GraphPersistence m ()
     FindMatchingNames :: Text -> GraphPersistence m (HashMap GlobalName NameKind)
     GetErrors :: DeclarationName -> GraphPersistence m (Seq CompilationError)

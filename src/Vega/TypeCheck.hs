@@ -11,7 +11,7 @@ import Relude.Extra
 import Vega.Error (TypeError (..), TypeErrorSet (MkTypeErrorSet))
 import Vega.Util (compose, for2, mapAccumLM, unzip3Seq, zipWithSeqM)
 
-import Vega.Effect.GraphPersistence (GraphPersistence)
+import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 
 import Data.Sequence (Seq (..))
@@ -148,13 +148,68 @@ globalConstructorKind name = do
         then case lookup name Builtins.builtinKinds of
             Nothing -> error $ "builtin type without a kind: " <> show name
             Just kind -> pure kind
-        else
-            GraphPersistence.getGlobalKind name >>= \case
-                Left cachedKind -> pure cachedKind
-                Right syntax -> do
-                    (kind, _synax) <- checkType emptyEnv Parametric Kind syntax
-                    GraphPersistence.cacheGlobalKind name kind
-                    pure kind
+        else do
+            declarationName <-
+                GraphPersistence.getDefiningDeclaration name >>= \case
+                    Nothing -> error "trying to find kind of non-internal definition without declaration"
+                    Just declarationName -> pure declarationName
+            declaration <-
+                GraphPersistence.getRenamed declarationName >>= \case
+                    Ok renamed -> pure renamed
+                    Failed{} -> undefined
+                    Missing{} -> undefined
+            computeAndCacheKind declaration
+
+-- TODO: check that data constructors don't contain other data constructors from the same SCC
+-- as arguments to type constructors where their representation ends up in the resulting representation
+computeAndCacheKind :: forall es. (TypeCheck es) => Declaration Renamed -> Eff es Kind
+computeAndCacheKind declaration = case declaration.syntax of
+    DefineFunction{} -> error "trying to compute kind of a function"
+    DefineVariantType{name, typeParameters, constructors} -> do
+        ownSCC <- GraphPersistence.getSCC declaration.name
+
+        let inSameSCC :: Name -> Eff es Bool
+            inSameSCC (Local _) = undefined
+            inSameSCC (Global globalName)
+                | isInternalName globalName = pure False
+                | otherwise = do
+                    declarationName <-
+                        GraphPersistence.getDefiningDeclaration globalName >>= \case
+                            Nothing -> error "trying to find SCC of non-internal definition without declaration"
+                            Just declarationName -> pure declarationName
+                    scc <- GraphPersistence.getSCC declarationName
+                    pure (scc == ownSCC)
+
+        let env = emptyEnv
+        (env, bindersAndSyntax) <- mapAccumLM applyForallBinder env typeParameters
+        let binders = fmap fst bindersAndSyntax
+
+        let repOfDifferentSCC typeSyntax = do
+                (representation, _, _) <- inferTypeRep env typeSyntax
+                pure representation
+
+        constructorRepresentations <- for constructors \(_loc, _name, components) -> do
+            components <- for components \case
+                component@(TypeConstructorS _ name) ->
+                    inSameSCC name >>= \case
+                        True -> pure BoxedRep
+                        False -> repOfDifferentSCC component
+                component@(TypeApplicationS _ (TypeConstructorS _loc name) _) ->
+                    inSameSCC name >>= \case
+                        True -> pure BoxedRep
+                        False -> repOfDifferentSCC component
+                component -> repOfDifferentSCC component
+            case components of
+                [] -> pure UnitRep
+                [r] -> pure r
+                _ -> pure (ProductRep components)
+
+        let bodyRepresentation = case constructorRepresentations of
+                [] -> EmptyRep
+                [r] -> r
+                _ -> SumRep constructorRepresentations
+
+        pure (forall_ binders (Type bodyRepresentation))
 
 checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
 checkDeclarationSyntax loc = \case
@@ -262,7 +317,7 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
             pure expr
     case expr of
         Var{} -> deferToInference
-        DataConstructor{} -> undefined
+        DataConstructor{} -> deferToInference
         Application{} -> deferToInference
         -- TODO: not entirely sure if this is correct or if we should try to stay in check mode
         VisibleTypeApplication{} -> deferToInference
@@ -340,6 +395,9 @@ infer env ambientEffect expr = do
         Var loc name -> do
             type_ <- instantiate loc env =<< varType env name
             pure (type_, Var loc name)
+        DataConstructor loc name -> do
+            type_ <- instantiate loc env =<< varType env name
+            pure (type_, DataConstructor loc name)
         Application{loc, functionExpr, arguments} -> do
             (functionType, functionExpr) <- infer env ambientEffect functionExpr
             (argumentTypes, functionEffect, returnType) <- splitFunctionType loc env (length arguments) functionType
@@ -412,7 +470,6 @@ infer env ambientEffect expr = do
                 _ -> do
                     (_env, statements) <- checkStatements env ambientEffect statements
                     pure (Tuple [], SequenceBlock{loc, statements})
-        DataConstructor{} -> undefined
         PartialApplication{} -> undefined
         TupleLiteral loc elements -> do
             (elementTypes, elements) <- Seq.unzip <$> for elements (infer env ambientEffect)

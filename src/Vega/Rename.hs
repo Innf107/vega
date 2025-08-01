@@ -34,6 +34,7 @@ data Env = MkEnv
     { localVariables :: HashMap Text LocalName
     , localTypeVariables :: HashMap Text LocalName
     , localTypeConstructors :: HashMap Text LocalName
+    , localDataConstructors :: HashMap Text LocalName
     }
 
 emptyEnv :: Env
@@ -42,6 +43,7 @@ emptyEnv =
         { localVariables = mempty
         , localTypeVariables = mempty
         , localTypeConstructors = mempty
+        , localDataConstructors = mempty
         }
 
 bindLocalVar :: (Rename es) => Text -> Eff es (LocalName, Env -> Env)
@@ -146,6 +148,12 @@ findTypeConstructorName :: (Rename es) => Env -> Loc -> Text -> Eff es Name
 findTypeConstructorName env loc text = case lookup text env.localTypeConstructors of
     Just localName -> pure (Local localName)
     Nothing -> findGlobalOrDummy loc TypeConstructorKind text
+
+findDataConstructorName :: (Rename es) => Env -> Loc -> Text -> Eff es Name
+findDataConstructorName env loc text = case lookup text env.localDataConstructors of
+    Just localName -> pure (Local localName)
+    Nothing -> findGlobalOrDummy loc DataConstructorKind text
+
 
 {- | This is returned if we cannot find a local name during renaming.
 
@@ -276,7 +284,9 @@ renameExpr env = \case
     Var loc name -> do
         name <- findVarName env loc name
         pure (Var loc name)
-    DataConstructor{} -> undefined
+    DataConstructor loc name -> do
+        name <- findDataConstructorName env loc name
+        pure (DataConstructor loc name)
     Application{loc, functionExpr, arguments} -> do
         functionExpr <- renameExpr env functionExpr
         arguments <- traverse (renameExpr env) arguments

@@ -37,6 +37,7 @@ dependencies:
 - yaml
 - witherable
 - text
+- uuid
 
 ghc-options:
 - -Wall

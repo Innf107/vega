@@ -1,5 +1,7 @@
 {-# LANGUAGE PartialTypeSignatures #-}
 
+-- TODO: Include the errors from getGlobalKind in declarations somewhere
+
 module Vega.Effect.GraphPersistence.InMemory (runInMemory) where
 
 import Relude hiding (Reader, Type, ask, runReader)
@@ -14,18 +16,19 @@ import Vega.Effect.GraphPersistence hiding (
     cacheGlobalType,
     doesDeclarationExist,
     findMatchingNames,
+    getCachedGlobalKind,
     getCompiledJS,
     getCurrentErrors,
     getDefiningDeclaration,
     getDependencies,
     getDependents,
     getErrors,
-    getGlobalKind,
     getGlobalType,
     getModuleImportScope,
     getParsed,
     getRemainingWork,
     getRenamed,
+    getSCC,
     getTyped,
     invalidate,
     invalidateRenamed,
@@ -53,6 +56,7 @@ import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Effectful.Concurrent.Async (forConcurrently, runConcurrent)
 import Vega.BuildConfig (Backend (JavaScript))
+import Vega.SCC (SCCId, computeSCC)
 
 -- TODO: this currently isn't thread safe
 
@@ -64,10 +68,12 @@ data DeclarationData = MkDeclarationData
     , --
       dependencies :: IORef (HashSet DeclarationName)
     , dependents :: IORef (HashSet DeclarationName)
+    , scc :: IORef (Maybe SCCId)
     }
 
 type CachedTypes = CuckooHashTable GlobalName Type
-type CachedKinds = CuckooHashTable GlobalName Kind
+
+type CachedKinds = CuckooHashTable GlobalName (Either TypeErrorSet Kind)
 
 type DeclarationStore = CuckooHashTable DeclarationName DeclarationData
 
@@ -100,6 +106,7 @@ declarationData name = do
 resetDependencies :: (InMemory es) => DeclarationName -> Eff es ()
 resetDependencies name = do
     data_ <- declarationData name
+    writeIORef data_.scc Nothing
     dependencies <- readIORef data_.dependencies
     for_ dependencies \dependency -> do
         dependencyData <- declarationData dependency
@@ -151,7 +158,8 @@ addDeclaration declaration = do
     compiledJS <- newIORef Missing{previous = Nothing}
     dependencies <- newIORef mempty
     dependents <- newIORef mempty
-    let data_ = MkDeclarationData{parsed, renamed, typed, compiledJS, dependencies, dependents}
+    scc <- newIORef Nothing
+    let data_ = MkDeclarationData{parsed, renamed, typed, compiledJS, dependencies, dependents, scc}
     liftIO $ HashTable.mutate declarations declaration.name \case
         Nothing -> (Just data_, ())
         Just _ -> error $ "Trying to add declaration as new that already exists: '" <> show declaration.name <> "'"
@@ -310,6 +318,34 @@ addDependency dependent dependency = do
     modifyIORef' dependentData.dependencies (HashSet.insert dependency)
     modifyIORef' dependencyData.dependents (HashSet.insert dependent)
 
+getSCC :: forall es. (InMemory es) => DeclarationName -> Eff es SCCId
+getSCC declarationName = do
+    data_ <- declarationData declarationName
+    readIORef data_.scc >>= \case
+        Just scc -> pure scc
+        Nothing -> do
+            let outEdgesOrPrecomputedSCC :: DeclarationName -> Eff es (Maybe [DeclarationName])
+                outEdgesOrPrecomputedSCC name = do
+                    data_ <- declarationData name
+                    readIORef data_.scc >>= \case
+                        Just _ -> pure Nothing
+                        Nothing -> do
+                            dependencies <- readIORef data_.dependencies
+                            pure (Just (toList dependencies))
+            let setSCCId :: DeclarationName -> SCCId -> Eff es ()
+                setSCCId name id = do
+                    data_ <- declarationData name
+                    writeIORef data_.scc (Just id)
+
+            sccs <- computeSCC outEdgesOrPrecomputedSCC declarationName
+
+            for_ (HashMap.toList sccs) \(declaration, scc) -> do
+                setSCCId declaration scc
+            
+            case lookup declarationName sccs of
+                Nothing -> error $ "SCC map for declaration " <> show declarationName <> " is missing its own binding.\nSCCs: " <> show sccs
+                Just scc -> pure scc
+
 getGlobalType :: (HasCallStack, InMemory es) => GlobalName -> Eff es (Either Type (TypeSyntax Renamed))
 getGlobalType name = do
     cachedTypes <- ask @CachedTypes
@@ -336,30 +372,20 @@ cacheGlobalType name type_ = do
     cachedTypes <- ask @CachedTypes
     liftIO $ HashTable.insert cachedTypes name type_
 
-getGlobalKind :: (HasCallStack, InMemory es) => GlobalName -> Eff es (Either Kind (KindSyntax Renamed))
-getGlobalKind name = do
+getCachedGlobalKind :: forall es. (HasCallStack, InMemory es) => GlobalName -> Eff es (GraphData TypeErrorSet Kind)
+getCachedGlobalKind name = do
     cachedKinds <- ask @CachedKinds
-    liftIO (HashTable.lookup cachedKinds name) >>= \case
-        Just kind -> pure (Left kind)
-        Nothing -> do
-            declarationName <-
-                getDefiningDeclaration name >>= \case
-                    Just declarationName -> pure declarationName
-                    Nothing -> error $ "trying to access undefined declaration of global " <> show name
-            data_ <- declarationData declarationName
-            renamed <-
-                readIORef data_.renamed >>= \case
-                    Missing{} -> error $ "trying to access kind of a global that has not been renamed: " <> show name
-                    -- TODO: this might not actually be impossible?
-                    Failed{} -> error $ "trying to access kind of a global where renaming failed"
-                    Ok renamed -> pure renamed
 
-            pure (Right (kindOfGlobal renamed))
+    liftIO (HashTable.lookup cachedKinds name) >>= \case
+        Nothing -> pure (Missing Nothing)
+        -- TODO: what about 'previous'?
+        Just (Left error) -> pure (Failed Nothing error)
+        Just (Right kind) -> pure (Ok kind)
 
 cacheGlobalKind :: (InMemory es) => GlobalName -> Kind -> Eff es ()
 cacheGlobalKind name kind = do
     cachedKinds <- ask @CachedKinds
-    liftIO $ HashTable.insert cachedKinds name kind
+    liftIO $ HashTable.insert cachedKinds name (Right kind)
 
 findMatchingNames :: (InMemory es) => Text -> Eff es (HashMap GlobalName NameKind)
 findMatchingNames text = do
@@ -494,10 +520,11 @@ runInMemory action = do
                 GetDependencies name -> getDependencies name
                 GetDependents name -> getDependents name
                 AddDependency dependent dependency -> addDependency dependent dependency
+                GetSCC name -> getSCC name
                 -- Specific accesses
                 GetGlobalType name -> getGlobalType name
                 CacheGlobalType name type_ -> cacheGlobalType name type_
-                GetGlobalKind name -> getGlobalKind name
+                GetCachedGlobalKind name -> getCachedGlobalKind name
                 CacheGlobalKind name kind -> cacheGlobalKind name kind
                 FindMatchingNames name -> findMatchingNames name
                 GetErrors name -> getErrors name
