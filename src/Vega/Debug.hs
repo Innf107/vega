@@ -7,7 +7,7 @@ import GHC.Generics
 import GHC.TypeLits (KnownSymbol, symbolVal)
 
 import Data.Sequence (Seq ((:<|)))
-import Vega.Syntax (GlobalName, LocalName, Name, NameKind (VarKind), prettyLocal, prettyGlobal, prettyName)
+import Vega.Syntax (DeclarationName, GlobalName, LocalName, Name, NameKind (VarKind), prettyGlobal, prettyLocal, prettyName, ModuleName)
 
 {- | Pretty-print the first constructor of a data type that implements 'Generic' for debugging purposes.
 This will include every argument that implements 'HeadConstructorArg' and display everything else as @_@.
@@ -75,6 +75,10 @@ instance HeadConstructorArg GlobalName where
 
 instance HeadConstructorArg Name where
     headConstructorArg x = prettyName VarKind x
+
+instance HeadConstructorArg DeclarationName where
+    headConstructorArg x = pretty x
+
 
 defaultHeadConstructorArg :: Doc Ann
 defaultHeadConstructorArg = "_"

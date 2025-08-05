@@ -1,0 +1,6 @@
+data X(a) = X(Y(a));
+
+data Y(a) = Y;
+
+main : () -> ();
+main() = ();

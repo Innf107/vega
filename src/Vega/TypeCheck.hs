@@ -163,9 +163,9 @@ globalConstructorKind name = do
 -- TODO: check that data constructors don't contain other data constructors from the same SCC
 -- as arguments to type constructors where their representation ends up in the resulting representation
 computeAndCacheKind :: forall es. (TypeCheck es) => Declaration Renamed -> Eff es Kind
-computeAndCacheKind declaration = case declaration.syntax of
+computeAndCacheKind declaration = withTrace KindCheck ("computeAndCacheKind: " <> showHeadConstructor declaration) $ case declaration.syntax of
     DefineFunction{} -> error "trying to compute kind of a function"
-    DefineVariantType{name=_, typeParameters, constructors} -> do
+    DefineVariantType{name = _, typeParameters, constructors} -> do
         ownSCC <- GraphPersistence.getSCC declaration.name
 
         let inSameSCC :: Name -> Eff es Bool
@@ -182,7 +182,7 @@ computeAndCacheKind declaration = case declaration.syntax of
 
         let env = emptyEnv
         (env, bindersAndSyntax) <- mapAccumLM applyForallBinder env typeParameters
-        let binders = fmap fst bindersAndSyntax
+        let binders = foldMap fst bindersAndSyntax
 
         let repOfDifferentSCC typeSyntax = do
                 (representation, _, _) <- inferTypeRep env typeSyntax
@@ -209,7 +209,13 @@ computeAndCacheKind declaration = case declaration.syntax of
                 [r] -> r
                 _ -> SumRep constructorRepresentations
 
-        pure (forall_ binders (Type bodyRepresentation))
+        let (inferredBinders, visibleBinderKinds) = Util.partitionWithSeq binders \case
+                binder@MkForallBinder{visibility = Inferred} -> Left binder
+                MkForallBinder{visibility = Visible, kind} -> Right kind
+
+        case visibleBinderKinds of
+            Empty -> pure (forall_ inferredBinders (Type bodyRepresentation))
+            _ -> pure (forall_ inferredBinders (Function visibleBinderKinds Pure (Type bodyRepresentation)))
 
 checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
 checkDeclarationSyntax loc = \case
@@ -542,7 +548,7 @@ checkType env expectedMonomorphizability expectedKind syntax = withTrace KindChe
 inferType :: (TypeCheck es) => Env -> TypeSyntax Renamed -> Eff es (Kind, Type, TypeSyntax Typed)
 inferType env syntax = do
     (kind, type_, syntax) <- withTrace KindCheck ("inferType: " <> showHeadConstructor syntax) go
-    trace KindCheck ("inferType: " <> showHeadConstructor syntax <+> keyword ">=" <+> pretty kind <+> keyword "~>" <+> pretty type_)
+    trace KindCheck ("inferType: " <> showHeadConstructor syntax <+> keyword "=>" <+> pretty kind <+> keyword "~>" <+> pretty type_)
     pure (kind, type_, syntax)
   where
     go = case syntax of
@@ -561,9 +567,9 @@ inferType env syntax = do
                             , TypeApplicationS loc typeConstructorSyntax argumentsSyntax
                             )
                     | otherwise -> do
-                        -- TODO: make this non-fatal. This will probably involve using some sort of 'Bottom' type we insert
-                        -- for kinds we couldn't determine to suppress further spurious kind errors.
-                        fatalTypeError
+                        dummyKind <- MetaVar <$> freshMeta "k" Kind
+                        dummyResult <- MetaVar <$> freshMeta "err" dummyKind
+                        typeError
                             ( TypeConstructorAppliedToIncorrectNumberOfArguments
                                 { loc
                                 , type_ = typeConstructor
@@ -572,8 +578,20 @@ inferType env syntax = do
                                 , actualNumber = length argumentsSyntax
                                 }
                             )
-                kind -> do
-                    undefined
+                        -- if the types don't match, we can't really check arguments so we infer them to
+                        -- get the correct type/Typed syntax out and catch further errors inside them
+                        -- but we don't actually check their kinds against anything
+                        (_, arguments, argumentsSyntax) <- unzip3Seq <$> for argumentsSyntax \syntax -> inferType env syntax
+                        pure (dummyResult, TypeApplication typeConstructor arguments, TypeApplicationS loc typeConstructorSyntax argumentsSyntax)
+                constructorKind -> do
+                    (argumentKinds, arguments, argumentsSyntax) <-
+                        unzip3Seq <$> for argumentsSyntax \argumentSyntax -> do
+                            inferType env argumentSyntax
+                    resultKindKind <- MetaVar <$> freshMeta "k" Kind
+                    resultKind <- MetaVar <$> freshMeta "r" resultKindKind
+                    subsumes (getLoc typeConstructorSyntax) env constructorKind (Function argumentKinds Pure resultKind)
+
+                    pure (resultKind, TypeApplication typeConstructor arguments, TypeApplicationS loc typeConstructorSyntax argumentsSyntax)
         TypeVarS loc localName -> do
             let (actualType, kind, _mono) = lookupTypeVariable localName env
             pure (kind, actualType, TypeVarS loc localName)
@@ -587,7 +605,7 @@ inferType env syntax = do
                 -- TODO: uhhhh i don't think this is correct?
                 -- we will need to introduce kind level foralls here... sometimes??
                 ( kind
-                , Forall typeVarBinders body
+                , forall_ (fold typeVarBinders) body
                 , ForallS loc typeVarBinderSyntax bodySyntax
                 )
         PureFunctionS loc parameters result -> do
@@ -670,16 +688,33 @@ checkEvaluatedType loc env expectedKind type_ = do
     actualKind <- kindOf env type_
     subsumes loc env actualKind expectedKind
 
-applyForallBinder :: (TypeCheck es) => Env -> ForallBinderS Renamed -> Eff es (Env, (ForallBinder, ForallBinderS Typed))
+applyForallBinder :: (TypeCheck es) => Env -> ForallBinderS Renamed -> Eff es (Env, (Seq ForallBinder, ForallBinderS Typed))
 applyForallBinder env = \case
-    UnspecifiedBinderS{loc, varName, monomorphization} -> undefined
+    UnspecifiedBinderS{loc, varName, monomorphization} -> do
+        -- TODO: god this is going to mess up error messages
+        let representationVarName = varName{name = "r$" <> varName.name} :: LocalName
+
+        let kind = Type (TypeVar representationVarName)
+
+        pure
+            ( env
+                & bindTypeVariable representationVarName (TypeVar representationVarName) Rep Monomorphized
+                & bindTypeVariable varName (TypeVar varName) kind monomorphization
+            ,
+                (
+                    [ MkForallBinder{varName = representationVarName, kind = Rep, visibility = Inferred, monomorphization = Monomorphized}
+                    , MkForallBinder{varName, monomorphization, kind = Type (TypeVar representationVarName), visibility = Visible}
+                    ]
+                , UnspecifiedBinderS{loc, varName, monomorphization}
+                )
+            )
     TypeVarBinderS{loc, visibility, monomorphization, varName, kind = kindSyntax} -> do
         (kind, kindSyntax) <- checkType env Parametric Kind kindSyntax
         -- TODO: not entirely sure if this is the right place for this
         monomorphized loc env kind
         pure
             ( bindTypeVariable varName (TypeVar varName) kind monomorphization env
-            , (MkForallBinder{varName, visibility, monomorphization, kind}, TypeVarBinderS{loc, visibility, monomorphization, varName, kind = kindSyntax})
+            , ([MkForallBinder{varName, visibility, monomorphization, kind}], TypeVarBinderS{loc, visibility, monomorphization, varName, kind = kindSyntax})
             )
 
 splitFunctionType :: (TypeCheck es) => Loc -> Env -> Int -> Type -> Eff es (Seq Type, Effect, Type)

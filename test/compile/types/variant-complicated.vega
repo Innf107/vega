@@ -1,0 +1,9 @@
+
+data X(a) = X(Y(a));
+
+data Y(a) = F(Z(X(a)));
+
+data Z(a) = End | Z(X(a));
+
+main : () -> ();
+main() = ();

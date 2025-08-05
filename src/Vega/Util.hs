@@ -13,6 +13,7 @@ module Vega.Util (
     Untagged (..),
     assert,
     for2,
+    partitionWithSeq,
 ) where
 
 import Data.Sequence (Seq (..))
@@ -102,3 +103,8 @@ for2 xs ys f = go [] [] xs ys
     go leftAcc rightAcc (x :<| xs) (y :<| ys) = do
         (x', y') <- f x y
         go (leftAcc :|> x') (rightAcc :|> y') xs ys
+
+partitionWithSeq :: forall a b c. Seq a -> (a -> Either b c) -> (Seq b, Seq c)
+partitionWithSeq seq f = do
+    let (list1, list2) = partitionWith f (toList seq)
+    (viaList list1, viaList list2)
