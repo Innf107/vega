@@ -1,1 +1,39 @@
-
+$FILE:9:31: ERROR:
+Occurs check violation
+  Unable to unify
+    expected type ?a
+      actual type occurs-check:Main:Wrapper(?a)
+    because the meta variable ?a occurs in both
+  ┃ 
+9 ┃     let g = \y -> sameType(y, Wrapper(y));
+  ┃                               ▔▔▔▔▔▔▔▔▔▔
+$FILE:9:13: ERROR:
+Unable to monomorphize ambiguous type ?r
+    Try adding a type signature
+  ┃ 
+9 ┃     let g = \y -> sameType(y, Wrapper(y));
+  ┃             ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+$FILE:9:13: ERROR:
+Unable to monomorphize ambiguous type ?r
+    Try adding a type signature
+  ┃ 
+9 ┃     let g = \y -> sameType(y, Wrapper(y));
+  ┃             ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+$FILE:9:19: ERROR:
+Unable to monomorphize ambiguous type ?r
+    Try adding a type signature
+  ┃ 
+9 ┃     let g = \y -> sameType(y, Wrapper(y));
+  ┃                   ▔▔▔▔▔▔▔▔
+$FILE:9:31: ERROR:
+Unable to monomorphize ambiguous type ?r
+    Try adding a type signature
+  ┃ 
+9 ┃     let g = \y -> sameType(y, Wrapper(y));
+  ┃                               ▔▔▔▔▔▔▔
+$FILE:9:31: ERROR:
+Unable to monomorphize ambiguous type ?r
+    Try adding a type signature
+  ┃ 
+9 ┃     let g = \y -> sameType(y, Wrapper(y));
+  ┃                               ▔▔▔▔▔▔▔▔▔▔

@@ -6,5 +6,5 @@ sameType(_, _) = ();
 
 f : () -> ();
 f() = {
-    let g(y) = Wrapper(g(y));
+    let g = \y -> sameType(y, Wrapper(y));
 }
