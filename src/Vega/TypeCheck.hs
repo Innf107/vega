@@ -650,24 +650,31 @@ inferTypeRep env typeSyntax = do
     (type_, typeSyntax) <- checkType env Parametric (Type rep) typeSyntax
     pure (rep, type_, typeSyntax)
 
-kindOf :: (TypeCheck es) => Env -> Type -> Eff es Kind
+kindOf :: (TypeCheck es) => Loc -> Env -> Type -> Eff es Kind
 -- It's okay to match on the type directly here since we don't need to
 -- follow meta variables: they already have their kind cached
 -- In fact, in some cases this might be more efficient than computing the kinds
 -- of their bound types
-kindOf env = \case
+kindOf loc env = \case
     TypeConstructor name -> constructorKind env name
-    TypeApplication funType _arguments -> do
+    TypeApplication funType arguments -> do
         -- We can assume that the kinds here are correct so we only need to pick out the result
-        kindOf env funType >>= \case
+        funType <- followMetas funType
+        kindOf loc env funType >>= \case
             Function _parameters _effect result -> do
                 pure result
-            _ -> undefined
+            -- TODO: this shouldn't really happen but somehow it still does?
+            functionKind -> do
+                argumentKinds <- for arguments (kindOf loc env)
+                resultKindKind <- MetaVar <$> freshMeta "k" Kind
+                resultKind <- MetaVar <$> freshMeta "r" resultKindKind
+                subsumes loc env functionKind (Function argumentKinds Pure resultKind)
+                pure resultKind
     TypeVar name -> pure $ typeVariableKind name env
     Forall _bindings body -> do
         undefined
     Function{} -> pure (Type BoxedRep)
-    Tuple elements -> Type . ProductRep <$> traverse (kindOf env) elements
+    Tuple elements -> Type . ProductRep <$> traverse (kindOf loc env) elements
     MetaVar meta -> pure meta.kind
     Skolem skolem -> pure skolem.kind
     Pure -> pure Effect
@@ -685,7 +692,7 @@ kindOf env = \case
 -- | Like checkType but on evaluated `Type`s rather than TypeSyntax
 checkEvaluatedType :: (TypeCheck es) => Loc -> Env -> Kind -> Type -> Eff es ()
 checkEvaluatedType loc env expectedKind type_ = do
-    actualKind <- kindOf env type_
+    actualKind <- kindOf loc env type_
     subsumes loc env actualKind expectedKind
 
 applyForallBinder :: (TypeCheck es) => Env -> ForallBinderS Renamed -> Eff es (Env, (Seq ForallBinder, ForallBinderS Typed))
@@ -975,7 +982,10 @@ bindMeta loc env meta boundType =
                     -- TODO: include some sort of note to make it clear where the kind came from
                     checkEvaluatedType loc env meta.kind boundType
                     occursAndAdjust loc env meta boundType >>= \case
-                        True -> undefined
+                        True -> do
+                            -- This will make more sense once we have more context to the unification
+                            -- TODO: until then, the order doesn't really make sense here
+                            typeError OccursCheckViolation{loc, actualType = boundType, expectedType = MetaVar meta, meta}
                         False -> writeIORef meta.underlying (Just boundType)
         _ -> error $ "Trying to bind unbound meta variable"
 

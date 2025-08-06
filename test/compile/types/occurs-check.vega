@@ -1,0 +1,10 @@
+
+data Wrapper(a) = Wrapper(a);
+
+sameType : forall a. (a, a) -> ();
+sameType(_, _) = ();
+
+f : () -> ();
+f() = {
+    let g(y) = Wrapper(g(y));
+}

@@ -29,7 +29,7 @@ import Vega.Loc (HasLoc, Loc (..), getLoc)
 import Vega.Parser (AdditionalParseError (..))
 import Vega.Parser qualified as Parser
 import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, note, number, plain, vsep, (<+>))
-import Vega.Syntax (GlobalName (..), Kind, LocalName, NameKind (..), Type, prettyGlobal, prettyGlobalText, prettyLocal)
+import Vega.Syntax (GlobalName (..), Kind, LocalName, NameKind (..), Type, prettyGlobal, prettyGlobalText, prettyLocal, MetaVar)
 import Vega.Util (viaList)
 
 data CompilationError
@@ -138,6 +138,12 @@ data TypeError
         , typeArgumentCount :: Int
         , instantiatedType :: Type
         , parameterCount :: Int
+        }
+    | OccursCheckViolation
+        { loc :: Loc
+        , expectedType :: Type
+        , actualType :: Type
+        , meta :: MetaVar
         }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
@@ -378,6 +384,20 @@ renderCompilationError = \case
             align $
                 emphasis "Trying to apply" <+> pluralNumber typeArgumentCount "type argument" <+> emphasis "to a type that only expects" <+> number parameterCount
                     <> "\n  In a type application of type" <+> pretty instantiatedType
+        OccursCheckViolation{loc, expectedType, actualType, meta} -> do
+            align $
+                emphasis "Occurs check violation\n"
+                    <> "  Unable to unify\n"
+                    <> "    "
+                    <> emphasis "expected"
+                        <+> "type"
+                        <+> pretty expectedType
+                    <> "\n"
+                    <> "      "
+                    <> emphasis "actual"
+                        <+> "type"
+                        <+> pretty actualType
+                    <> "\n    because the meta variable" <+> pretty meta <+> "occurs in both"
     DriverError error -> pure $ case error of
         EntryPointNotFound entryPoint ->
             PlainError $
