@@ -230,13 +230,13 @@ checkDeclarationSyntax loc = \case
 
         case parameterMismatch of
             Nothing -> pure ()
-            Just numberOfParameterTypes ->
+            Just actualParameterTypes ->
                 typeError
                     ( FunctionDefinedWithIncorrectNumberOfArguments
                         { loc
                         , functionName = name
                         , expectedType = functionType
-                        , expectedNumberOfArguments = numberOfParameterTypes
+                        , expectedNumberOfArguments = length actualParameterTypes
                         , numberOfDefinedParameters = length parameters
                         }
                     )
@@ -262,39 +262,43 @@ checkDeclarationSyntax loc = \case
         pure (DefineVariantType{name, typeParameters, constructors})
 
 checkPattern :: (TypeCheck es) => Env -> Type -> Pattern Renamed -> Eff es (Pattern Typed, Env -> Env)
-checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <> showHeadConstructor pattern_) case pattern_ of
-    VarPattern loc var -> pure (VarPattern loc var, bindVarType var expectedType)
-    AsPattern loc pattern_ name -> do
-        (pattern_, innerTrans) <- checkPattern env expectedType pattern_
-        pure (AsPattern loc pattern_ name, bindVarType name expectedType . innerTrans)
-    ConstructorPattern{} -> undefined
-    TypePattern loc innerPattern innerTypeSyntax -> do
-        (_typeRep, innerType, innerTypeSyntax) <- inferTypeRep env innerTypeSyntax
-        (innerPattern, innerTrans) <- checkPattern env innerType innerPattern
-        subsumes loc env innerType expectedType
-        pure (TypePattern loc innerPattern innerTypeSyntax, innerTrans)
-    OrPattern{} -> undefined
-    WildcardPattern loc -> do
-        pure (WildcardPattern loc, id)
-    TuplePattern loc elementPatterns -> do
-        elementTypes <-
-            followMetas expectedType >>= \case
-                Tuple elementTypes -> pure elementTypes
-                _ -> for elementPatterns \element -> do
-                    MetaVar <$> freshTypeMeta (getLoc element) env "e"
-        when (length elementPatterns /= length elementTypes) do
-            typeError
-                ( TuplePatternOfIncorrectNumberOfArgs
-                    { loc
-                    , expected = length elementTypes
-                    , actual = length elementPatterns
-                    , expectedType
-                    }
-                )
+checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <> showHeadConstructor pattern_) do
+    let deferToInference = do
+            (pattern_, type_, envTrans) <- inferPattern env pattern_
+            subsumes (getLoc pattern_) env type_ expectedType
+            pure (pattern_, envTrans)
+    case pattern_ of
+        VarPattern loc var -> pure (VarPattern loc var, bindVarType var expectedType)
+        AsPattern loc pattern_ name -> do
+            (pattern_, innerTrans) <- checkPattern env expectedType pattern_
+            pure (AsPattern loc pattern_ name, bindVarType name expectedType . innerTrans)
+        ConstructorPattern{} -> deferToInference
+        TypePattern loc innerPattern innerTypeSyntax -> do
+            (_typeRep, innerType, innerTypeSyntax) <- inferTypeRep env innerTypeSyntax
+            (innerPattern, innerTrans) <- checkPattern env innerType innerPattern
+            subsumes loc env innerType expectedType
+            pure (TypePattern loc innerPattern innerTypeSyntax, innerTrans)
+        OrPattern{} -> undefined
+        WildcardPattern loc -> pure (WildcardPattern loc, id)
+        TuplePattern loc elementPatterns -> do
+            elementTypes <-
+                followMetas expectedType >>= \case
+                    Tuple elementTypes -> pure elementTypes
+                    _ -> for elementPatterns \element -> do
+                        MetaVar <$> freshTypeMeta (getLoc element) env "e"
+            when (length elementPatterns /= length elementTypes) do
+                typeError
+                    ( TuplePatternOfIncorrectNumberOfArgs
+                        { loc
+                        , expected = length elementTypes
+                        , actual = length elementPatterns
+                        , expectedType
+                        }
+                    )
 
-        (patterns, envTransformers) <- for2 elementPatterns elementTypes \pattern_ type_ -> do
-            checkPattern env type_ pattern_
-        pure (TuplePattern loc patterns, Util.compose envTransformers)
+            (patterns, envTransformers) <- for2 elementPatterns elementTypes \pattern_ type_ -> do
+                checkPattern env type_ pattern_
+            pure (TuplePattern loc patterns, Util.compose envTransformers)
 
 inferPattern :: (TypeCheck es) => Env -> Pattern Renamed -> Eff es (Pattern Typed, Type, Env -> Env)
 inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadConstructor pattern_) $ case pattern_ of
@@ -307,7 +311,24 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
     AsPattern loc innerPattern name -> do
         (innerPattern, innerType, innerTrans) <- inferPattern env innerPattern
         pure (AsPattern loc innerPattern name, innerType, bindVarType name innerType . innerTrans)
-    ConstructorPattern{} -> undefined
+    ConstructorPattern{loc, constructor, subPatterns} -> do
+        constructorType <- instantiate loc env =<< varType env constructor
+
+        (parameterTypes, _, resultType, parameterCountMismatch) <- splitFunctionType loc env (length subPatterns) constructorType
+        case parameterCountMismatch of
+            Nothing -> pure ()
+            Just actualParameterTypes ->
+                typeError
+                    ( ConstructorPatternOfIncorrectNumberOfArgs
+                        { loc
+                        , actual = length subPatterns
+                        , expectedTypes = actualParameterTypes
+                        }
+                    )
+        (subPatterns, envTransformers) <- for2 parameterTypes subPatterns \type_ pattern_ -> do
+            checkPattern env type_ pattern_
+
+        pure (ConstructorPattern{loc, constructor, subPatterns}, resultType, Util.compose envTransformers)
     TuplePattern{} -> undefined
     TypePattern loc innerPattern typeSyntax -> do
         (_kind, type_, typeSyntax) <- inferTypeRep env typeSyntax
@@ -337,12 +358,12 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
 
             case parameterMismatch of
                 Nothing -> pure ()
-                Just actualNumberOfParameterTypes ->
+                Just actualParameterTypes ->
                     typeError
                         ( LambdaDefinedWithIncorrectNumberOfArguments
                             { loc
                             , expectedType
-                            , expected = actualNumberOfParameterTypes
+                            , expected = length actualParameterTypes
                             , actual = length parameters
                             }
                         )
@@ -419,11 +440,11 @@ infer env ambientEffect expr = do
 
             case parameterMismatch of
                 Nothing -> pure ()
-                Just actualNumberOfArgumentTypes ->
+                Just actualArgumentTypes ->
                     typeError $
                         FunctionAppliedToIncorrectNumberOfArgs
                             { loc
-                            , expected = actualNumberOfArgumentTypes
+                            , expected = length actualArgumentTypes
                             , actual = length arguments
                             , functionType
                             }
@@ -549,9 +570,11 @@ This is useful in cases where we know that the number of parameters is too large
 (e.g. in a lambda or function definition) but we don't want to throw a fatal type error
 -}
 padWithMetas :: (TypeCheck es) => Loc -> Env -> Int -> Seq Type -> Eff es (Seq Type)
-padWithMetas loc env expectedLength types = do
-    metas <- Seq.replicateM (expectedLength - length types) (MetaVar <$> freshTypeMeta loc env "e")
-    pure (types <> metas)
+padWithMetas loc env expectedLength types
+    | expectedLength > length types = do
+        metas <- Seq.replicateM (expectedLength - length types) (MetaVar <$> freshTypeMeta loc env "e")
+        pure (types <> metas)
+    | otherwise = pure types
 
 varType :: (HasCallStack) => (TypeCheck es) => Env -> Name -> Eff es Type
 varType env name = case name of
@@ -759,7 +782,7 @@ In case the function isn't known to be a function type ahead of time, this takes
 the expected number of parameters and switches to unification.
 
 If the actual number of parameters does not match up with the expected one, it pads the parameters
-with meta variables and additionally returns the actual number of parameters so that calling code
+with meta variables and additionally returns the actual parameters so that calling code
 can generate a good error message
 -}
 splitFunctionType ::
@@ -768,14 +791,14 @@ splitFunctionType ::
     Env ->
     Int ->
     Type ->
-    Eff es (Seq Type, Effect, Type, Maybe Int)
+    Eff es (Seq Type, Effect, Type, Maybe (Seq Type))
 splitFunctionType loc env expectedParameterCount type_ = do
     followMetas type_ >>= \case
         Function parameters effect result
             | length parameters == expectedParameterCount -> pure (parameters, effect, result, Nothing)
             | otherwise -> do
                 parameters <- padWithMetas loc env expectedParameterCount parameters
-                pure (parameters, effect, result, Just (length parameters))
+                pure (parameters, effect, result, Just parameters)
         type_ -> do
             parameters <- Seq.replicateM expectedParameterCount (MetaVar <$> freshTypeMeta loc env "a")
             effect <- MetaVar <$> freshTypeMeta loc env "e"

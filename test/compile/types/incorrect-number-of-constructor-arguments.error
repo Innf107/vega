@@ -1,0 +1,6 @@
+$FILE:4:3: ERROR:
+Constructor pattern binds 1 parameter but its type expects it to bind 2
+    The parameters are supposed to have types (internal:Internal:Int, internal:Internal:Int)
+  ┃ 
+4 ┃ f(A(x)) = ();
+  ┃   ▔▔▔▔

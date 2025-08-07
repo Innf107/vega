@@ -29,7 +29,7 @@ import Vega.Loc (HasLoc, Loc (..), getLoc)
 import Vega.Parser (AdditionalParseError (..))
 import Vega.Parser qualified as Parser
 import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, note, number, plain, vsep, (<+>))
-import Vega.Syntax (GlobalName (..), Kind, LocalName, NameKind (..), Type, prettyGlobal, prettyGlobalText, prettyLocal, MetaVar)
+import Vega.Syntax (GlobalName (..), Kind, LocalName, MetaVar, NameKind (..), Type (Tuple), prettyGlobal, prettyGlobalText, prettyLocal)
 import Vega.Util (viaList)
 
 data CompilationError
@@ -106,6 +106,11 @@ data TypeError
         , expected :: Int
         , actual :: Int
         , expectedType :: Type
+        }
+    | ConstructorPatternOfIncorrectNumberOfArgs
+        { loc :: Loc
+        , actual :: Int
+        , expectedTypes :: Seq Type
         }
     | UnableToUnify
         { loc :: Loc
@@ -317,6 +322,10 @@ renderCompilationError = \case
                 align $
                     emphasis "Tuple literal has" <+> pluralNumber actual "element" <+> emphasis "but its type expects it to have" <+> number expected
                         <> "\n    The tuple is expected to have type" <+> pretty expectedType
+        ConstructorPatternOfIncorrectNumberOfArgs{loc = _, actual, expectedTypes} ->
+            align $
+                emphasis "Constructor pattern binds" <+> pluralNumber actual "parameter" <+> emphasis "but its type expects it to bind" <+> number (length expectedTypes)
+                    <> "\n    The parameters are supposed to have types" <+> pretty (Tuple expectedTypes)
         UnableToUnify
             { loc = _
             , expectedType
