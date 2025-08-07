@@ -326,8 +326,9 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
                             }
                         )
                     -- We still infer sub-patterns to catch type errors and bind any spurious variables
-                    (subPatterns, _subPatternTypes, envTransformers) <- unzip3Seq <$> for subPatterns \pattern_ -> do
-                        inferPattern env pattern_
+                    (subPatterns, _subPatternTypes, envTransformers) <-
+                        unzip3Seq <$> for subPatterns \pattern_ -> do
+                            inferPattern env pattern_
                     pure (ConstructorPattern{loc, constructor, subPatterns}, constructorType, Util.compose envTransformers)
                 Empty -> do
                     pure (ConstructorPattern{loc, constructor, subPatterns = []}, constructorType, id)
@@ -351,7 +352,11 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
                     checkPattern env type_ pattern_
 
                 pure (ConstructorPattern{loc, constructor, subPatterns}, resultType, Util.compose envTransformers)
-    TuplePattern{} -> undefined
+    TuplePattern{loc, subPatterns} -> do
+        (subPatterns, subPatternTypes, envTransformers) <-
+            unzip3Seq <$> for subPatterns \pattern_ -> do
+                inferPattern env pattern_
+        pure (TuplePattern{loc, subPatterns}, Tuple subPatternTypes, Util.compose envTransformers)
     TypePattern loc innerPattern typeSyntax -> do
         (_kind, type_, typeSyntax) <- inferTypeRep env typeSyntax
         (innerPattern, envTrans) <- checkPattern env type_ innerPattern
