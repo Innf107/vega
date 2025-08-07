@@ -147,23 +147,27 @@ globalConstructorKind name = do
             Nothing -> error $ "builtin type without a kind: " <> show name
             Just kind -> pure kind
         else do
-            declarationName <-
-                GraphPersistence.getDefiningDeclaration name >>= \case
-                    Nothing -> error "trying to find kind of non-internal definition without declaration"
-                    Just declarationName -> pure declarationName
-            declaration <-
-                GraphPersistence.getRenamed declarationName >>= \case
-                    Ok renamed -> pure renamed
-                    Failed{} -> undefined
-                    Missing{} -> undefined
-            computeAndCacheKind declaration
+            GraphPersistence.getCachedGlobalKind name >>= \case
+                Ok cachedKind -> pure cachedKind
+                Failed{} -> undefined
+                Missing{} -> do
+                    declarationName <-
+                        GraphPersistence.getDefiningDeclaration name >>= \case
+                            Nothing -> error "trying to find kind of non-internal definition without declaration"
+                            Just declarationName -> pure declarationName
+                    declaration <-
+                        GraphPersistence.getRenamed declarationName >>= \case
+                            Ok renamed -> pure renamed
+                            Failed{} -> undefined
+                            Missing{} -> undefined
+                    computeAndCacheKind declaration
 
 -- TODO: check that data constructors don't contain other data constructors from the same SCC
 -- as arguments to type constructors where their representation ends up in the resulting representation
 computeAndCacheKind :: forall es. (TypeCheck es) => Declaration Renamed -> Eff es Kind
 computeAndCacheKind declaration = withTrace KindCheck ("computeAndCacheKind: " <> showHeadConstructor declaration) $ case declaration.syntax of
     DefineFunction{} -> error "trying to compute kind of a function"
-    DefineVariantType{name = _, typeParameters, constructors} -> do
+    DefineVariantType{name, typeParameters, constructors} -> do
         ownSCC <- GraphPersistence.getSCC declaration.name
 
         let inSameSCC :: Name -> Eff es Bool
@@ -211,9 +215,12 @@ computeAndCacheKind declaration = withTrace KindCheck ("computeAndCacheKind: " <
                 binder@MkForallBinder{visibility = Inferred} -> Left binder
                 MkForallBinder{visibility = Visible, kind} -> Right kind
 
-        case visibleBinderKinds of
+        computedKind <- case visibleBinderKinds of
             Empty -> pure (forall_ inferredBinders (Type bodyRepresentation))
             _ -> pure (forall_ inferredBinders (Function visibleBinderKinds Pure (Type bodyRepresentation)))
+
+        GraphPersistence.cacheGlobalKind name computedKind
+        pure computedKind
 
 checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
 checkDeclarationSyntax loc = \case
