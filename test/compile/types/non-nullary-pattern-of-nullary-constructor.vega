@@ -1,0 +1,7 @@
+data A(a) = A
+
+f : A(Int) -> ();
+f(A(_)) = ();
+
+main : () -> ()
+main() = main()

@@ -314,21 +314,43 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
     ConstructorPattern{loc, constructor, subPatterns} -> do
         constructorType <- instantiate loc env =<< varType env constructor
 
-        (parameterTypes, _, resultType, parameterCountMismatch) <- splitFunctionType loc env (length subPatterns) constructorType
-        case parameterCountMismatch of
-            Nothing -> pure ()
-            Just actualParameterTypes ->
-                typeError
-                    ( ConstructorPatternOfIncorrectNumberOfArgs
-                        { loc
-                        , actual = length subPatterns
-                        , expectedTypes = actualParameterTypes
-                        }
-                    )
-        (subPatterns, envTransformers) <- for2 parameterTypes subPatterns \type_ pattern_ -> do
-            checkPattern env type_ pattern_
+        -- We need to do this hacky dance to special case nullary constructors, where
+        -- the constructor doesn't have a function type
+        let nullaryCase = case subPatterns of
+                (_ :<| _) -> do
+                    typeError
+                        ( ConstructorPatternOfIncorrectNumberOfArgs
+                            { loc
+                            , actual = length subPatterns
+                            , expectedTypes = []
+                            }
+                        )
+                    -- We still infer sub-patterns to catch type errors and bind any spurious variables
+                    (subPatterns, _subPatternTypes, envTransformers) <- unzip3Seq <$> for subPatterns \pattern_ -> do
+                        inferPattern env pattern_
+                    pure (ConstructorPattern{loc, constructor, subPatterns}, constructorType, Util.compose envTransformers)
+                Empty -> do
+                    pure (ConstructorPattern{loc, constructor, subPatterns = []}, constructorType, id)
 
-        pure (ConstructorPattern{loc, constructor, subPatterns}, resultType, Util.compose envTransformers)
+        case constructorType of
+            TypeConstructor{} -> nullaryCase
+            TypeApplication{} -> nullaryCase
+            _ -> do
+                (parameterTypes, _, resultType, parameterCountMismatch) <- splitFunctionType loc env (length subPatterns) constructorType
+                case parameterCountMismatch of
+                    Nothing -> pure ()
+                    Just actualParameterTypes ->
+                        typeError
+                            ( ConstructorPatternOfIncorrectNumberOfArgs
+                                { loc
+                                , actual = length subPatterns
+                                , expectedTypes = actualParameterTypes
+                                }
+                            )
+                (subPatterns, envTransformers) <- for2 parameterTypes subPatterns \type_ pattern_ -> do
+                    checkPattern env type_ pattern_
+
+                pure (ConstructorPattern{loc, constructor, subPatterns}, resultType, Util.compose envTransformers)
     TuplePattern{} -> undefined
     TypePattern loc innerPattern typeSyntax -> do
         (_kind, type_, typeSyntax) <- inferTypeRep env typeSyntax

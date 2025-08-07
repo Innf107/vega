@@ -280,13 +280,11 @@ renderCompilationError = \case
                     emphasis "Function defined with incorrect number of parameters\n"
                         <> "  "
                         <> align
-                            ( "The function "
+                            ( emphasis "The function "
                                 <> globalIdentText functionName.name
-                                <> " is declared with"
-                                <> "  "
-                                <> number numberOfDefinedParameters
-                                <> "parameters\n"
-                                <> "  but its type suggests that it should have "
+                                <> emphasis " is declared with"
+                                    <+> pluralNumber emphasis numberOfDefinedParameters "parameter"
+                                <> emphasis "\n  but its type suggests that it should have "
                                 <> number expectedNumberOfArguments
                                 <> "\n"
                                 <> "    Expected type: "
@@ -303,7 +301,9 @@ renderCompilationError = \case
             , functionType
             , expected
             , actual
-            } -> undefined
+            } ->
+                emphasis "Function is applied to" <+> pluralNumber emphasis actual "argument" <+> emphasis "but its type expects" <+> number expected
+                    <> "\n    In an application of a function of type" <+> pretty functionType
         TuplePatternOfIncorrectNumberOfArgs
             { loc = _
             , expected
@@ -311,7 +311,7 @@ renderCompilationError = \case
             , expectedType
             } ->
                 align $
-                    emphasis "Tuple pattern binds" <+> pluralNumber actual "element" <+> emphasis "but its type expects it to bind" <+> number expected
+                    emphasis "Tuple pattern binds" <+> pluralNumber emphasis actual "element" <+> emphasis "but its type expects it to bind" <+> number expected
                         <> "\n    The pattern is expected to have type" <+> pretty expectedType
         TupleLiteralOfIncorrectNumberOfArgs
             { loc = _
@@ -320,11 +320,11 @@ renderCompilationError = \case
             , expectedType
             } ->
                 align $
-                    emphasis "Tuple literal has" <+> pluralNumber actual "element" <+> emphasis "but its type expects it to have" <+> number expected
+                    emphasis "Tuple literal has" <+> pluralNumber emphasis actual "element" <+> emphasis "but its type expects it to have" <+> number expected
                         <> "\n    The tuple is expected to have type" <+> pretty expectedType
         ConstructorPatternOfIncorrectNumberOfArgs{loc = _, actual, expectedTypes} ->
             align $
-                emphasis "Constructor pattern binds" <+> pluralNumber actual "parameter" <+> emphasis "but its type expects it to bind" <+> number (length expectedTypes)
+                emphasis "Constructor pattern binds" <+> pluralNumber emphasis actual "parameter" <+> emphasis "but its type expects it to bind" <+> number (length expectedTypes)
                     <> "\n    The parameters are supposed to have types" <+> pretty (Tuple expectedTypes)
         UnableToUnify
             { loc = _
@@ -352,7 +352,7 @@ renderCompilationError = \case
             } ->
                 align $
                     emphasis "Type constructor applied to an incorrect number of arguments.\n"
-                        <> emphasis "  expected     " <+> pluralNumber expectedNumber "argument"
+                        <> emphasis "  expected     " <+> pluralNumber emphasis expectedNumber "argument"
                         <> "\n"
                         <> emphasis "  but received " <+> number actualNumber
                         <> "\n"
@@ -379,22 +379,22 @@ renderCompilationError = \case
                     <> "\n    Try adding a type signature"
         TryingToBindTooManyTypeParameters{loc = _, type_, boundCount, actualCount = 0} ->
             align $
-                emphasis "Trying to bind" <+> pluralNumber boundCount "type parameter" <+> emphasis "of the" <+> emphasis "monomorphic type"
+                emphasis "Trying to bind" <+> pluralNumber emphasis boundCount "type parameter" <+> emphasis "of the" <+> emphasis "monomorphic type"
                     <> "\n  "
                     <> pretty type_
         TryingToBindTooManyTypeParameters{loc = _, type_, boundCount, actualCount} ->
             align $
-                emphasis "Trying to bind" <+> pluralNumber boundCount "type parameter" <+> emphasis "of a type that only has" <+> number actualCount
+                emphasis "Trying to bind" <+> pluralNumber emphasis boundCount "type parameter" <+> emphasis "of a type that only has" <+> number actualCount
                     <> "\n  While trying to bind type parameters of type" <+> pretty type_
         TypeApplicationWithTooFewParameters{loc = _, parameterCount = 0, typeArgumentCount, instantiatedType} ->
             align $
-                emphasis "Trying to apply" <+> pluralNumber typeArgumentCount "type argument" <+> emphasis "to a monomorphic type"
+                emphasis "Trying to apply" <+> pluralNumber emphasis typeArgumentCount "type argument" <+> emphasis "to a monomorphic type"
                     <> "\n  In a type application of type" <+> pretty instantiatedType
         TypeApplicationWithTooFewParameters{loc = _, parameterCount, typeArgumentCount, instantiatedType} ->
             align $
-                emphasis "Trying to apply" <+> pluralNumber typeArgumentCount "type argument" <+> emphasis "to a type that only expects" <+> number parameterCount
+                emphasis "Trying to apply" <+> pluralNumber emphasis typeArgumentCount "type argument" <+> emphasis "to a type that only expects" <+> number parameterCount
                     <> "\n  In a type application of type" <+> pretty instantiatedType
-        OccursCheckViolation{loc, expectedType, actualType, meta} -> do
+        OccursCheckViolation{loc = _, expectedType, actualType, meta} -> do
             align $
                 emphasis "Occurs check violation\n"
                     <> "  Unable to unify\n"
@@ -422,9 +422,9 @@ renderCompilationError = \case
     Panic exception -> pure do
         PlainError $ MkPlainErrorMessage $ align $ errorText "PANIC (the 'impossible' happened): " <> emphasis (show exception)
 
-pluralNumber :: Int -> Text -> Doc Ann
-pluralNumber 1 text = number @Int 1 <+> emphasis text
-pluralNumber n text = number n <+> emphasis (text <> "s")
+pluralNumber :: (Text -> Doc Ann) -> Int -> Text -> Doc Ann
+pluralNumber render 1 text = number @Int 1 <+> render text
+pluralNumber render n text = number n <+> render (text <> "s")
 
 differenceDirection :: Int -> Int -> Text
 differenceDirection expected actual
