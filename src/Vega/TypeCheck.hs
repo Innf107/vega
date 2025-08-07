@@ -226,18 +226,20 @@ checkDeclarationSyntax loc = \case
         -- We bound the declared type parameters above and the rest are not accessible in the body
         -- so we can just skolemize them away here
         remainingType <- skolemize loc env remainingType
-        (parameterTypes, effect, returnType) <- splitFunctionType loc env (length parameters) remainingType
+        (parameterTypes, effect, returnType, parameterMismatch) <- splitFunctionType loc env (length parameters) remainingType
 
-        when (length parameters /= length parameterTypes) $ do
-            typeError
-                ( FunctionDefinedWithIncorrectNumberOfArguments
-                    { loc
-                    , functionName = name
-                    , expectedType = functionType
-                    , expectedNumberOfArguments = length parameterTypes
-                    , numberOfDefinedParameters = length parameters
-                    }
-                )
+        case parameterMismatch of
+            Nothing -> pure ()
+            Just numberOfParameterTypes ->
+                typeError
+                    ( FunctionDefinedWithIncorrectNumberOfArguments
+                        { loc
+                        , functionName = name
+                        , expectedType = functionType
+                        , expectedNumberOfArguments = numberOfParameterTypes
+                        , numberOfDefinedParameters = length parameters
+                        }
+                    )
 
         let checkParameter pattern_ type_ = do
                 checkPattern env type_ pattern_
@@ -331,16 +333,19 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
             -- Any type variables *not* bound above are not going to be available in the body
             -- and so are just skolemized away here
             resultingType <- skolemize loc env typeWithoutBoundParameters
-            (parameterTypes, expectedEffect, returnType) <- splitFunctionType loc env (length parameters) resultingType
-            when (length parameters /= length parameterTypes) do
-                typeError
-                    ( LambdaDefinedWithIncorrectNumberOfArguments
-                        { loc
-                        , expectedType
-                        , expected = length parameterTypes
-                        , actual = length parameters
-                        }
-                    )
+            (parameterTypes, expectedEffect, returnType, parameterMismatch) <- splitFunctionType loc env (length parameters) resultingType
+
+            case parameterMismatch of
+                Nothing -> pure ()
+                Just actualNumberOfParameterTypes ->
+                    typeError
+                        ( LambdaDefinedWithIncorrectNumberOfArguments
+                            { loc
+                            , expectedType
+                            , expected = actualNumberOfParameterTypes
+                            , actual = length parameters
+                            }
+                        )
 
             let checkParameter parameter parameterType = do
                     checkPattern env parameterType parameter
@@ -387,7 +392,13 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
             pure (TupleLiteral loc elements)
         PartialApplication{} -> deferToInference
         BinaryOperator{} -> undefined
-        Match{} -> undefined
+        Match{loc, scrutinee, cases} -> do
+            (scrutineeType, scrutinee) <- infer env ambientEffect scrutinee
+            cases <- for cases \MkMatchCase{loc, pattern_, body} -> do
+                (pattern_, envTrans) <- checkPattern env scrutineeType pattern_
+                body <- check (envTrans env) ambientEffect expectedType body
+                pure (MkMatchCase{loc, pattern_, body})
+            pure (Match{loc, scrutinee, cases})
 
 infer :: (TypeCheck es) => Env -> Effect -> Expr Renamed -> Eff es (Type, Expr Typed)
 infer env ambientEffect expr = do
@@ -404,15 +415,18 @@ infer env ambientEffect expr = do
             pure (type_, DataConstructor loc name)
         Application{loc, functionExpr, arguments} -> do
             (functionType, functionExpr) <- infer env ambientEffect functionExpr
-            (argumentTypes, functionEffect, returnType) <- splitFunctionType loc env (length arguments) functionType
-            when (length argumentTypes /= length arguments) do
-                typeError $
-                    FunctionAppliedToIncorrectNumberOfArgs
-                        { loc
-                        , expected = length argumentTypes
-                        , actual = length arguments
-                        , functionType
-                        }
+            (argumentTypes, functionEffect, returnType, parameterMismatch) <- splitFunctionType loc env (length arguments) functionType
+
+            case parameterMismatch of
+                Nothing -> pure ()
+                Just actualNumberOfArgumentTypes ->
+                    typeError $
+                        FunctionAppliedToIncorrectNumberOfArgs
+                            { loc
+                            , expected = actualNumberOfArgumentTypes
+                            , actual = length arguments
+                            , functionType
+                            }
             subsumesEffect functionEffect ambientEffect
 
             let checkArguments argumentExpr argumentType = do
@@ -478,7 +492,15 @@ infer env ambientEffect expr = do
         TupleLiteral loc elements -> do
             (elementTypes, elements) <- Seq.unzip <$> for elements (infer env ambientEffect)
             pure (Tuple elementTypes, TupleLiteral loc elements)
-        Match{} -> undefined
+        Match{loc, scrutinee, cases} -> do
+            (scrutineeType, scrutinee) <- infer env ambientEffect scrutinee
+            resultType <- MetaVar <$> freshTypeMeta loc env "a"
+
+            cases <- for cases \MkMatchCase{loc, pattern_, body} -> do
+                (pattern_, envTrans) <- checkPattern env scrutineeType pattern_
+                body <- check (envTrans env) ambientEffect resultType body
+                pure (MkMatchCase{loc, pattern_, body})
+            pure (resultType, Match{loc, scrutinee, cases})
 
 checkStatements :: (TypeCheck es) => Env -> Effect -> Seq (Statement Renamed) -> Eff es (Env, Seq (Statement Typed))
 checkStatements env ambientEffect statements = mapAccumLM (\env -> checkStatement env ambientEffect) env statements
@@ -521,13 +543,23 @@ bindTypeParameters loc env initialParameters polytype = fmap swap $ evalState (t
             typeError (TryingToBindTooManyTypeParameters{loc, boundCount = length initialParameters, actualCount, type_ = polytype})
             pure remainingType
 
+{- | Extend the length of a seq of types to the required length by appending
+fresh meta variables.
+This is useful in cases where we know that the number of parameters is too large
+(e.g. in a lambda or function definition) but we don't want to throw a fatal type error
+-}
+padWithMetas :: (TypeCheck es) => Loc -> Env -> Int -> Seq Type -> Eff es (Seq Type)
+padWithMetas loc env expectedLength types = do
+    metas <- Seq.replicateM (expectedLength - length types) (MetaVar <$> freshTypeMeta loc env "e")
+    pure (types <> metas)
+
 varType :: (HasCallStack) => (TypeCheck es) => Env -> Name -> Eff es Type
 varType env name = case name of
     Global globalName -> getGlobalType globalName
     Local localName -> do
         case lookup localName env.localTypes of
             Just type_ -> pure type_
-            Nothing -> error ("variable not found in renamer: " <> show name)
+            Nothing -> error ("variable not found in type checker: " <> show name)
 
 constructorKind :: (TypeCheck es) => Env -> Name -> Eff es Kind
 constructorKind env name = case name of
@@ -722,18 +754,34 @@ applyForallBinder env = \case
             , ([MkForallBinder{varName, visibility, monomorphization, kind}], TypeVarBinderS{loc, visibility, monomorphization, varName, kind = kindSyntax})
             )
 
-splitFunctionType :: (TypeCheck es) => Loc -> Env -> Int -> Type -> Eff es (Seq Type, Effect, Type)
-splitFunctionType loc env parameterCount type_ = do
+{- | Split an (expected) function type into its parameters, effect and return type.
+In case the function isn't known to be a function type ahead of time, this takes
+the expected number of parameters and switches to unification.
+
+If the actual number of parameters does not match up with the expected one, it pads the parameters
+with meta variables and additionally returns the actual number of parameters so that calling code
+can generate a good error message
+-}
+splitFunctionType ::
+    (TypeCheck es) =>
+    Loc ->
+    Env ->
+    Int ->
+    Type ->
+    Eff es (Seq Type, Effect, Type, Maybe Int)
+splitFunctionType loc env expectedParameterCount type_ = do
     followMetas type_ >>= \case
         Function parameters effect result
-            | length parameters == parameterCount -> pure (parameters, effect, result)
-            | otherwise -> undefined
+            | length parameters == expectedParameterCount -> pure (parameters, effect, result, Nothing)
+            | otherwise -> do
+                parameters <- padWithMetas loc env expectedParameterCount parameters
+                pure (parameters, effect, result, Just (length parameters))
         type_ -> do
-            parameters <- fromList . map MetaVar <$> replicateM parameterCount (freshTypeMeta loc env "a")
+            parameters <- Seq.replicateM expectedParameterCount (MetaVar <$> freshTypeMeta loc env "a")
             effect <- MetaVar <$> freshTypeMeta loc env "e"
             result <- MetaVar <$> freshTypeMeta loc env "b"
             subsumes loc env type_ (Function parameters effect result)
-            pure (parameters, effect, result)
+            pure (parameters, effect, result, Nothing)
 
 substituteTypeVariables :: (TypeCheck es) => (HashMap LocalName Type) -> Type -> Eff es Type
 substituteTypeVariables substitution type_ =

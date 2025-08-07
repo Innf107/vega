@@ -15,13 +15,13 @@ import Data.Traversable (for)
 import Effectful (Eff, (:>))
 import Effectful.Reader.Static (Reader, ask, runReader)
 import GHC.List (List)
+import Vega.Builtins (builtinGlobals, defaultImportScope)
 import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getDefiningDeclaration, getModuleImportScope)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
 import Vega.Error (RenameError (..), RenameErrorSet (..))
 import Vega.Loc (Loc)
 import Vega.Util (mapAccumLM)
 import Vega.Util qualified as Util
-import Vega.Builtins (builtinGlobals, defaultImportScope)
 
 type Rename es =
     ( GraphPersistence :> es
@@ -30,13 +30,14 @@ type Rename es =
     , Output RenameError :> es
     )
 
-registerDependency :: Rename es => DeclarationName -> Eff es ()
+registerDependency :: (Rename es) => DeclarationName -> Eff es ()
 registerDependency dependency = do
     ownDeclaration <- ask
-    if ownDeclaration == dependency then
-        pure ()
-    else
-        output dependency
+    if ownDeclaration == dependency
+        then
+            pure ()
+        else
+            output dependency
 
 data Env = MkEnv
     { localVariables :: HashMap Text LocalName
@@ -159,7 +160,6 @@ findDataConstructorName env loc text = case lookup text env.localDataConstructor
     Just localName -> pure (Local localName)
     Nothing -> findGlobalOrDummy loc DataConstructorKind text
 
-
 {- | This is returned if we cannot find a local name during renaming.
 
 This condition is an error, but we don't want to abort renaming just yet since we might find more
@@ -274,7 +274,10 @@ renamePattern env = \case
         (innerPattern, innerTrans) <- renamePattern env innerPattern
         (localName, envTrans) <- bindLocalVar name
         pure (AsPattern loc innerPattern localName, envTrans . innerTrans)
-    ConstructorPattern{} -> undefined
+    ConstructorPattern{loc, constructor, subPatterns} -> do
+        constructor <- findDataConstructorName env loc constructor
+        (subPatterns, envTransformers) <- Seq.unzip <$> for subPatterns (renamePattern env)
+        pure (ConstructorPattern{loc, constructor, subPatterns}, Util.compose envTransformers)
     TuplePattern loc subPatterns -> do
         (subPatterns, transformers) <- Seq.unzip <$> traverse (renamePattern env) subPatterns
         pure (TuplePattern loc subPatterns, Util.compose transformers)
@@ -371,4 +374,3 @@ renameMatchCase env (MkMatchCase{loc, pattern_, body}) = do
     (pattern_, envTrans) <- renamePattern env pattern_
     body <- renameExpr (envTrans env) body
     pure (MkMatchCase{loc, pattern_, body})
-
