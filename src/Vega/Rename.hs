@@ -30,6 +30,14 @@ type Rename es =
     , Output RenameError :> es
     )
 
+registerDependency :: Rename es => DeclarationName -> Eff es ()
+registerDependency dependency = do
+    ownDeclaration <- ask
+    if ownDeclaration == dependency then
+        pure ()
+    else
+        output dependency
+
 data Env = MkEnv
     { localVariables :: HashMap Text LocalName
     , localTypeVariables :: HashMap Text LocalName
@@ -96,7 +104,7 @@ findGlobal nameKind name = do
                     getDefiningDeclaration globalName >>= \case
                         Nothing -> error $ "declaration of name not found: " <> show globalName
                         Just name -> pure name
-                output dependencyDeclarationName
+                registerDependency dependencyDeclarationName
 
             pure (Found globalName)
         NotFound -> pure NotFound
