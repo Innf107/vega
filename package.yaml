@@ -50,6 +50,7 @@ ghc-options:
 - -Wredundant-constraints
 - -Wno-name-shadowing
 - -Werror=incomplete-patterns
+- -Wno-ambiguous-fields
 
 library:
   source-dirs: src

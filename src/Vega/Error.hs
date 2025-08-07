@@ -46,6 +46,7 @@ data LexicalError
     | UnterminatedStringLiteral Loc
     | InvalidStringEscape Loc Char
     | EmptyHexEscape Loc
+    | MoreLayoutBlocksClosedThanOpened Loc
 
 data RenameError
     = NameNotFound

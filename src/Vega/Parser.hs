@@ -48,6 +48,15 @@ single target = MegaParsec.token match (fromList [Tokens (fromList [(target, dum
         _ -> Nothing
     dummyLoc = MkLoc{startLine = 0, startColumn = 0, endLine = 0, endColumn = 0, file = "<<dummy>>"}
 
+{- | In order to allow optional semicolons, everything that should expect a semicolon actually accepts
+an arbitrary number of semicolons
+-}
+semicolon :: Parser Loc
+semicolon =
+    many1Seq (single Semicolon) >>= \case
+        only :<|| Empty -> pure only
+        first :<|| (_ :|> last) -> pure (first <> last)
+
 stringLit :: Parser (Text, Loc)
 stringLit = MegaParsec.token match (fromList [Label (fromList "string literal")])
   where
@@ -124,12 +133,14 @@ parse moduleName filePath tokens = do
 
 module_ :: Parser ParsedModule
 module_ = do
-    imports <- import_ `sepEndBy` (single Semicolon)
-    declarations <- declaration `sepEndBy` (single Semicolon)
+    -- We need to accept semicolons here to make layout work correctly
+    _ <- optional semicolon
+    imports <- import_ `sepEndBy` semicolon
+    declarations <- declaration `sepEndBy` semicolon
     pure (MkParsedModule{imports, declarations})
 
 declaration :: Parser (Declaration Parsed)
-declaration =
+declaration = do
     choice
         [ defineFunction
         , defineVariantType
@@ -140,7 +151,7 @@ defineFunction = do
     (name, startLoc) <- identifierWithLoc
     _ <- single Colon
     typeSignature <- type_
-    _ <- single Semicolon
+    _ <- semicolon
     definitionName <- identifier
 
     when (name /= definitionName) do
@@ -373,7 +384,7 @@ pattern_ = do
             ]
 
 expr :: Parser (Expr Parsed)
-expr = exprLogical
+expr = label "expression" exprLogical
   where
     makeBinOp operator = \expr1 expr2 -> BinaryOperator (getLoc expr1 <> getLoc expr2) expr1 operator expr2
 
@@ -462,14 +473,14 @@ expr = exprLogical
                 pure (Syntax.If{loc = startLoc <> getLoc elseBranch, condition, thenBranch, elseBranch})
             , do
                 startLoc <- single Lexer.LBrace
-                statements <- fromList <$> statement `sepEndBy` (single Lexer.Semicolon)
+                statements <- fromList <$> statement `sepEndBy` semicolon
                 endLoc <- single Lexer.RBrace
                 pure (SequenceBlock (startLoc <> endLoc) statements)
             , do
                 startLoc <- single Lexer.Match
                 scrutinee <- expr
                 _ <- single LBrace
-                cases <- fromList <$> matchCase `sepEndBy` (single Lexer.Semicolon)
+                cases <- fromList <$> matchCase `sepEndBy` semicolon
                 endLoc <- single RBrace
                 pure (Syntax.Match{loc = startLoc <> endLoc, scrutinee, cases})
             ]
@@ -517,7 +528,7 @@ let_ = do
           do
             _ <- single Lexer.Colon
             typeSig <- type_
-            _ <- single Lexer.Semicolon
+            _ <- semicolon
             _ <- single Lexer.Let
             name <- identifier
             params <- arguments pattern_

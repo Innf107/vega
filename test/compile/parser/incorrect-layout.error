@@ -1,0 +1,6 @@
+$FILE:6:5: ERROR:
+    Expected: expression
+      Actual: ;
+  ┃ 
+6 ┃     x
+  ┃     

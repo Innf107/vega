@@ -9,14 +9,14 @@ module Vega.Lexer (
 import Relude hiding (many)
 
 import Data.Char qualified as Char
+import Data.List.NonEmpty qualified as NonEmptyList
 import Data.Ratio ((%))
 import Data.Text qualified as Text
+import GHC.List (List)
 import Relude.Unsafe (read)
 import Vega.Error (LexicalError (..))
 import Vega.Lexer.Token (Token (..))
 import Vega.Loc (Loc (..))
-import Vega.Pretty (Pretty (..))
-import Vega.Pretty qualified as Pretty
 
 newtype Lexer a = MkLexer (Either LexicalError a)
     deriving newtype (Functor, Applicative, Monad)
@@ -26,6 +26,11 @@ unLexer (MkLexer either) = either
 lexicalError :: LexicalError -> Lexer a
 lexicalError error = MkLexer (Left error)
 
+data LayoutBlock
+    = Searching
+    | FixedAt Int
+    deriving (Show, Generic)
+
 data LexState = MkLexState
     { startLine :: Int
     , startColumn :: Int
@@ -33,6 +38,7 @@ data LexState = MkLexState
     , endColumn :: Int
     , remainingText :: Text
     , file :: Text
+    , layout :: NonEmptyList.NonEmpty LayoutBlock
     }
     deriving (Show, Generic)
 
@@ -69,6 +75,7 @@ newLexState fileName contents =
         , endColumn = 1
         , remainingText = contents
         , file = fileName
+        , layout = FixedAt 1 :| []
         }
 
 skipSpaces :: LexState -> LexState
@@ -103,6 +110,8 @@ run fileName text = do
 
 lex :: LexState -> Lexer (Token, LexState)
 lex state = case state of
+    '\n' :! state -> do
+        lexStartOfLine state
     '-' :! '-' :! state -> lexLineComment state
     '(' :! state -> pure (LParen, state)
     ')' :! state -> pure (RParen, state)
@@ -112,8 +121,12 @@ lex state = case state of
     '-' :! '>' :! state -> pure (Arrow, state)
     '-' :! '{' :! state -> pure (EffArrowStart, state)
     '}' :! '>' :! state -> pure (EffArrowEnd, state)
-    '{' :! state -> pure (LBrace, state)
-    '}' :! state -> pure (RBrace, state)
+    '{' :! state -> do
+        pure (LBrace, state{layout = NonEmptyList.cons Searching state.layout})
+    '}' :! state -> do
+        case NonEmptyList.uncons state.layout of
+            (_, Nothing) -> lexicalError (MoreLayoutBlocksClosedThanOpened (locOfLastCharOnly state))
+            (_, Just rest) -> pure (RBrace, state{layout = rest})
     '[' :! state -> pure (LBracket, state)
     ']' :! state -> pure (RBracket, state)
     ':' :! ':' :! state -> pure (DoubleColon, state)
@@ -140,6 +153,22 @@ lex state = case state of
         | isIdentifierStart char -> lexIdentifier [char] state
         | Char.isSpace char -> lex (skipSpaces state)
         | otherwise -> lexicalError (UnexpectedCharacter (locOfLastCharOnly state) char)
+    IsEOF -> pure (EOF, state)
+
+lexStartOfLine :: LexState -> Lexer (Token, LexState)
+lexStartOfLine state = case state of
+    '-' :! '-' :! state -> lexLineComment state
+    fullState@(char :! state)
+        | Char.isSpace char -> lexStartOfLine (skipSpaces state)
+        | otherwise -> do
+            let foundColumn = fullState.endColumn
+
+            -- It is important that we use the full state here since we didn't actually consume the character yet
+            case fullState.layout of
+                Searching :| rest -> lex (fullState{layout = FixedAt foundColumn :| rest})
+                FixedAt expectedIndent :| _
+                    | foundColumn <= expectedIndent -> pure (Semicolon, fullState)
+                    | otherwise -> lex fullState
     IsEOF -> pure (EOF, state)
 
 lexLineComment :: LexState -> Lexer (Token, LexState)

@@ -1,0 +1,12 @@
+
+
+f : Int -> (Int, Int)
+f(x) = {
+    let y =
+    x
+    y
+}
+
+main : () -> ()
+main() = main()
+

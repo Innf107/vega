@@ -1,5 +1,3 @@
-{-# OPTIONS_GHC -Wno-ambiguous-fields #-}
-
 module Vega.TypeCheck (checkDeclaration) where
 
 import Vega.Syntax
