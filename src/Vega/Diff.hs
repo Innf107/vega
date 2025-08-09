@@ -21,7 +21,7 @@ import Vega.Syntax (
     Pattern,
     Statement,
     TypeSyntax,
-    ForallBinderS, Monomorphization, BinderVisibility, PackageName,
+    ForallBinderS, Monomorphization, BinderVisibility, PackageName, PrimitiveRep,
  )
 
 import Effectful
@@ -126,6 +126,7 @@ deriving via Generically Monomorphization instance Diff Monomorphization
 deriving via Generically BinderVisibility instance Diff BinderVisibility
 deriving via Generically (ForallBinderS Parsed) instance Diff (ForallBinderS Parsed)
 deriving via Generically (ForallBinderS Renamed) instance Diff (ForallBinderS Renamed)
+deriving via Generically PrimitiveRep instance Diff PrimitiveRep
 deriving via Generically (TypeSyntax Parsed) instance Diff (TypeSyntax Parsed)
 deriving via Generically (TypeSyntax Renamed) instance Diff (TypeSyntax Renamed)
 deriving via Generically LocalName instance Diff LocalName

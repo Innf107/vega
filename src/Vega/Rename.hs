@@ -242,10 +242,7 @@ renameTypeSyntax env = \case
     ProductRepS loc elements -> do
         elements <- traverse (renameTypeSyntax env) elements
         pure (ProductRepS loc elements)
-    UnitRepS loc -> pure (UnitRepS loc)
-    EmptyRepS loc -> pure (EmptyRepS loc)
-    BoxedRepS loc -> pure (BoxedRepS loc)
-    IntRepS loc -> pure (IntRepS loc)
+    PrimitiveRepS loc rep -> pure (PrimitiveRepS loc rep)
     KindS loc -> pure (KindS loc)
 
 renameKindSyntax :: (Rename es) => Env -> KindSyntax Parsed -> Eff es (KindSyntax Renamed)

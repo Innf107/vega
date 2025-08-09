@@ -23,10 +23,10 @@ builtinGlobals = fromList [((name, kind), internalName name) | (name, kind) <- g
 
 builtinKinds :: HashMap GlobalName Kind
 builtinKinds =
-    [ (internalName "Int", Type IntRep)
-    , (internalName "String", Type BoxedRep)
-    , (internalName "Double", Type undefined)
-    , (internalName "Bool", Type (SumRep [UnitRep, UnitRep]))
+    [ (internalName "Int", Type (PrimitiveRep IntRep))
+    , (internalName "String", Type (PrimitiveRep BoxedRep))
+    , (internalName "Double", Type (PrimitiveRep DoubleRep))
+    , (internalName "Bool", Type (SumRep [PrimitiveRep UnitRep, PrimitiveRep UnitRep]))
     ]
 
 defaultImportScope :: ImportScope
@@ -37,7 +37,7 @@ defaultImportScope =
                 ( internalModuleName
                 , MkImportedItems
                     { qualifiedAliases = []
-                    , unqualifiedItems = ["Int", "String"]
+                    , unqualifiedItems = ["Int", "String", "Double", "Bool"]
                     }
                 )
             ]

@@ -1,7 +1,7 @@
 
-data MyBool = True | False;
+data Bool = True | False;
 
-f : MyBool -> ();
+f : Bool -> ();
 f(_) = ();
 
 main : () -> ();

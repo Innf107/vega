@@ -194,20 +194,20 @@ computeAndCacheKind declaration = withTrace KindCheck ("computeAndCacheKind: " <
             components <- for components \case
                 component@(TypeConstructorS _ name) ->
                     inSameSCC name >>= \case
-                        True -> pure BoxedRep
+                        True -> pure (PrimitiveRep BoxedRep)
                         False -> repOfDifferentSCC component
                 component@(TypeApplicationS _ (TypeConstructorS _loc name) _) ->
                     inSameSCC name >>= \case
-                        True -> pure BoxedRep
+                        True -> pure (PrimitiveRep BoxedRep)
                         False -> repOfDifferentSCC component
                 component -> repOfDifferentSCC component
             case components of
-                [] -> pure UnitRep
+                [] -> pure (PrimitiveRep UnitRep)
                 [r] -> pure r
                 _ -> pure (ProductRep components)
 
         let bodyRepresentation = case constructorRepresentations of
-                [] -> EmptyRep
+                [] -> PrimitiveRep EmptyRep
                 [r] -> r
                 _ -> SumRep constructorRepresentations
 
@@ -226,7 +226,7 @@ checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> 
 checkDeclarationSyntax loc = \case
     DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body} -> do
         let env = emptyEnv
-        (functionType, typeSignature) <- checkType env Parametric (Type BoxedRep) typeSignature
+        (functionType, typeSignature) <- checkType env Parametric (Type (PrimitiveRep BoxedRep)) typeSignature
 
         (env, remainingType) <- bindTypeParameters loc env declaredTypeParameters functionType
 
@@ -698,12 +698,12 @@ inferType env syntax = do
         PureFunctionS loc parameters result -> do
             (_parameterReps, parameterTypes, parameterTypeSyntax) <- unzip3Seq <$> traverse (inferTypeRep env) parameters
             (_resultRep, resultType, resultTypeSyntax) <- inferTypeRep env result
-            pure (Type BoxedRep, Function parameterTypes Pure resultType, PureFunctionS loc parameterTypeSyntax resultTypeSyntax)
+            pure (Type (PrimitiveRep BoxedRep), Function parameterTypes Pure resultType, PureFunctionS loc parameterTypeSyntax resultTypeSyntax)
         FunctionS loc parameters effect result -> do
             (_parameterReps, parameterTypes, parameterTypeSyntax) <- unzip3Seq <$> traverse (inferTypeRep env) parameters
             (effect, effectSyntax) <- checkType env Parametric Effect effect
             (_resultRep, resultType, resultTypeSyntax) <- inferTypeRep env result
-            pure (Type BoxedRep, Function parameterTypes effect resultType, FunctionS loc parameterTypeSyntax effectSyntax resultTypeSyntax)
+            pure (Type (PrimitiveRep BoxedRep), Function parameterTypes effect resultType, FunctionS loc parameterTypeSyntax effectSyntax resultTypeSyntax)
         TupleS loc elements -> do
             (elementReps, elementTypes, elementTypeSyntax) <- unzip3Seq <$> traverse (inferType env) elements
             pure (Type (ProductRep elementReps), Tuple elementTypes, TupleS loc elementTypeSyntax)
@@ -718,10 +718,7 @@ inferType env syntax = do
         ProductRepS loc elementSyntax -> do
             (elements, elementSyntax) <- Seq.unzip <$> traverse (checkType env Parametric Rep) elementSyntax
             pure (Rep, ProductRep elements, ProductRepS loc elementSyntax)
-        UnitRepS loc -> pure (Rep, UnitRep, UnitRepS loc)
-        EmptyRepS loc -> pure (Rep, EmptyRep, EmptyRepS loc)
-        BoxedRepS loc -> pure (Rep, BoxedRep, BoxedRepS loc)
-        IntRepS loc -> pure (Rep, IntRep, IntRepS loc)
+        PrimitiveRepS loc rep -> pure (Rep, PrimitiveRep rep, PrimitiveRepS loc rep)
         KindS loc -> pure (Kind, Kind, KindS loc)
 
 inferTypeRep :: (TypeCheck es) => Env -> TypeSyntax Renamed -> Eff es (Kind, Type, TypeSyntax Typed)
@@ -760,7 +757,7 @@ kindOf loc env = \case
     TypeVar name -> pure $ typeVariableKind name env
     Forall _bindings body -> do
         undefined
-    Function{} -> pure (Type BoxedRep)
+    Function{} -> pure (Type (PrimitiveRep BoxedRep))
     Tuple elements -> Type . ProductRep <$> traverse (kindOf loc env) elements
     MetaVar meta -> pure meta.kind
     Skolem skolem -> pure skolem.kind
@@ -770,10 +767,7 @@ kindOf loc env = \case
     Effect -> pure Kind
     SumRep{} -> pure Rep
     ProductRep{} -> pure Rep
-    UnitRep -> pure Rep
-    EmptyRep -> pure Rep
-    BoxedRep -> pure Rep
-    IntRep -> pure Rep
+    PrimitiveRep{} -> pure Rep
     Kind -> pure Kind
 
 -- | Like checkType but on evaluated `Type`s rather than TypeSyntax
@@ -880,10 +874,7 @@ substituteTypeVariables substitution type_ =
         ProductRep elements -> do
             elements <- traverse (substituteTypeVariables substitution) elements
             pure (ProductRep elements)
-        type_@UnitRep -> pure type_
-        type_@EmptyRep -> pure type_
-        type_@BoxedRep -> pure type_
-        type_@IntRep -> pure type_
+        type_@PrimitiveRep{} -> pure type_
         type_@Kind -> pure type_
 
 data InstantiationResult
@@ -1056,17 +1047,9 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
                                 _ <- zipWithSeqM go elements1 elements2
                                 pure ()
                         _ -> unificationFailure
-                    UnitRep -> case type2 of
-                        UnitRep -> pure ()
-                        _ -> unificationFailure
-                    EmptyRep -> case type2 of
-                        EmptyRep -> pure ()
-                        _ -> unificationFailure
-                    BoxedRep -> case type2 of
-                        BoxedRep -> pure ()
-                        _ -> unificationFailure
-                    IntRep -> case type2 of
-                        IntRep -> pure ()
+                    PrimitiveRep rep1 -> case type2 of
+                        PrimitiveRep rep2
+                            | rep1 == rep2 -> pure ()
                         _ -> unificationFailure
                     Kind -> case type2 of
                         Kind -> pure ()
@@ -1125,10 +1108,7 @@ occursAndAdjust loc env meta type_ = do
             Effect -> pure ()
             SumRep elements -> for_ elements go
             ProductRep elements -> for_ elements go
-            UnitRep -> pure ()
-            EmptyRep -> pure ()
-            BoxedRep -> pure ()
-            IntRep -> pure ()
+            PrimitiveRep{} -> pure ()
             Kind -> pure ()
 
 subsumesEffect :: (TypeCheck es) => Effect -> Effect -> Eff es ()
@@ -1218,10 +1198,7 @@ solveMonomorphized onMetaVar loc env type_ =
             Effect -> pure ()
             SumRep elements -> for_ elements go
             ProductRep elements -> for_ elements go
-            UnitRep -> pure ()
-            EmptyRep -> pure ()
-            BoxedRep -> pure ()
-            IntRep -> pure ()
+            PrimitiveRep{} -> pure ()
             Kind -> pure ()
 
 type SolveConstraints es = (Error TypeError :> es, Output TypeError :> es, Trace :> es, IOE :> es)

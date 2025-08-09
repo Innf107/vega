@@ -260,10 +260,10 @@ type_ =
                         let constructor = case name of
                                 "Effect" -> EffectS loc
                                 "Rep" -> RepS loc
-                                "Unit" -> UnitRepS loc
-                                "Empty" -> EmptyRepS loc
-                                "Boxed" -> BoxedRepS loc
-                                "IntRep" -> IntRepS loc
+                                "Unit" -> PrimitiveRepS loc UnitRep
+                                "Empty" -> PrimitiveRepS loc EmptyRep
+                                "Boxed" -> PrimitiveRepS loc BoxedRep
+                                "IntRep" -> PrimitiveRepS loc IntRep
                                 "Kind" -> KindS loc
                                 _ -> TypeConstructorS loc name
                         pure $

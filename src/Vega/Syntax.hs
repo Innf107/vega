@@ -257,10 +257,7 @@ data TypeSyntax p
     | EffectS Loc
     | SumRepS Loc (Seq (TypeSyntax p))
     | ProductRepS Loc (Seq (TypeSyntax p))
-    | UnitRepS Loc
-    | EmptyRepS Loc
-    | BoxedRepS Loc
-    | IntRepS Loc
+    | PrimitiveRepS Loc PrimitiveRep
     | KindS Loc
     deriving stock (Generic)
     deriving anyclass (HasLoc)
@@ -331,12 +328,25 @@ data Type
     | Effect
     | SumRep (Seq Type)
     | ProductRep (Seq Type)
-    | UnitRep
+    | PrimitiveRep PrimitiveRep
+    | Kind
+    deriving (Generic)
+
+data PrimitiveRep
+    = UnitRep
     | EmptyRep
     | BoxedRep
     | IntRep
-    | Kind
-    deriving (Generic)
+    | DoubleRep
+    deriving (Generic, Eq)
+
+instance Pretty PrimitiveRep where
+    pretty = \case
+        UnitRep -> keyword "Unit"
+        EmptyRep -> keyword "Empty"
+        BoxedRep -> keyword "Boxed"
+        IntRep -> keyword "IntRep"
+        DoubleRep -> keyword "DoubleRep"
 
 type Kind = Type
 
@@ -416,10 +426,7 @@ instance Pretty Type where
         Effect -> keyword "Effect"
         SumRep reps -> lparen "(" <> intercalateDoc (keyword "+") (fmap pretty reps) <> rparen ")"
         ProductRep reps -> lparen "(" <> intercalateDoc (keyword "*") (fmap pretty reps) <> rparen ")"
-        UnitRep -> keyword "Unit"
-        EmptyRep -> keyword "Empty"
-        BoxedRep -> keyword "Boxed"
-        IntRep -> keyword "IntRep"
+        PrimitiveRep rep -> pretty rep
         Kind -> keyword "Kind"
 
 prettyForallBinder :: ForallBinder -> Doc Ann

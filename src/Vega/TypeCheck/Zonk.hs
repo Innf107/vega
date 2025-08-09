@@ -83,3 +83,4 @@ deriving via ZonkIgnored Name instance Zonkable Name
 deriving via ZonkIgnored Unique instance Zonkable Unique
 deriving via ZonkIgnored Loc instance Zonkable Loc
 deriving via ZonkIgnored Int instance Zonkable Int
+deriving via ZonkIgnored PrimitiveRep instance Zonkable PrimitiveRep

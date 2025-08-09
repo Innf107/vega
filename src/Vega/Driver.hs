@@ -285,7 +285,7 @@ compileToJS :: (Driver es) => DeclarationName -> Eff es ()
 compileToJS name =
     GraphPersistence.getTyped name >>= \case
         -- TODOOOO
-        Missing{} -> error $ "missing typed in compilation to JS: " <> show name
+        Missing{} -> pure () -- error $ "missing typed in compilation to JS: " <> show name
         Failed{} -> pure () -- If the previous stage errored, we won't try to compile it
         Ok typedDeclaration -> do
             compiled <- JavaScript.compileDeclaration typedDeclaration
