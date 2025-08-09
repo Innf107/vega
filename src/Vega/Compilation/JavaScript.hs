@@ -21,9 +21,14 @@ import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import Data.HashSet qualified as HashSet
 import Data.Sequence (Seq (..))
 import Data.Text qualified as Text
+import Data.Traversable (for)
+import Data.Unique (newUnique)
 import Effectful.Error.Static (Error)
+import Vega.Compilation.PatternMatching (CaseTree (..))
+import Vega.Compilation.PatternMatching qualified as PatternMatching
 import Vega.Effect.Trace (Category (..), Trace, trace)
 import Vega.Error (DriverError)
+import Vega.Seq.NonEmpty (pattern NonEmpty)
 import Vega.Syntax
 
 -- In this module, we want string literals to default to text builders.
@@ -36,20 +41,25 @@ type Compile es =
     ( GraphPersistence :> es
     , Writer TextBuilder.Builder :> es
     , Trace :> es
+    , IOE :> es
     )
 
-compileDeclaration :: (GraphPersistence :> es, Trace :> es) => Declaration Typed -> Eff es LText
+compileDeclaration :: (GraphPersistence :> es, Trace :> es, IOE :> es) => Declaration Typed -> Eff es LText
 compileDeclaration declaration = fmap (TextBuilder.toLazyText . snd) $ runWriter @TextBuilder.Builder do
     compileDeclarationSyntax declaration.syntax
 
--- TODO: we need to support actual decision tree compilation for non-variable patterns
-compilePattern :: Pattern Typed -> TextBuilder.Builder
-compilePattern = \case
-    VarPattern _ localName -> compileLocalName localName
-    TypePattern _ inner _ -> compilePattern inner
-    WildcardPattern _loc -> "_"
-    TuplePattern _ patterns -> "[" <> intercalate "," (fmap compilePattern patterns) <> "]"
-    _ -> undefined
+-- TODO: avoid duplicating the RHS
+compileMatch :: (Compile es) => Seq (MatchCase Typed) -> Eff es TextBuilder.Builder
+compileMatch cases = do
+    case cases of
+        Empty -> undefined
+        NonEmpty matchCases -> do
+            let caseTree = PatternMatching.compileMatch (fmap (\MkMatchCase{pattern_, body} -> (pattern_, body)) matchCases)
+            undefined
+
+compileCaseTree :: (Compile es) => PatternMatching.CaseTree (Expr Typed) -> Eff es ()
+compileCaseTree = \case
+    Leaf goal -> compileExpr goal
 
 compileDeclarationSyntax :: (Compile es) => DeclarationSyntax Typed -> Eff es ()
 compileDeclarationSyntax = \case
@@ -63,7 +73,7 @@ compileDeclarationSyntax = \case
             tell ("const " <> compileGlobalName name <> " = " <> "(")
 
             for_ parameters \parameter -> do
-                tell (compilePattern parameter)
+                tell undefined
                 tell ", "
             tell ") => "
             compileExpr body
@@ -143,7 +153,14 @@ compileExpr = \case
     Match
         { scrutinee
         , cases
-        } -> undefined
+        } -> do
+            tell "((() => "
+            tell "const scrutinee = "
+            compileExpr scrutinee
+            tell ";"
+            for_ cases \MkMatchCase{pattern_, body} -> do
+                undefined
+            tell ")())"
 
 compileStatements :: (Compile es) => Seq (Statement Typed) -> Eff es ()
 compileStatements Empty = tell "return []"
@@ -166,7 +183,7 @@ compileStatement = \case
         compileExpr expr
     Let _ pattern_ body -> do
         tell $ "const " <> compilePattern pattern_ <> " = "
-        compileExpr body 
+        compileExpr body
     LetFunction{} -> undefined
     Use{} -> undefined
 

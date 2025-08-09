@@ -16,7 +16,7 @@ import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentTex
 import Vega.Seq.NonEmpty (NonEmpty (..))
 
 newtype PackageName = MkPackageName Text
-    deriving stock (Generic, Eq, Show)
+    deriving stock (Generic, Eq, Show, Ord)
     deriving newtype (Hashable)
 
 renderPackageName :: PackageName -> Text
@@ -26,7 +26,7 @@ data ModuleName = MkModuleName
     { package :: PackageName
     , subModules :: NonEmpty Text
     }
-    deriving stock (Generic, Eq, Show)
+    deriving stock (Generic, Eq, Show, Ord)
     deriving anyclass (Hashable)
 
 data ParsedModuleName = MkParsedModuleName
@@ -39,18 +39,18 @@ renderModuleName (MkModuleName{package, subModules}) =
     renderPackageName package <> ":" <> Text.intercalate "/" (toList subModules)
 
 data DeclarationName = MkDeclarationName {moduleName :: ModuleName, name :: Text}
-    deriving stock (Generic, Eq, Show)
+    deriving stock (Generic, Eq, Show, Ord)
     deriving anyclass (Hashable)
 
 instance Pretty DeclarationName where
     pretty (MkDeclarationName{moduleName, name}) = globalIdentText (renderModuleName moduleName <> ":" <> name)
 
 data GlobalName = MkGlobalName {moduleName :: ModuleName, name :: Text}
-    deriving stock (Generic, Eq, Show)
+    deriving stock (Generic, Eq, Show, Ord)
     deriving anyclass (Hashable)
 
 data LocalName = MkLocalName {parent :: DeclarationName, name :: Text, count :: Int}
-    deriving stock (Generic, Eq, Show)
+    deriving stock (Generic, Eq, Show, Ord)
     deriving anyclass (Hashable)
 
 renderLocalName :: LocalName -> Text
@@ -61,7 +61,7 @@ renderLocalName MkLocalName{parent = _, name, count} = case count of
 data Name
     = Global GlobalName
     | Local LocalName
-    deriving stock (Generic, Eq, Show)
+    deriving stock (Generic, Eq, Show, Ord)
     deriving anyclass (Hashable)
 
 unqualifiedName :: Name -> Text
@@ -218,7 +218,7 @@ data Pattern p
         , subPatterns :: Seq (Pattern p)
         }
     | TypePattern Loc (Pattern p) (TypeSyntax p)
-    | OrPattern Loc (Seq (Pattern p))
+    | OrPattern Loc (NonEmpty (Pattern p))
     deriving stock (Generic)
     deriving anyclass (HasLoc)
 

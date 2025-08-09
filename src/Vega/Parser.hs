@@ -347,7 +347,7 @@ pattern_ = do
     rest <- many (single Pipe *> pattern1)
     case rest of
         Empty -> pure firstPattern
-        (_ :|> lastPattern) -> pure (OrPattern (getLoc firstPattern <> getLoc lastPattern) (firstPattern :<| rest))
+        (_ :|> lastPattern) -> pure (OrPattern (getLoc firstPattern <> getLoc lastPattern) (firstPattern :<|| rest))
   where
     pattern1 = do
         inner <- pattern2

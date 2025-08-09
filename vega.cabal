@@ -28,9 +28,11 @@ library
       Vega.BuildConfig
       Vega.Builtins
       Vega.Compilation.JavaScript
+      Vega.Compilation.JavaScript.Language
       Vega.Compilation.LIR
       Vega.Compilation.MIR
       Vega.Compilation.MIRToLIR
+      Vega.Compilation.PatternMatching
       Vega.Compilation.Shape
       Vega.Compilation.VegaToMIR
       Vega.Debug
@@ -45,6 +47,7 @@ library
       Vega.Lexer
       Vega.Lexer.Token
       Vega.Loc
+      Vega.Panic
       Vega.Parser
       Vega.Pretty
       Vega.Rename

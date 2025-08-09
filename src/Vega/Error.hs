@@ -26,6 +26,7 @@ import Text.Megaparsec (ErrorFancy (..), ErrorItem (..), ParseError (..), ParseE
 import Text.Megaparsec.Error (ParseErrorBundle (..))
 import Vega.Lexer.Token (Token)
 import Vega.Loc (HasLoc, Loc (..), getLoc)
+import Vega.Panic qualified as Panic
 import Vega.Parser (AdditionalParseError (..))
 import Vega.Parser qualified as Parser
 import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, note, number, plain, vsep, (<+>))
@@ -419,8 +420,12 @@ renderCompilationError = \case
                             <> note "  Note: To change the entry point, set the" <+> localIdentText "entry-point" <+> note "field in your "
                             <> keyword "vega.yaml"
                             <> note " file"
-    Panic exception -> pure do
-        PlainError $ MkPlainErrorMessage $ align $ errorText "PANIC (the 'impossible' happened): " <> emphasis (show exception)
+    Panic exception -> do
+        let message = case fromException @Panic.Panic exception of
+                Just (Panic.Panic prettyMessage) -> prettyMessage
+                Nothing -> emphasis (show exception)
+
+        pure $ PlainError $ MkPlainErrorMessage $ align $ errorText "PANIC (the 'impossible' happened): " <> message
 
 pluralNumber :: (Text -> Doc Ann) -> Int -> Text -> Doc Ann
 pluralNumber render 1 text = number @Int 1 <+> render text
