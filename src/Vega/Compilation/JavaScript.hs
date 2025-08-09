@@ -175,15 +175,19 @@ compileCaseTree compileGoal scrutinee = \case
     Leaf goal -> compileGoal goal
     ConstructorCase{constructors} -> do
         cases <-
-            fromList <$> for (Map.toList constructors) \(constructor, (parameterCount, continuation)) -> do
-                payloadVariables <- Seq.replicateM parameterCount (freshVar "p")
-                rest <- compileRecursiveCaseTree compileGoal payloadVariables continuation
+            fromList <$> for (Map.toList constructors) \(constructor, (parameterCount, continuation)) -> case parameterCount of
+                0 -> do
+                    statements <- compileRecursiveCaseTree compileGoal [] continuation
+                    pure (JS.compileName constructor, statements)
+                _ -> do
+                    payloadVariables <- Seq.replicateM parameterCount (freshVar "p")
+                    rest <- compileRecursiveCaseTree compileGoal payloadVariables continuation
 
-                pure
-                    ( JS.compileName constructor
-                    , [JS.DestructureArray payloadVariables (JS.FieldAccess (JS.Var scrutinee) "payload")]
-                        <> rest
-                    )
+                    pure
+                        ( JS.compileName constructor
+                        , [JS.DestructureArray payloadVariables (JS.FieldAccess (JS.Var scrutinee) "payload")]
+                            <> rest
+                        )
         pure
             [ JS.SwitchString
                 { scrutinee = JS.FieldAccess (JS.Var scrutinee) "tag"

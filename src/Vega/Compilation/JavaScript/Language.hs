@@ -79,7 +79,7 @@ renderStatement = \case
     DestructureArray bindings arrayExpr -> "const [" <> intercalateMap ", " TextBuilder.text bindings <> "] = " <> renderExpr arrayExpr
 
 renderStatements :: (Foldable f) => f Statement -> TextBuilder
-renderStatements statements = intercalateMap ";\n\n" renderStatement statements
+renderStatements statements = intercalateMap ";\n" renderStatement statements
 
 renderExpr :: Expr -> TextBuilder
 renderExpr = \case
