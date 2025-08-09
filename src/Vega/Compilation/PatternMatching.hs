@@ -1,4 +1,4 @@
-module Vega.Compilation.PatternMatching (CaseTree (..), RecursiveCaseTree (..), compileMatch) where
+module Vega.Compilation.PatternMatching (CaseTree (..), RecursiveCaseTree (..), compileMatch, serializeSubPatterns) where
 
 import Data.Foldable1 (foldl1')
 import Data.Map qualified as Map
@@ -23,7 +23,7 @@ data CaseTree goal
     | ConstructorCase
         -- We use Map instead of HashMap to get a faster unionWith operation
         -- (with HashMap, merging would have been quadratic in the number of constructors)
-        { constructors :: Map Name (RecursiveCaseTree goal)
+        { constructors :: Map Name (Int, RecursiveCaseTree goal)
         }
     | OrDefault (CaseTree goal) goal
     | TupleCase Int (RecursiveCaseTree goal)
@@ -45,7 +45,11 @@ merge tree1 tree2 = case (tree1, tree2) of
     (BindVar var tree1, tree2) -> BindVar var (merge tree1 tree2)
     (_, BindVar var tree2) -> BindVar var (merge tree1 tree2)
     (ConstructorCase{constructors = constructors1}, _) -> case tree2 of
-        ConstructorCase{constructors = constructors2} -> ConstructorCase{constructors = Map.unionWith mergeRecursive constructors1 constructors2}
+        ConstructorCase{constructors = constructors2} -> do
+            let merge (count1, cont1) (count2, cont2)
+                    | count1 /= count2 = panic "trying to merge case trees with different parameter counts for the same constructor"
+                    | otherwise = (count1, mergeRecursive cont1 cont2)
+            ConstructorCase{constructors = Map.unionWith merge constructors1 constructors2}
         _ -> invalidMergeCombination tree1 tree2
     (TupleCase size1 continuation1, _) -> case tree2 of
         TupleCase size2 continuation2
@@ -76,7 +80,7 @@ compileSinglePattern pattern_ goal = case pattern_ of
     ConstructorPattern{constructor, subPatterns} -> do
         let subTree = serializeSubPatterns subPatterns goal
         ConstructorCase
-            { constructors = [(constructor, subTree)]
+            { constructors = [(constructor, (length subPatterns, subTree))]
             }
     TuplePattern _ subPatterns -> do
         let subTree = serializeSubPatterns subPatterns goal

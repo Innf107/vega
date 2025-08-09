@@ -6,7 +6,7 @@
     "Dead code elimination" is however automatically performed on declarations, since we only compile the ones that
     are reachable from the entry point anyway.
 -}
-module Vega.Compilation.JavaScript (compileDeclaration, assembleFromEntryPoint) where
+module Vega.Compilation.JavaScript (compileDeclaration) where
 
 import Relude hiding (State, evalState, get, intercalate, modify, put, trace)
 
@@ -14,249 +14,202 @@ import Effectful
 import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 
-import Data.Text.Lazy.Builder qualified as TextBuilder
 import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import Effectful.Writer.Static.Local (Writer, runWriter, tell)
+import TextBuilder (TextBuilder)
+import TextBuilder qualified
 
 import Data.HashSet qualified as HashSet
+import Data.Map qualified as Map
 import Data.Sequence (Seq (..))
+import Data.Sequence qualified as Seq
 import Data.Text qualified as Text
+import Data.Text.Lazy qualified as LText
 import Data.Traversable (for)
-import Data.Unique (newUnique)
+import Data.Unique (hashUnique, newUnique)
 import Effectful.Error.Static (Error)
-import Vega.Compilation.PatternMatching (CaseTree (..))
+import Vega.Compilation.JavaScript.Language qualified as JS
+import Vega.Compilation.PatternMatching (CaseTree (..), RecursiveCaseTree (..))
 import Vega.Compilation.PatternMatching qualified as PatternMatching
+import Vega.Debug (showHeadConstructor)
 import Vega.Effect.Trace (Category (..), Trace, trace)
 import Vega.Error (DriverError)
-import Vega.Seq.NonEmpty (pattern NonEmpty)
+import Vega.Panic (panic)
+import Vega.Seq.NonEmpty (NonEmpty (..), pattern NonEmpty)
 import Vega.Syntax
 
--- In this module, we want string literals to default to text builders.
--- This does *not* influence any other modules, however it does remove defaulting of other
--- classes like Num (GHC 9.12 fixes this with NamedDefaults).
--- Since those would usually throw a warning anyway, this is not a problem for us.
-default (TextBuilder.Builder)
-
 type Compile es =
-    ( GraphPersistence :> es
-    , Writer TextBuilder.Builder :> es
-    , Trace :> es
+    ( Trace :> es
     , IOE :> es
     )
 
-compileDeclaration :: (GraphPersistence :> es, Trace :> es, IOE :> es) => Declaration Typed -> Eff es LText
-compileDeclaration declaration = fmap (TextBuilder.toLazyText . snd) $ runWriter @TextBuilder.Builder do
-    compileDeclarationSyntax declaration.syntax
+compileDeclaration :: (Compile es) => Declaration Typed -> Eff es Text
+compileDeclaration declaration = do
+    jsDeclarations <- compileDeclarationSyntax declaration.syntax
+    pure $ TextBuilder.toText $ JS.renderStatements $ toList jsDeclarations
 
--- TODO: avoid duplicating the RHS
-compileMatch :: (Compile es) => Seq (MatchCase Typed) -> Eff es TextBuilder.Builder
-compileMatch cases = do
-    case cases of
-        Empty -> undefined
-        NonEmpty matchCases -> do
-            let caseTree = PatternMatching.compileMatch (fmap (\MkMatchCase{pattern_, body} -> (pattern_, body)) matchCases)
-            undefined
+freshVar :: (Compile es) => Text -> Eff es JS.Name
+freshVar base = do
+    unique <- liftIO newUnique
+    pure (base <> show (hashUnique unique))
 
-compileCaseTree :: (Compile es) => PatternMatching.CaseTree (Expr Typed) -> Eff es ()
-compileCaseTree = \case
-    Leaf goal -> compileExpr goal
-
-compileDeclarationSyntax :: (Compile es) => DeclarationSyntax Typed -> Eff es ()
+compileDeclarationSyntax :: (Compile es) => DeclarationSyntax Typed -> Eff es (Seq JS.Statement)
 compileDeclarationSyntax = \case
-    DefineFunction
-        { name
-        , typeSignature = _
-        , declaredTypeParameters = _
-        , parameters
-        , body
-        } -> do
-            tell ("const " <> compileGlobalName name <> " = " <> "(")
+    DefineFunction{name, typeSignature = _, declaredTypeParameters = _, parameters, body} -> do
+        parameterVariables <- for parameters \_ -> freshVar "x"
 
-            for_ parameters \parameter -> do
-                tell undefined
-                tell ", "
-            tell ") => "
-            compileExpr body
+        body <- compileSequentialPatterns (Seq.zip parameterVariables parameters) body
+
+        pure [JS.Function (JS.compileGlobalName name) parameterVariables body]
     DefineVariantType
-        { name = _
-        , typeParameters = _
+        { typeParameters = _
         , constructors
+        , name = _
         } -> do
-            for_ constructors \(_loc, constructorName, arguments) -> case arguments of
-                [] -> tell $ "const " <> compileGlobalName constructorName <> " = " <> "({ tag: \"" <> compileGlobalName constructorName <> "\" })\n"
-                _ -> do
-                    let parameters = ["x" <> show i | i <- [1 .. length arguments]]
+            for constructors \(_, dataConstructorName, parameters) -> do
+                case parameters of
+                    [] ->
+                        pure
+                            ( JS.Const
+                                (JS.compileGlobalName dataConstructorName)
+                                (JS.ObjectLiteral [("tag", JS.StringLiteral (JS.compileGlobalName dataConstructorName))])
+                            )
+                    _ -> do
+                        parameterVariables <- for parameters \_ -> freshVar "x"
+                        pure
+                            ( JS.Function
+                                (JS.compileGlobalName dataConstructorName)
+                                parameterVariables
+                                [ JS.Return
+                                    ( JS.ObjectLiteral
+                                        [ ("tag", JS.StringLiteral (JS.compileGlobalName dataConstructorName))
+                                        , ("payload", JS.ArrayLiteral (fmap JS.Var parameterVariables))
+                                        ]
+                                    )
+                                ]
+                            )
 
-                    tell $ "const " <> compileGlobalName constructorName <> " = ("
-                    tell $ intercalate ", " parameters
-                    tell $ ") => ({ tag: \"" <> compileGlobalName constructorName <> "\", payload: ["
-                    tell $ intercalate ", " parameters
-                    tell $ "] })\n"
-
-compileExpr :: (Compile es) => Expr Typed -> Eff es ()
+compileExpr :: (Compile es) => Expr Typed -> Eff es JS.Expr
 compileExpr = \case
-    Var _loc name -> tell (compileName name)
-    DataConstructor _loc name -> tell (compileName name)
-    Application
-        { functionExpr
-        , arguments
-        } -> do
-            tell "("
-            compileExpr functionExpr
-            tell ")("
-            for_ arguments compileExpr
-            tell ")"
-    PartialApplication
-        { functionExpr
-        , partialArguments
-        } -> undefined
-    VisibleTypeApplication
-        { loc
-        , varName
-        , typeArguments = _
-        } -> compileExpr (Var loc varName)
-    Lambda _loc _typeParameters parameters body -> do
-        let compileParameter = \case
-                VarPattern _loc name -> compileLocalName name
-                TypePattern _ inner _ -> compileParameter inner
-                _ -> undefined
-        tell "(("
-        for_ parameters \parameter -> do
-            tell (compileParameter parameter)
-            tell ","
-        tell ") => "
-        compileExpr body
-        tell ")"
-    -- TODO: this uses haskell's escaping rules which might not line up 100% with JS
-    StringLiteral _loc literal -> tell (show literal)
-    IntLiteral _loc literal -> tell (show literal)
-    -- TODO: this is probably not quite correct for many numbers
-    DoubleLiteral _loc literal -> tell (show literal)
-    TupleLiteral _loc elements -> do
-        tell "["
-        for_ elements \expr -> do
-            compileExpr expr
-            tell ", "
-        tell "]"
-    BinaryOperator _loc left op right -> undefined
-    If
-        { condition
-        , thenBranch
-        , elseBranch
-        } -> undefined
-    SequenceBlock
-        { statements
-        } -> do
-            tell "((() => "
-            compileStatements statements
-            tell ")())"
-    Match
-        { scrutinee
-        , cases
-        } -> do
-            tell "((() => "
-            tell "const scrutinee = "
-            compileExpr scrutinee
-            tell ";"
-            for_ cases \MkMatchCase{pattern_, body} -> do
-                undefined
-            tell ")())"
+    Var _ varName -> pure $ JS.Var (JS.compileName varName)
+    DataConstructor _ name -> pure $ JS.Var (JS.compileName name)
+    Application _ funExpr argExprs -> do
+        jsFunExpr <- compileExpr funExpr
+        jsArgExprs <- for argExprs compileExpr
+        pure (JS.Application jsFunExpr jsArgExprs)
+    PartialApplication{} -> undefined
+    VisibleTypeApplication{varName} -> pure $ JS.Var (JS.compileName varName)
+    Lambda{parameters, body} -> do
+        parameterVariables <- for parameters \_ -> freshVar "x"
+        body <- compileSequentialPatterns (Seq.zip parameterVariables parameters) body
 
-compileStatements :: (Compile es) => Seq (Statement Typed) -> Eff es ()
-compileStatements Empty = tell "return []"
-compileStatements (statements :|> Run _loc lastExpression) = do
-    for_ statements \statement -> do
-        compileStatement statement
-        tell "; "
-    tell "return "
-    compileExpr lastExpression
-compileStatements statements = do
-    for_ statements \statement -> do
-        compileStatement statement
-        tell "; "
-    tell "return []"
+        pure (JS.Lambda parameterVariables body)
+    StringLiteral _ literal -> pure $ JS.StringLiteral literal
+    IntLiteral _ literal -> pure $ JS.IntLiteral literal
+    DoubleLiteral _ rational -> pure $ JS.DoubleLiteral rational
+    TupleLiteral _ elements -> do
+        jsElements <- for elements compileExpr
+        pure $ JS.ArrayLiteral jsElements
+    BinaryOperator{} -> undefined
+    If{condition, thenBranch, elseBranch} -> do
+        jsCondition <- compileExpr condition
+        jsThen <- compileExpr thenBranch
+        jsElse <- compileExpr elseBranch
+        pure $ JS.IIFE [JS.If jsCondition [JS.Return jsThen] [JS.Return jsElse]]
+    SequenceBlock _ statements -> do
+        jsStatements <- compileStatements statements
+        pure $ JS.IIFE jsStatements
+    Match{scrutinee, cases} -> do
+        jsScrutineeExpr <- compileExpr scrutinee
+        scrutineeName <- freshVar "s"
+        jsStatements <- compilePatternMatch scrutineeName cases
+        pure $ JS.IIFE ([JS.Const scrutineeName jsScrutineeExpr] <> jsStatements)
 
-compileStatement :: (Compile es) => Statement Typed -> Eff es ()
-compileStatement = \case
+compileStatements :: (Compile es) => Seq (Statement Typed) -> Eff es (Seq JS.Statement)
+compileStatements Empty = pure []
+compileStatements [Run _loc expr] = do
+    jsExpr <- compileExpr expr
+    pure [JS.Return jsExpr]
+compileStatements (statement :<| rest) = case statement of
     Run _ expr -> do
-        tell "const _ = "
-        compileExpr expr
-    Let _ pattern_ body -> do
-        tell $ "const " <> compilePattern pattern_ <> " = "
-        compileExpr body
-    LetFunction{} -> undefined
+        jsExpr <- compileExpr expr
+        rest <- compileStatements rest
+        pure $ [JS.Const "_" jsExpr] <> rest
+    Let _ pattern_ expr -> do
+        jsExpr <- compileExpr expr
+        varName <- freshVar "x"
+
+        let caseTree = PatternMatching.compileMatch ((pattern_, ()) :<|| [])
+        rest <- compileStatements rest
+        matchStatements <- compileCaseTree (\_ -> pure rest) varName caseTree
+
+        pure $ ([JS.Const varName jsExpr] <> matchStatements)
+    LetFunction{name, typeSignature = _, parameters, body} -> do
+        parameterVariables <- for parameters \_ -> freshVar "x"
+
+        body <- compileSequentialPatterns (Seq.zip parameterVariables parameters) body
+
+        pure [JS.Function (JS.compileLocalName name) parameterVariables body]
     Use{} -> undefined
 
-{- | Assemble all the alrady compiled JS declarations into a single JS file.
-This assumes that
-   - the passed entry point exists and is valid (has the right type, accessibility, etc.)
-   - all other declarations have already been compiled to JS
--}
-assembleFromEntryPoint :: (HasCallStack, GraphPersistence :> es, Trace :> es) => GlobalName -> Eff es TextBuilder.Builder
-assembleFromEntryPoint entryPoint = fmap snd $ runWriter $ evalState @(HashSet DeclarationName) mempty do
-    entryPointDeclaration <-
-        GraphPersistence.getDefiningDeclaration entryPoint >>= \case
-            Just declaration -> pure declaration
-            Nothing -> error $ "JavaScript.assembleFromEntryPoint: entry point not found (this should have been caught by the driver): " <> show entryPoint
+compileSequentialPatterns :: (Compile es) => Seq (JS.Name, Pattern Typed) -> Expr Typed -> Eff es (Seq JS.Statement)
+compileSequentialPatterns scrutineesAndPatterns expr = do
+    let caseTree = PatternMatching.serializeSubPatterns (fmap snd scrutineesAndPatterns) expr
 
-    includeDeclarationRecursively entryPointDeclaration
+    compileRecursiveCaseTree compileLeaf (fmap fst scrutineesAndPatterns) caseTree
 
-    tell (compileGlobalName entryPoint <> "()")
+compilePatternMatch :: (Compile es) => JS.Name -> Seq (MatchCase Typed) -> Eff es (Seq JS.Statement)
+compilePatternMatch scrutinee cases = case cases of
+    Empty -> undefined
+    NonEmpty cases -> do
+        let caseTree = PatternMatching.compileMatch (fmap (\MkMatchCase{pattern_, body} -> (pattern_, body)) cases)
+        compileCaseTree compileLeaf scrutinee caseTree
 
-includeDeclarationRecursively ::
-    (GraphPersistence :> es, Trace :> es, Writer TextBuilder.Builder :> es, State (HashSet DeclarationName) :> es) =>
-    DeclarationName ->
-    Eff es ()
-includeDeclarationRecursively name = do
-    processedDeclarations <- get @(HashSet DeclarationName)
-    case HashSet.member name processedDeclarations of
-        True -> do
-            trace AssembleJS ("Skipping already included declaration: " <> show name)
-            pure ()
-        False -> do
-            trace AssembleJS ("Including declaration: " <> show name)
+compileLeaf :: (Compile es) => Expr Typed -> Eff es (Seq JS.Statement)
+compileLeaf expr = do
+    jsExpr <- compileExpr expr
+    pure [JS.Return jsExpr]
 
-            put (HashSet.insert name processedDeclarations)
+compileCaseTree :: (Compile es) => (goal -> Eff es (Seq JS.Statement)) -> JS.Name -> CaseTree goal -> Eff es (Seq JS.Statement)
+compileCaseTree compileGoal scrutinee = \case
+    Leaf goal -> compileGoal goal
+    ConstructorCase{constructors} -> do
+        cases <-
+            fromList <$> for (Map.toList constructors) \(constructor, (parameterCount, continuation)) -> do
+                payloadVariables <- Seq.replicateM parameterCount (freshVar "p")
+                rest <- compileRecursiveCaseTree compileGoal payloadVariables continuation
 
-            code <-
-                GraphPersistence.getCompiledJS name >>= \case
-                    Ok code -> pure code
-                    Missing{} -> error $ "Trying to assemble missing JS code for declaration: " <> show name
+                pure
+                    ( JS.compileName constructor
+                    , [JS.DestructureArray payloadVariables (JS.FieldAccess (JS.Var scrutinee) "payload")]
+                        <> rest
+                    )
+        pure
+            [ JS.SwitchString
+                { scrutinee = JS.FieldAccess (JS.Var scrutinee) "tag"
+                , default_ = Nothing
+                , cases = cases
+                }
+            ]
+    TupleCase size continuation -> do
+        variables <- Seq.replicateM size (freshVar "x")
 
-            tell (TextBuilder.fromLazyText code <> "\n\n")
+        rest <- compileRecursiveCaseTree compileGoal variables continuation
 
-            dependencies <- GraphPersistence.getDependencies name
+        pure $ [JS.DestructureArray variables (JS.Var scrutinee)] <> rest
+    BindVar varName cont -> do
+        rest <- compileCaseTree compileGoal scrutinee cont
+        pure $ [JS.Const (JS.compileLocalName varName) (JS.Var scrutinee)] <> rest
+    OrDefault{} -> undefined
 
-            for_ dependencies \dependency ->
-                includeDeclarationRecursively dependency
+compileRecursiveCaseTree :: (HasCallStack, Compile es) => (goal -> Eff es (Seq JS.Statement)) -> Seq JS.Name -> RecursiveCaseTree goal -> Eff es (Seq JS.Statement)
+compileRecursiveCaseTree compileGoal scrutinees tree = case (scrutinees, tree) of
+    (Empty, Done goal) -> compileGoal goal
+    (scrutinee :<| scrutinees, Continue caseTree) -> do
+        let continue nextCaseTree = compileRecursiveCaseTree compileGoal scrutinees nextCaseTree
 
--- | Render global names into a format suitable for JS names
-compileGlobalName :: GlobalName -> TextBuilder.Builder
-compileGlobalName (MkGlobalName{moduleName, name}) = do
-    -- TODO: do something less naive
-    let escapedModuleName =
-            renderModuleName moduleName
-                & Text.replace "-" "____"
-                & Text.replace "." "___"
-                & Text.replace "/" "__"
-                & Text.replace ":" "$"
-    TextBuilder.fromText escapedModuleName <> "$" <> TextBuilder.fromText name
-
-compileLocalName :: LocalName -> TextBuilder.Builder
-compileLocalName (MkLocalName{parent = _, name, count}) =
-    case count of
-        0 -> TextBuilder.fromText name
-        _ -> TextBuilder.fromText name <> "$$" <> show count
-
-compileName :: Name -> TextBuilder.Builder
-compileName = \case
-    Local localName -> compileLocalName localName
-    Global globalName -> compileGlobalName globalName
-
-intercalate :: (Foldable f) => TextBuilder.Builder -> f TextBuilder.Builder -> TextBuilder.Builder
-intercalate separator elements = go (toList elements)
-  where
-    go = \case
-        [] -> ""
-        [x] -> x
-        (x : xs) -> x <> separator <> go xs
+        compileCaseTree continue scrutinee caseTree
+    (_ :<| _, Done _) -> do
+        panic $ "Recursive case tree finished compilation early. Remaining scrutinees: " <> show scrutinees
+    (Empty, Continue caseTree) -> do
+        panic $ "Recursive case tree returned continue after all scrutinees were exhausted. Next case tree: " <> showHeadConstructor caseTree

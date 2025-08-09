@@ -38,6 +38,7 @@ dependencies:
 - witherable
 - text
 - uuid
+- text-builder
 
 ghc-options:
 - -Wall

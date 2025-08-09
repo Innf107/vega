@@ -28,6 +28,7 @@ library
       Vega.BuildConfig
       Vega.Builtins
       Vega.Compilation.JavaScript
+      Vega.Compilation.JavaScript.Assemble
       Vega.Compilation.JavaScript.Language
       Vega.Compilation.LIR
       Vega.Compilation.MIR
@@ -96,6 +97,7 @@ library
     , prettyprinter
     , relude
     , text
+    , text-builder
     , time
     , unordered-containers
     , uuid
@@ -145,6 +147,7 @@ executable vega
     , prettyprinter
     , relude
     , text
+    , text-builder
     , time
     , unordered-containers
     , uuid
@@ -196,6 +199,7 @@ test-suite vega-test
     , prettyprinter
     , relude
     , text
+    , text-builder
     , time
     , unordered-containers
     , uuid

@@ -39,8 +39,8 @@ data GraphPersistence :: Effect where
     SetRenamed :: Declaration Renamed -> GraphPersistence m ()
     GetTyped :: DeclarationName -> GraphPersistence m (GraphData TypeErrorSet (Declaration Typed))
     SetTyped :: Declaration Typed -> GraphPersistence m ()
-    GetCompiledJS :: DeclarationName -> GraphPersistence m (GraphData Void LText)
-    SetCompiledJS :: DeclarationName -> LText -> GraphPersistence m ()
+    GetCompiledJS :: DeclarationName -> GraphPersistence m (GraphData Void Text)
+    SetCompiledJS :: DeclarationName -> Text -> GraphPersistence m ()
     -- Invalidation
     RemoveDeclaration :: DeclarationName -> GraphPersistence m ()
     Invalidate :: DeclarationName -> GraphPersistence m ()

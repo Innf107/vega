@@ -18,7 +18,8 @@ import Effectful.Reader.Static
 import System.FilePath (takeExtension, (</>))
 
 import Data.Sequence (Seq (..))
-import Data.Text.Lazy.Builder qualified as TextBuilder
+import TextBuilder qualified
+import TextBuilder (TextBuilder)
 import Data.Traversable (for)
 import Effectful.Concurrent (Concurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwError_)
@@ -43,6 +44,7 @@ import Vega.Seq.NonEmpty (NonEmpty (..))
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
+import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
 
 data CompilationResult
     = CompilationSuccessful
@@ -219,10 +221,10 @@ compileBackend = do
 
     case BuildConfig.backend config of
         BuildConfig.JavaScript -> do
-            jsCode <- JavaScript.assembleFromEntryPoint entryPoint
+            jsCode <- assembleFromEntryPoint entryPoint
 
             -- TODO: make this configurable and make the path absolute
-            writeFileLBS (toString $ config.contents.name <> ".js") (encodeUtf8 (TextBuilder.toLazyText jsCode))
+            writeFileLBS (toString $ config.contents.name <> ".js") (encodeUtf8 (TextBuilder.toText jsCode))
         _ -> undefined
 
 execute :: FilePath -> Text -> Eff es ()
@@ -283,7 +285,7 @@ compileToJS :: (Driver es) => DeclarationName -> Eff es ()
 compileToJS name =
     GraphPersistence.getTyped name >>= \case
         -- TODOOOO
-        Missing{} -> pure () -- error $ "missing typed in compilation to JS: " <> show name
+        Missing{} -> error $ "missing typed in compilation to JS: " <> show name
         Failed{} -> pure () -- If the previous stage errored, we won't try to compile it
         Ok typedDeclaration -> do
             compiled <- JavaScript.compileDeclaration typedDeclaration

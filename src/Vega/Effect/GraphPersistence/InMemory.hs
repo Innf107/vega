@@ -66,7 +66,7 @@ data DeclarationData = MkDeclarationData
     { parsed :: IORef (Declaration Parsed)
     , renamed :: IORef (GraphData RenameErrorSet (Declaration Renamed))
     , typed :: IORef (GraphData TypeErrorSet (Declaration Typed))
-    , compiledJS :: IORef (GraphData Void LText)
+    , compiledJS :: IORef (GraphData Void Text)
     , --
       dependencies :: IORef (HashSet DeclarationName)
     , dependents :: IORef (HashSet DeclarationName)
@@ -210,12 +210,12 @@ setTyped declaration = do
     data_ <- declarationData declaration.name
     writeIORef data_.typed (Ok declaration)
 
-getCompiledJS :: (InMemory es) => DeclarationName -> Eff es (GraphData Void LText)
+getCompiledJS :: (InMemory es) => DeclarationName -> Eff es (GraphData Void Text)
 getCompiledJS name = do
     data_ <- declarationData name
     readIORef data_.compiledJS
 
-setCompiledJS :: (InMemory es) => DeclarationName -> LText -> Eff es ()
+setCompiledJS :: (InMemory es) => DeclarationName -> Text -> Eff es ()
 setCompiledJS name js = do
     data_ <- declarationData name
     writeIORef data_.compiledJS (Ok js)
