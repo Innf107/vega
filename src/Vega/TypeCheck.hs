@@ -141,9 +141,7 @@ getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobal VarKi
             GraphPersistence.cacheGlobalType name type_
             pure type_
         RenamingFailed -> do
-            -- TODO: use freshTypeMeta probably
-            kind <- MetaVar <$> freshMeta "k" Kind
-            dummyMeta <- MetaVar <$> freshMeta "err" kind
+            dummyMeta <- MetaVar <$> freshTypeMeta "err"
             pure dummyMeta
 
 globalConstructorKind :: (TypeCheck es) => GlobalName -> Eff es Kind
