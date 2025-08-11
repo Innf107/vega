@@ -1,12 +1,6 @@
-/home/prophet/Code/vega-graph/test/run/./Main.vega:4:3: ERROR:
+$FILE:4:3: ERROR:
 Constructor pattern binds 1 parameter but its type expects it to bind 0
     The parameters are supposed to have types ()
   ┃ 
 4 ┃ f(A(_)) = ();
   ┃   ▔▔▔▔
-/home/prophet/Code/vega-graph/test/run/./Main.vega:4:5: ERROR:
-Unable to monomorphize ambiguous type ?r
-    Try adding a type signature
-  ┃ 
-4 ┃ f(A(_)) = ();
-  ┃     ▔

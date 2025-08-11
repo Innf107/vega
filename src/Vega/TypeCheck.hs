@@ -297,8 +297,8 @@ checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <>
             elementTypes <-
                 followMetas expectedType >>= \case
                     Tuple elementTypes -> pure elementTypes
-                    _ -> for elementPatterns \element -> do
-                        MetaVar <$> freshTypeMeta (getLoc element) env "e"
+                    _ -> for elementPatterns \_ -> do
+                        MetaVar <$> freshTypeMeta "e"
             when (length elementPatterns /= length elementTypes) do
                 typeError
                     ( TuplePatternOfIncorrectNumberOfArgs
@@ -316,10 +316,10 @@ checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <>
 inferPattern :: (TypeCheck es) => Env -> Pattern Renamed -> Eff es (Pattern Typed, Type, Env -> Env)
 inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadConstructor pattern_) $ case pattern_ of
     WildcardPattern loc -> do
-        type_ <- MetaVar <$> freshTypeMeta loc env "w"
+        type_ <- MetaVar <$> freshTypeMeta "w"
         pure (WildcardPattern loc, type_, id)
     VarPattern loc varName -> do
-        type_ <- MetaVar <$> freshTypeMeta loc env (varName.name)
+        type_ <- MetaVar <$> freshTypeMeta (varName.name)
         pure (VarPattern loc varName, type_, bindVarType varName type_)
     AsPattern loc innerPattern name -> do
         (innerPattern, innerType, innerTrans) <- inferPattern env innerPattern
@@ -435,7 +435,7 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
                     Tuple elementTypes -> pure elementTypes
                     _ -> do
                         elementTypes <- for elements \_ -> do
-                            MetaVar <$> freshTypeMeta loc env "t"
+                            MetaVar <$> freshTypeMeta "t"
                         subsumes loc env (Tuple elementTypes) expectedType
                         pure elementTypes
             when (length elementTypes /= length elements) do
@@ -555,7 +555,7 @@ infer env ambientEffect expr = do
             pure (Tuple elementTypes, TupleLiteral loc elements)
         Match{loc, scrutinee, cases} -> do
             (scrutineeType, scrutinee) <- infer env ambientEffect scrutinee
-            resultType <- MetaVar <$> freshTypeMeta loc env "a"
+            resultType <- MetaVar <$> freshTypeMeta "a"
 
             cases <- for cases \MkMatchCase{loc, pattern_, body} -> do
                 (pattern_, envTrans) <- checkPattern env scrutineeType pattern_
@@ -609,10 +609,10 @@ fresh meta variables.
 This is useful in cases where we know that the number of parameters is too large
 (e.g. in a lambda or function definition) but we don't want to throw a fatal type error
 -}
-padWithMetas :: (TypeCheck es) => Loc -> Env -> Int -> Seq Type -> Eff es (Seq Type)
-padWithMetas loc env expectedLength types
+padWithMetas :: (TypeCheck es) => Int -> Seq Type -> Eff es (Seq Type)
+padWithMetas expectedLength types
     | expectedLength > length types = do
-        metas <- Seq.replicateM (expectedLength - length types) (MetaVar <$> freshTypeMeta loc env "e")
+        metas <- Seq.replicateM (expectedLength - length types) (MetaVar <$> freshTypeMeta "e")
         pure (types <> metas)
     | otherwise = pure types
 
@@ -831,12 +831,12 @@ splitFunctionType loc env expectedParameterCount type_ = do
         Function parameters effect result
             | length parameters == expectedParameterCount -> pure (parameters, effect, result, Nothing)
             | otherwise -> do
-                parameters <- padWithMetas loc env expectedParameterCount parameters
+                parameters <- padWithMetas expectedParameterCount parameters
                 pure (parameters, effect, result, Just parameters)
         type_ -> do
-            parameters <- Seq.replicateM expectedParameterCount (MetaVar <$> freshTypeMeta loc env "a")
-            effect <- MetaVar <$> freshTypeMeta loc env "e"
-            result <- MetaVar <$> freshTypeMeta loc env "b"
+            parameters <- Seq.replicateM expectedParameterCount (MetaVar <$> freshTypeMeta "a")
+            effect <- MetaVar <$> freshTypeMeta "e"
+            result <- MetaVar <$> freshTypeMeta "b"
             subsumes loc env type_ (Function parameters effect result)
             pure (parameters, effect, result, Nothing)
 
@@ -1147,11 +1147,9 @@ freshMeta name kind = do
     pure $ MkMetaVar{underlying, identity, name, kind}
 
 -- | Creates a fresh meta variable of kind (Type ?r) where ?r is another fresh meta variable
-freshTypeMeta :: (TypeCheck es) => Loc -> Env -> Text -> Eff es MetaVar
-freshTypeMeta loc env name = do
+freshTypeMeta :: (TypeCheck es) => Text -> Eff es MetaVar
+freshTypeMeta name = do
     rep <- MetaVar <$> freshMeta "r" Rep
-    -- TODO: I'm not sure if we actually need this?
-    monomorphized loc env rep
     freshMeta name (Type rep)
 
 freshSkolem :: (TypeCheck es) => LocalName -> Monomorphization -> Kind -> Eff es Skolem
