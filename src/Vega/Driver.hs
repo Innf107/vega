@@ -45,6 +45,7 @@ import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
 import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
+import Vega.Pretty (pretty, keyword)
 
 data CompilationResult
     = CompilationSuccessful
@@ -164,9 +165,9 @@ trackSourceChanges = do
 
     whenTraceEnabled Driver do
         for_ diffChanges \case
-            Diff.Added decl -> trace Driver ("Declaration added: " <> show decl.name)
-            Diff.Removed decl -> trace Driver ("Declaration removed: " <> show decl.name)
-            Diff.Changed decl -> trace Driver ("Declaration changed: " <> show decl.name)
+            Diff.Added decl -> trace Driver ("Declaration added: " <> pretty decl.name)
+            Diff.Removed declName -> trace Driver ("Declaration removed: " <> pretty declName)
+            Diff.Changed decl -> trace Driver ("Declaration changed: " <> pretty decl.name)
 
     for_ diffChanges applyDiffChange
 
@@ -178,7 +179,7 @@ performAllRemainingWork = do
 
     remainingWorkItems <- GraphPersistence.getRemainingWork (BuildConfig.backend config)
     for_ remainingWorkItems \workItem -> do
-        trace WorkItems ("Processing work item: " <> show workItem)
+        trace WorkItems ("Processing work item: " <> pretty workItem)
         case workItem of
             GraphPersistence.Rename name -> do
                 rename name

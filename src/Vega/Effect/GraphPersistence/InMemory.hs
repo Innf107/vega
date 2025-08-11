@@ -56,9 +56,9 @@ import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Effectful.Concurrent.Async (forConcurrently, runConcurrent)
 import Vega.BuildConfig (Backend (JavaScript))
+import Vega.Effect.Trace (Category (SCC), Trace, trace)
+import Vega.Pretty (Pretty (pretty))
 import Vega.SCC (SCCId, computeSCC)
-import Vega.Effect.Trace (Trace, trace, Category (SCC))
-import Vega.Pretty (Pretty(pretty))
 
 -- TODO: this currently isn't thread safe
 
@@ -349,26 +349,22 @@ getSCC declarationName = do
                 Nothing -> error $ "SCC map for declaration " <> show declarationName <> " is missing its own binding.\nSCCs: " <> show sccs
                 Just scc -> pure scc
 
-getGlobalType :: (HasCallStack, InMemory es) => GlobalName -> Eff es (Either Type (TypeSyntax Renamed))
+getGlobalType :: (HasCallStack, InMemory es) => GlobalName -> Eff es CachedType
 getGlobalType name = do
     cachedTypes <- ask @CachedTypes
 
     liftIO (HashTable.lookup cachedTypes name) >>= \case
-        Just type_ -> pure (Left type_)
+        Just type_ -> pure (CachedType type_)
         Nothing -> do
             declarationName <-
                 getDefiningDeclaration name >>= \case
                     Just declarationName -> pure declarationName
                     Nothing -> error $ "trying to access undefined declaration of global " <> show name
             data_ <- declarationData declarationName
-            renamed <-
-                readIORef data_.renamed >>= \case
-                    Missing{} -> error $ "trying to access type of a global that has not been renamed: " <> show name
-                    -- TODO: this might not actually be impossible?
-                    Failed{} -> error $ "trying to access type of a global where renaming failed"
-                    Ok renamed -> pure renamed
-
-            pure (Right (typeOfGlobal name renamed.syntax))
+            readIORef data_.renamed >>= \case
+                Missing{} -> error $ "trying to access type of a global that has not been renamed: " <> show name
+                Failed{} -> pure RenamingFailed
+                Ok renamed -> pure (CachedTypeSyntax (typeOfGlobal name renamed.syntax))
 
 cacheGlobalType :: (InMemory es) => GlobalName -> Type -> Eff es ()
 cacheGlobalType name type_ = do

@@ -1,0 +1,8 @@
+$FILE:4:5: ERROR:
+Ambiguous type constructor Bool
+  The following definitions are in scope:
+    - builtin-ambiguity:Main:Bool
+    - internal:Internal:Bool
+  ┃ 
+4 ┃ f : Bool -> ();
+  ┃     ▔▔▔▔

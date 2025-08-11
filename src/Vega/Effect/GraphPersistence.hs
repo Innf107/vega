@@ -11,6 +11,7 @@ import Effectful.TH (makeEffect)
 
 import Vega.BuildConfig (Backend)
 import Vega.Error (CompilationError, RenameErrorSet, TypeErrorSet)
+import Vega.Pretty (Pretty, pretty, keyword, (<+>))
 import Vega.SCC (SCCId)
 
 data GraphData error a
@@ -23,6 +24,15 @@ data WorkItem
     | TypeCheck DeclarationName
     | CompileToJS DeclarationName
     deriving (Show)
+instance Pretty WorkItem where
+    pretty (Rename name) = keyword "rename" <+> pretty name
+    pretty (TypeCheck name) = keyword "type-check" <+> pretty name
+    pretty (CompileToJS name) = keyword "compile-to-js" <+> pretty name
+
+data CachedType
+    = RenamingFailed
+    | CachedTypeSyntax (TypeSyntax Renamed)
+    | CachedType Type
 
 data GraphPersistence :: Effect where
     -- Module Data
@@ -54,7 +64,7 @@ data GraphPersistence :: Effect where
     ------------------------------ | dependency
     GetSCC :: DeclarationName -> GraphPersistence m SCCId
     -- Specific accesses
-    GetGlobalType :: GlobalName -> GraphPersistence m (Either Type (TypeSyntax Renamed))
+    GetGlobalType :: GlobalName -> GraphPersistence m CachedType
     CacheGlobalType :: GlobalName -> Type -> GraphPersistence m ()
     GetCachedGlobalKind :: GlobalName -> GraphPersistence m (GraphData TypeErrorSet Kind)
     CacheGlobalKind :: GlobalName -> Kind -> GraphPersistence m ()

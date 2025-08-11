@@ -9,7 +9,7 @@ import Relude.Extra
 import Vega.Error (TypeError (..), TypeErrorSet (MkTypeErrorSet))
 import Vega.Util (compose, for2, mapAccumLM, unzip3Seq, zipWithSeqM)
 
-import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
+import Vega.Effect.GraphPersistence (CachedType (..), GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 
 import Data.Sequence (Seq (..))
@@ -29,6 +29,7 @@ import Vega.Seq.NonEmpty (toSeq)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.TypeCheck.Zonk (zonk)
 import Vega.Util qualified as Util
+import Vega.Panic (panic)
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -132,13 +133,18 @@ fatalTypeError error = do
 getGlobalType :: (TypeCheck es) => GlobalName -> Eff es Type
 getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobal VarKind name) do
     GraphPersistence.getGlobalType name >>= \case
-        Left cachedType -> do
+        CachedType cachedType -> do
             trace TypeCheck $ "cached ~> " <> pretty cachedType
             pure cachedType
-        Right syntax -> do
+        CachedTypeSyntax syntax -> do
             (_rep, type_, _) <- inferTypeRep emptyEnv syntax
             GraphPersistence.cacheGlobalType name type_
             pure type_
+        RenamingFailed -> do
+            -- TODO: use freshTypeMeta probably
+            kind <- MetaVar <$> freshMeta "k" Kind
+            dummyMeta <- MetaVar <$> freshMeta "err" kind
+            pure dummyMeta
 
 globalConstructorKind :: (TypeCheck es) => GlobalName -> Eff es Kind
 globalConstructorKind name = do
@@ -1111,7 +1117,7 @@ occursAndAdjust loc env meta type_ = do
             PrimitiveRep{} -> pure ()
             Kind -> pure ()
 
-subsumesEffect :: (TypeCheck es) => Effect -> Effect -> Eff es ()
+subsumesEffect :: (HasCallStack, TypeCheck es) => Effect -> Effect -> Eff es ()
 subsumesEffect eff1 eff2 = do
     eff1 <- followMetas eff1
     eff2 <- followMetas eff2
