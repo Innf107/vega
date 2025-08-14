@@ -2,7 +2,6 @@ module Vega.Compilation.MIR where
 
 import Data.Unique (Unique)
 import Relude
-import Vega.Compilation.Shape (Shape)
 
 newtype Local = Local Unique
 
@@ -11,7 +10,7 @@ data Program = MkProgram
     }
 
 data ParameterShape
-    = Fixed Shape
+    = Fixed
     | Polymorphic
 
 data FunctionDefinition = FunctionDefinition
