@@ -2,7 +2,7 @@ module Vega.Rename (rename) where
 
 -- TODO: check imports (?)
 
-import Relude hiding (Reader, ask, runReader)
+import Relude hiding (Reader, State, ask, evalState, get, put, runReader)
 import Relude.Extra
 
 import Vega.Syntax
@@ -14,6 +14,7 @@ import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Effectful (Eff, (:>))
 import Effectful.Reader.Static (Reader, ask, runReader)
+import Effectful.State.Static.Local
 import GHC.List (List)
 import Vega.Builtins (builtinGlobals, defaultImportScope)
 import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getDefiningDeclaration, getModuleImportScope)
@@ -28,7 +29,9 @@ type Rename es =
     , Reader DeclarationName :> es
     , Output DeclarationName :> es
     , Output RenameError :> es
+    , State LocalNameCounts :> es
     )
+type LocalNameCounts = HashMap Text Int
 
 registerDependency :: (Rename es) => DeclarationName -> Eff es ()
 registerDependency dependency = do
@@ -58,16 +61,25 @@ emptyEnv =
 bindLocalVar :: (Rename es) => Text -> Eff es (LocalName, Env -> Env)
 bindLocalVar text = do
     parent <- ask @DeclarationName
-    let count = 0
+    count <- indexForNewLocal text
     let localName = MkLocalName{parent, name = text, count}
     pure (localName, \env -> env{localVariables = insert text localName env.localVariables})
 
 bindTypeVariable :: (Rename es) => Text -> Eff es (LocalName, Env -> Env)
 bindTypeVariable text = do
     parent <- ask @DeclarationName
-    let count = 0 -- TODO
+    count <- indexForNewLocal text
     let localName = MkLocalName{parent, name = text, count}
     pure (localName, \env -> env{localTypeVariables = insert text localName env.localTypeVariables})
+
+indexForNewLocal :: (Rename es) => Text -> Eff es Int
+indexForNewLocal text = do
+    countsSoFar <- get @LocalNameCounts
+    let index = case lookup text countsSoFar of
+            Nothing -> 0
+            Just count -> count
+    put (insert text (index + 1) countsSoFar)
+    pure index
 
 data GlobalVariableOccurance
     = Found GlobalName
@@ -142,7 +154,11 @@ isInScope name scope = do
 
 rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, RenameErrorSet, List DeclarationName)
 rename (MkDeclaration loc name syntax) = runReader name do
-    ((syntax, errors), dependencies) <- runOutputList $ runOutputSeq @RenameError $ renameDeclarationSyntax syntax
+    ((syntax, errors), dependencies) <-
+        runOutputList $
+            runOutputSeq @RenameError $
+                evalState @LocalNameCounts mempty $
+                    renameDeclarationSyntax syntax
     pure (MkDeclaration loc name syntax, (MkRenameErrorSet errors), dependencies)
 
 findVarName :: (Rename es) => Env -> Loc -> Text -> Eff es Name

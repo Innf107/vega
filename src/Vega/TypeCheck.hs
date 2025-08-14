@@ -1,3 +1,5 @@
+{-# LANGUAGE MagicHash #-}
+
 module Vega.TypeCheck (checkDeclaration) where
 
 import Vega.Syntax
@@ -18,18 +20,19 @@ import Data.Traversable (for)
 import Data.Unique (newUnique)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
 import Effectful.State.Static.Local (evalState, get, put, runState)
+import GHC.Exts (isTrue#, reallyUnsafePtrEquality)
 import GHC.List (List)
 import Vega.Builtins qualified as Builtins
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
+import Vega.Panic (panic)
 import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>))
 import Vega.Seq.NonEmpty (toSeq)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.TypeCheck.Zonk (zonk)
 import Vega.Util qualified as Util
-import Vega.Panic (panic)
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -153,18 +156,16 @@ globalConstructorKind name = do
         else do
             GraphPersistence.getCachedGlobalKind name >>= \case
                 Ok cachedKind -> pure cachedKind
-                Failed{} -> undefined
+                Failed{} -> dummyMetaOfUnknownKind
                 Missing{} -> do
                     declarationName <-
                         GraphPersistence.getDefiningDeclaration name >>= \case
-                            Nothing -> error "trying to find kind of non-internal definition without declaration"
+                            Nothing -> panic "trying to find kind of non-internal definition without declaration"
                             Just declarationName -> pure declarationName
-                    declaration <-
-                        GraphPersistence.getRenamed declarationName >>= \case
-                            Ok renamed -> pure renamed
-                            Failed{} -> undefined
-                            Missing{} -> undefined
-                    computeAndCacheKind declaration
+                    GraphPersistence.getRenamed declarationName >>= \case
+                        Failed{} -> dummyMetaOfUnknownKind
+                        Missing{} -> panic $ "missing renamed for declaration" <+> pretty declarationName <+> "in type checker"
+                        Ok renamed -> computeAndCacheKind renamed
 
 -- TODO: check that data constructors don't contain other data constructors from the same SCC
 -- as arguments to type constructors where their representation ends up in the resulting representation
@@ -289,7 +290,10 @@ checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <>
             (innerPattern, innerTrans) <- checkPattern env innerType innerPattern
             subsumes loc env innerType expectedType
             pure (TypePattern loc innerPattern innerTypeSyntax, innerTrans)
-        OrPattern{} -> undefined
+        OrPattern loc subPatterns -> do
+            (subPatterns, envTransformers) <- NonEmpty.unzip <$> for subPatterns \subPattern -> do
+                checkPattern env expectedType subPattern
+            pure (OrPattern loc subPatterns, Util.compose envTransformers)
         WildcardPattern loc -> pure (WildcardPattern loc, id)
         TuplePattern loc elementPatterns -> do
             elementTypes <-
@@ -896,7 +900,7 @@ instantiateToMetaStrategy loc env MkForallBinder{varName, visibility = _, kind, 
     pure (InstantiateWith meta)
 
 skolemizeStrategy :: (TypeCheck es) => Loc -> Env -> ForallBinder -> Eff es InstantiationResult
-skolemizeStrategy loc env MkForallBinder{varName, visibility = _, kind, monomorphization} = do
+skolemizeStrategy _loc _env MkForallBinder{varName, visibility = _, kind, monomorphization} = do
     skolem <- Skolem <$> freshSkolem varName monomorphization kind
     pure (InstantiateWith skolem)
 
@@ -993,6 +997,7 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
         type1 <- followMetas type1
         type2 <- followMetas type2
         case (type1, type2) of
+            (!type1, !type2) | isTrue# (reallyUnsafePtrEquality type1 type2) -> pure ()
             (MetaVar meta1, _) -> bindMeta loc env meta1 type2
             (_, MetaVar meta2) -> bindMeta loc env meta2 type1
             _ ->
@@ -1009,7 +1014,10 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
                                 pure ()
                         _ -> unificationFailure
                     TypeVar name -> error $ "unsubstituted type variable in unification: " <> show name
-                    Forall binders1 body1 -> undefined
+                    Forall binders1 body1 -> case type2 of
+                        Forall binders2 body -> do
+                            undefined
+                        _ -> unificationFailure
                     Function parameters1 effect1 result1 -> case type2 of
                         Function parameters2 effect2 result2
                             | length parameters1 == length parameters2 -> do
@@ -1071,7 +1079,7 @@ bindMeta loc env meta boundType =
                 boundType -> do
                     -- TODO: include some sort of note to make it clear where the kind came from
                     checkEvaluatedType loc env meta.kind boundType
-                    occursAndAdjust loc env meta boundType >>= \case
+                    occursAndAdjust meta boundType >>= \case
                         True -> do
                             -- This will make more sense once we have more context to the unification
                             -- TODO: until then, the order doesn't really make sense here
@@ -1079,8 +1087,8 @@ bindMeta loc env meta boundType =
                         False -> writeIORef meta.underlying (Just boundType)
         _ -> error $ "Trying to bind unbound meta variable"
 
-occursAndAdjust :: (TypeCheck es) => Loc -> Env -> MetaVar -> Type -> Eff es Bool
-occursAndAdjust loc env meta type_ = do
+occursAndAdjust :: (TypeCheck es) => MetaVar -> Type -> Eff es Bool
+occursAndAdjust meta type_ = do
     -- TODO: adjust levels
     runErrorNoCallStack (go type_) >>= \case
         Left () -> pure True
@@ -1115,13 +1123,14 @@ occursAndAdjust loc env meta type_ = do
             PrimitiveRep{} -> pure ()
             Kind -> pure ()
 
-subsumesEffect :: (HasCallStack, TypeCheck es) => Effect -> Effect -> Eff es ()
+subsumesEffect :: (TypeCheck es) => Effect -> Effect -> Eff es ()
 subsumesEffect eff1 eff2 = do
     eff1 <- followMetas eff1
     eff2 <- followMetas eff2
     case (eff1, eff2) of
         (Pure, _) -> pure ()
-        _ -> undefined
+        -- stubbed out for now while we figure out what exactly to do
+        _ -> pure ()
 
 union :: (TypeCheck es) => Effect -> Effect -> Eff es Effect
 union Pure eff = pure eff
@@ -1149,6 +1158,12 @@ freshTypeMeta :: (TypeCheck es) => Text -> Eff es MetaVar
 freshTypeMeta name = do
     rep <- MetaVar <$> freshMeta "r" Rep
     freshMeta name (Type rep)
+
+dummyMetaOfUnknownKind :: (TypeCheck es) => Eff es Type
+dummyMetaOfUnknownKind = do
+    metaKind <- MetaVar <$> freshMeta "k" Kind
+    dummyMeta <- MetaVar <$> freshMeta "err" metaKind
+    pure dummyMeta
 
 freshSkolem :: (TypeCheck es) => LocalName -> Monomorphization -> Kind -> Eff es Skolem
 freshSkolem originalName monomorphization kind = do

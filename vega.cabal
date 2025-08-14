@@ -27,14 +27,15 @@ library
   exposed-modules:
       Vega.BuildConfig
       Vega.Builtins
+      Vega.Compilation.Core
       Vega.Compilation.JavaScript
       Vega.Compilation.JavaScript.Assemble
       Vega.Compilation.JavaScript.Language
+      Vega.Compilation.LayoutGeneration
       Vega.Compilation.LIR
       Vega.Compilation.MIR
       Vega.Compilation.MIRToLIR
       Vega.Compilation.PatternMatching
-      Vega.Compilation.Shape
       Vega.Compilation.VegaToMIR
       Vega.Debug
       Vega.Diff

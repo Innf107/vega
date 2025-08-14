@@ -326,10 +326,11 @@ data Type
       Rep
     | Type Kind
     | Effect
-    | SumRep (Seq Type)
+    | Kind
+    | -- Representations
+      SumRep (Seq Type)
     | ProductRep (Seq Type)
     | PrimitiveRep PrimitiveRep
-    | Kind
     deriving (Generic)
 
 data PrimitiveRep

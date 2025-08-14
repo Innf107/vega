@@ -455,7 +455,7 @@ generateParseErrorMessage = \case
                         <> prettyErrorItem actual
                 }
             ]
-    TrivialError _offset Nothing expected -> error $ "trivial parse error without actual tokens"
+    TrivialError _offset Nothing _expected -> error $ "trivial parse error without actual tokens"
     FancyError _offset errors ->
         fromList $ map generateFancyParseErrorMessage (toList errors)
 
