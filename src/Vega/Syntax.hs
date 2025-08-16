@@ -9,7 +9,6 @@ import Vega.Loc (HasLoc, Loc)
 import Data.Sequence (Seq (..))
 import Data.Text qualified as Text
 import Effectful (Eff, IOE, runEff, (:>))
-import Effectful.State.Static.Local (State, evalState, get, put)
 import GHC.Generics (Generically (..))
 import System.IO.Unsafe (unsafePerformIO)
 import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, lparen, meta, rparen, skolem, (<+>))

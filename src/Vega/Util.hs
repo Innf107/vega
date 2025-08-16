@@ -14,8 +14,10 @@ module Vega.Util (
     assert,
     for2,
     partitionWithSeq,
+    frequencies,
 ) where
 
+import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import GHC.Base qualified
 import GHC.Exts (IsList (..))
@@ -108,3 +110,12 @@ partitionWithSeq :: forall a b c. Seq a -> (a -> Either b c) -> (Seq b, Seq c)
 partitionWithSeq seq f = do
     let (list1, list2) = partitionWith f (toList seq)
     (viaList list1, viaList list2)
+
+frequencies :: (Foldable f, Hashable a) => f a -> HashMap a Int
+frequencies foldable = flip execState mempty do
+    for_ foldable \x -> do
+        let update = \case
+                Nothing -> Just 1
+                Just n -> Just (n + 1)
+        modify' (HashMap.alter update x)
+

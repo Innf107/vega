@@ -16,7 +16,7 @@ import Vega.Syntax
 data RecursiveCaseTree goal
     = Done goal
     | Continue (CaseTree (RecursiveCaseTree goal))
-    deriving (Generic)
+    deriving (Generic, Functor, Foldable)
 
 data CaseTree goal
     = Leaf goal
@@ -28,7 +28,7 @@ data CaseTree goal
     | OrDefault (CaseTree goal) goal
     | TupleCase Int (RecursiveCaseTree goal)
     | BindVar LocalName (CaseTree goal)
-    deriving (Generic)
+    deriving (Generic, Functor, Foldable)
 
 mergeRecursive :: RecursiveCaseTree goal -> RecursiveCaseTree goal -> RecursiveCaseTree goal
 mergeRecursive (Done goal) _ = Done goal

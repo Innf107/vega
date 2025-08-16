@@ -6,7 +6,7 @@
     "Dead code elimination" is however automatically performed on declarations, since we only compile the ones that
     are reachable from the entry point anyway.
 -}
-module Vega.Compilation.JavaScript (compileDeclaration) where
+module Vega.Compilation.JavaScript.VegaToJavaScript (compileDeclaration) where
 
 import Relude hiding (State, evalState, get, intercalate, modify, put, trace)
 
@@ -28,7 +28,7 @@ import Data.Text.Lazy qualified as LText
 import Data.Traversable (for)
 import Data.Unique (hashUnique, newUnique)
 import Effectful.Error.Static (Error)
-import Vega.Compilation.JavaScript.Language qualified as JS
+import Vega.Compilation.JavaScript.Syntax qualified as JS
 import Vega.Compilation.PatternMatching (CaseTree (..), RecursiveCaseTree (..))
 import Vega.Compilation.PatternMatching qualified as PatternMatching
 import Vega.Debug (showHeadConstructor)

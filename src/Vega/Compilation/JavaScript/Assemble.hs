@@ -12,7 +12,7 @@ import TextBuilder (TextBuilder)
 import TextBuilder qualified
 
 import Data.HashSet qualified as HashSet
-import Vega.Compilation.JavaScript.Language (compileGlobalName)
+import Vega.Compilation.JavaScript.Syntax (compileGlobalName)
 import Vega.Effect.Trace (Category (..), Trace, trace)
 import Vega.Syntax
 

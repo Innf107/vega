@@ -1,4 +1,4 @@
-module Vega.Compilation.JavaScript.Language (
+module Vega.Compilation.JavaScript.Syntax (
     Name,
     Statement (..),
     Expr (..),

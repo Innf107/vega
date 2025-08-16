@@ -27,10 +27,11 @@ library
   exposed-modules:
       Vega.BuildConfig
       Vega.Builtins
-      Vega.Compilation.Core
-      Vega.Compilation.JavaScript
+      Vega.Compilation.Core.Syntax
+      Vega.Compilation.Core.VegaToCore
       Vega.Compilation.JavaScript.Assemble
-      Vega.Compilation.JavaScript.Language
+      Vega.Compilation.JavaScript.Syntax
+      Vega.Compilation.JavaScript.VegaToJavaScript
       Vega.Compilation.LayoutGeneration
       Vega.Compilation.LIR
       Vega.Compilation.MIR
@@ -45,6 +46,7 @@ library
       Vega.Effect.GraphPersistence.InMemory
       Vega.Effect.Output.Static.Local
       Vega.Effect.Trace
+      Vega.Effect.Unique.Static.Local
       Vega.Error
       Vega.Lexer
       Vega.Lexer.Token

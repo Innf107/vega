@@ -18,18 +18,19 @@ import Effectful.Reader.Static
 import System.FilePath (takeExtension, (</>))
 
 import Data.Sequence (Seq (..))
-import TextBuilder qualified
-import TextBuilder (TextBuilder)
 import Data.Traversable (for)
 import Effectful.Concurrent (Concurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwError_)
+import TextBuilder (TextBuilder)
+import TextBuilder qualified
 
 import Data.Text qualified as Text
 import Effectful.Exception (try)
 import System.FilePath qualified as FilePath
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
-import Vega.Compilation.JavaScript qualified as JavaScript
+import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
+import Vega.Compilation.JavaScript.VegaToJavaScript qualified as JavaScript
 import Vega.Diff (DiffChange (..))
 import Vega.Diff qualified as Diff
 import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
@@ -39,13 +40,12 @@ import Vega.Error (CompilationError (..), RenameErrorSet (..), TypeErrorSet (..)
 import Vega.Error qualified as Error
 import Vega.Lexer qualified as Lexer
 import Vega.Parser qualified as Parser
+import Vega.Pretty (keyword, pretty)
 import Vega.Rename qualified as Rename
 import Vega.Seq.NonEmpty (NonEmpty (..))
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
-import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
-import Vega.Pretty (pretty, keyword)
 
 data CompilationResult
     = CompilationSuccessful
