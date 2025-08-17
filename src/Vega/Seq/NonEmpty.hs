@@ -9,6 +9,7 @@ module Vega.Seq.NonEmpty (
     unzip,
     first,
     last,
+    mapWithIndex,
 ) where
 
 import Relude hiding (NonEmpty, first, last, unzip)
@@ -71,3 +72,6 @@ first (x :<|| _) = x
 
 last :: NonEmpty a -> a
 last (_ :||> x) = x
+
+mapWithIndex :: (Int -> a -> b) -> NonEmpty a -> NonEmpty b
+mapWithIndex f = coerce (Seq.mapWithIndex f)

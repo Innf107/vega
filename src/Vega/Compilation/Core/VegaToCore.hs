@@ -67,7 +67,7 @@ compileExpr expr = do
         Vega.Lambda{parameters, body} -> do
             let caseTree = PatternMatching.serializeSubPatterns parameters ()
             variables <- for parameters \_ -> newLocal
-            (bodyStatements, body) <- compileCaseTree (\() -> body) caseTree (fmap (\localName -> Core.Var (Core.Local localName)) variables)
+            (bodyStatements, body) <- compileCaseTree (\() -> compileExpr body) caseTree (fmap (\localName -> Core.Var (Core.Local localName)) variables)
             pure ([], Core.Lambda variables bodyStatements body)
         Vega.StringLiteral{} -> deferToValue
         Vega.IntLiteral{} -> deferToValue
@@ -86,7 +86,8 @@ compileExpr expr = do
                     , (booleanConstructor False, ([], elseStatements, elseExpr))
                     ]
                 )
-        _ -> undefined
+        Vega.SequenceBlock{statements} -> compileStatements statements
+        Vega.Match{scrutinee, cases} -> compilePatternMatch scrutinee (fmap (\Vega.MkMatchCase{pattern_, body} -> (pattern_, body)) cases)
 
 compileExprToValue :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Value)
 compileExprToValue expr = do
@@ -112,21 +113,62 @@ compileExprToValue expr = do
             pure (fold statements, Core.DataConstructorApplication (Core.TupleConstructor (length elementValues)) elementValues)
         Vega.BinaryOperator{} -> undefined
         Vega.If{} -> deferToLet
-        _ -> undefined
+        Vega.SequenceBlock{} -> deferToLet
+        Vega.Match{} -> deferToLet
+
+compileStatements ::
+    (Compile es) =>
+    Seq (Vega.Statement Typed) ->
+    Eff es (Seq Core.Statement, Core.Expr)
+compileStatements = \case
+    Empty -> pure ([], Core.Value unitLiteral)
+    [Vega.Run _ expr] -> compileExpr expr
+    (Vega.Run _ expr :<| rest) -> do
+        local <- newLocal
+        (statements, coreExpr) <- compileExpr expr
+        (restStatements, result) <- compileStatements rest
+        pure (statements <> [Core.Let local coreExpr] <> restStatements, result)
+    (Vega.Let _ pattern_ expr :<| rest) -> do
+        (scrutineeStatements, scrutineeValue) <- compileExprToValue expr
+
+        let caseTree = PatternMatching.serializeSubPatterns [pattern_] ()
+
+        (statements, finalExpr) <- compileCaseTree (\() -> compileStatements rest) caseTree [scrutineeValue]
+        pure (scrutineeStatements <> statements, finalExpr)
+    (Vega.LetFunction{} :<| _) -> undefined
+    (Vega.Use{} :<| _) -> undefined
+
+unitLiteral :: Core.Value
+unitLiteral = Core.DataConstructorApplication (Core.TupleConstructor 0) []
+
+compilePatternMatch :: (Compile es) => Vega.Expr Typed -> Seq (Vega.Pattern Typed, Vega.Expr Typed) -> Eff es (Seq Core.Statement, Core.Expr)
+compilePatternMatch scrutinee = \case
+    Empty -> undefined
+    NonEmpty cases -> do
+        (scrutineeStatements, scrutineeValue) <- compileExprToValue scrutinee
+
+        let compileGoal goal =
+                case (NonEmpty.toSeq) cases Seq.!? goal of
+                    Nothing -> error "tried to access a match RHS that doesn't exist"
+                    Just (_, body) -> compileExpr body
+        let caseTree = PatternMatching.compileMatchRecursive (NonEmpty.mapWithIndex (\i (pattern_, _) -> (pattern_, i)) cases)
+        (matchStatements, matchExpr) <- compileCaseTree compileGoal caseTree [scrutineeValue]
+
+        pure (scrutineeStatements <> matchStatements, matchExpr)
 
 compileCaseTree ::
     forall goal es.
     (Compile es, Hashable goal) =>
-    (goal -> Vega.Expr Typed) ->
+    (goal -> Eff es (Seq Core.Statement, Core.Expr)) ->
     RecursiveCaseTree goal ->
     Seq Core.Value ->
     Eff es (Seq Core.Statement, Core.Expr)
-compileCaseTree getExprForGoal caseTree scrutinees = do
+compileCaseTree compileGoal caseTree scrutinees = do
     let toJoinPoint = \case
             (_goal, (_, 1)) -> pure Nothing
             (goal, (boundVars, _count)) -> do
                 local <- newLocal
-                (bodyStatements, bodyExpr) <- compileExpr (getExprForGoal goal)
+                (bodyStatements, bodyExpr) <- compileGoal goal
                 pure (Just (goal, (local, Core.LetJoin local boundVars bodyStatements bodyExpr)))
     joinPoints <- fmap HashMap.fromList $ wither toJoinPoint $ HashMap.toList (boundVarsAndFrequencies caseTree)
 
@@ -177,7 +219,7 @@ compileCaseTree getExprForGoal caseTree scrutinees = do
 
     let onLeaf boundValues goal = do
             case HashMap.lookup goal joinPoints of
-                Nothing -> compileExpr (getExprForGoal goal)
+                Nothing -> compileGoal goal
                 Just (joinPointName, _) ->
                     pure ([], Core.JumpJoin joinPointName (fmap (\var -> Core.Var (Core.Local var)) boundValues))
 

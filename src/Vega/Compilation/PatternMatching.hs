@@ -1,7 +1,9 @@
 module Vega.Compilation.PatternMatching (
     CaseTree (..),
     RecursiveCaseTree (..),
+    toRecursive,
     compileMatch,
+    compileMatchRecursive,
     serializeSubPatterns,
     traverseLeavesWithBoundVars,
 ) where
@@ -35,6 +37,9 @@ data CaseTree goal
     | TupleCase Int (RecursiveCaseTree goal)
     | BindVar LocalName (CaseTree goal)
     deriving (Generic, Functor, Foldable)
+
+toRecursive :: CaseTree goal -> RecursiveCaseTree goal
+toRecursive caseTree = Continue (fmap Done caseTree)
 
 mergeRecursive :: RecursiveCaseTree goal -> RecursiveCaseTree goal -> RecursiveCaseTree goal
 mergeRecursive (Done goal) _ = Done goal
@@ -77,6 +82,9 @@ mergeAll caseTrees = foldl1' merge (toNonEmptyList caseTrees)
 
 compileMatch :: NonEmpty (Pattern Typed, goal) -> CaseTree goal
 compileMatch patterns = mergeAll $ fmap (uncurry compileSinglePattern) patterns
+
+compileMatchRecursive :: NonEmpty (Pattern Typed, goal) -> RecursiveCaseTree goal
+compileMatchRecursive patterns = Continue $ compileMatch (fmap (\(pattern_, goal) -> (pattern_, Done goal)) patterns)
 
 compileSinglePattern :: Pattern Typed -> goal -> CaseTree goal
 compileSinglePattern pattern_ goal = case pattern_ of
