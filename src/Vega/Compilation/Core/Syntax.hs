@@ -24,9 +24,9 @@ data Expr
     = Value Value
     | Application CoreName (Seq Value)
     | -- INVARIANT: JumpJoin never occurs in a let
-      JumpJoin LocalCoreName
+      JumpJoin LocalCoreName (Seq Value)
     | Lambda (Seq LocalCoreName) (Seq Statement) Expr
-    | ConstructorCase Value (HashMap CoreName (Seq LocalCoreName, Seq Statement, Expr))
+    | ConstructorCase Value (HashMap DataConstructor (Seq LocalCoreName, Seq Statement, Expr))
 
 data Statement
     = Let LocalCoreName Expr
@@ -38,8 +38,9 @@ data Value
     | DataConstructorApplication DataConstructor (Seq Value)
 
 data DataConstructor
-    = UserDefinedConstructor GlobalName
+    = UserDefinedConstructor Vega.Name
     | TupleConstructor {size :: Int}
+    deriving (Generic, Show, Eq, Hashable)
 
 instance Pretty Value where
     pretty = \case

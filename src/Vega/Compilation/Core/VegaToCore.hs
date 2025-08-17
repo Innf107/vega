@@ -3,9 +3,12 @@
 module Vega.Compilation.Core.VegaToCore where
 
 import Effectful
-import Relude
+import Relude hiding (NonEmpty)
 
+import Data.HashMap.Strict (alter)
 import Data.HashMap.Strict qualified as HashMap
+import Data.Map qualified as Map
+import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Vega.Compilation.Core.Syntax (nameToCoreName)
@@ -17,8 +20,12 @@ import Vega.Effect.GraphPersistence qualified as GraphPersistence
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
 import Vega.Panic (panic)
 import Vega.Pretty (pretty)
+import Vega.Pretty qualified as Pretty
+import Vega.Seq.NonEmpty (NonEmpty (..), pattern NonEmpty)
+import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax (Pass (..))
 import Vega.Syntax qualified as Vega
+import Vega.Util (viaList)
 import Vega.Util qualified as Util
 import Witherable (wither)
 
@@ -59,7 +66,9 @@ compileExpr expr = do
         Vega.VisibleTypeApplication{} -> deferToValue
         Vega.Lambda{parameters, body} -> do
             let caseTree = PatternMatching.serializeSubPatterns parameters ()
-            compileCaseTree (\() -> body) caseTree
+            variables <- for parameters \_ -> newLocal
+            (bodyStatements, body) <- compileCaseTree (\() -> body) caseTree (fmap (\localName -> Core.Var (Core.Local localName)) variables)
+            pure ([], Core.Lambda variables bodyStatements body)
         Vega.StringLiteral{} -> deferToValue
         Vega.IntLiteral{} -> deferToValue
         Vega.DoubleLiteral{} -> deferToValue
@@ -106,28 +115,89 @@ compileExprToValue expr = do
         _ -> undefined
 
 compileCaseTree ::
+    forall goal es.
     (Compile es, Hashable goal) =>
     (goal -> Vega.Expr Typed) ->
     RecursiveCaseTree goal ->
+    Seq Core.Value ->
     Eff es (Seq Core.Statement, Core.Expr)
-compileCaseTree getExprForGoal caseTree = do
+compileCaseTree getExprForGoal caseTree scrutinees = do
     let toJoinPoint = \case
             (_goal, (_, 1)) -> pure Nothing
             (goal, (boundVars, _count)) -> do
                 local <- newLocal
                 (bodyStatements, bodyExpr) <- compileExpr (getExprForGoal goal)
-                pure (Just (local, (local, Core.LetJoin local boundVars bodyStatements bodyExpr)))
+                pure (Just (goal, (local, Core.LetJoin local boundVars bodyStatements bodyExpr)))
     joinPoints <- fmap HashMap.fromList $ wither toJoinPoint $ HashMap.toList (boundVarsAndFrequencies caseTree)
 
-    undefined
+    let goRecursive ::
+            forall goal.
+            (Seq Core.LocalCoreName -> goal -> Eff es (Seq Core.Statement, Core.Expr)) ->
+            Seq Core.Value ->
+            Seq Core.LocalCoreName ->
+            RecursiveCaseTree goal ->
+            Eff es (Seq Core.Statement, Core.Expr)
+        goRecursive onDone scrutinees boundValues = \case
+            PatternMatching.Done goal -> case scrutinees of
+                Empty -> onDone boundValues goal
+                NonEmpty scrutinees -> panic $ "more scrutinees consumed than produced (leftover:" <> Pretty.intercalateDoc ", " (fmap pretty scrutinees) <> ")"
+            PatternMatching.Continue tree -> do
+                scrutinees <- case scrutinees of
+                    Empty -> panic "more scrutinees consumed than produced"
+                    NonEmpty scrutinees -> pure scrutinees
+                let onLeaf boundValues nextTree = do
+                        let (_ :<|| rest) = scrutinees
+                        goRecursive onDone rest boundValues nextTree
+                go onLeaf scrutinees boundValues tree
+
+        go ::
+            forall goal.
+            (Seq Core.LocalCoreName -> goal -> Eff es (Seq Core.Statement, Core.Expr)) ->
+            NonEmpty Core.Value ->
+            Seq Core.LocalCoreName ->
+            CaseTree goal ->
+            Eff es (Seq Core.Statement, Core.Expr)
+        go onLeaf (scrutinee :<|| scrutinees) boundValues = \case
+            PatternMatching.Leaf leaf -> onLeaf boundValues leaf
+            PatternMatching.ConstructorCase{constructors} -> do
+                cases <-
+                    fromList <$> for (Map.toList constructors) \(constructor, (argumentCount, subTree)) -> do
+                        locals <- Seq.replicateA argumentCount newLocal
+                        (subTreeStatements, subTreeExpr) <- goRecursive onLeaf scrutinees boundValues subTree
+
+                        pure (Core.UserDefinedConstructor constructor, (locals, subTreeStatements, subTreeExpr))
+                pure ([], Core.ConstructorCase scrutinee cases)
+            PatternMatching.OrDefault{} -> undefined
+            PatternMatching.TupleCase count subTree -> do
+                locals <- Seq.replicateA count newLocal
+                (subTreeStatements, subTreeExpr) <- goRecursive onLeaf scrutinees boundValues subTree
+                pure ([], Core.ConstructorCase scrutinee [(Core.TupleConstructor count, (locals, subTreeStatements, subTreeExpr))])
+            PatternMatching.BindVar name subTree -> do
+                go onLeaf (scrutinee :<|| scrutinees) (boundValues :|> Core.UserProvided name) subTree
+
+    let onLeaf boundValues goal = do
+            case HashMap.lookup goal joinPoints of
+                Nothing -> compileExpr (getExprForGoal goal)
+                Just (joinPointName, _) ->
+                    pure ([], Core.JumpJoin joinPointName (fmap (\var -> Core.Var (Core.Local var)) boundValues))
+
+    (caseStatements, caseExpr) <- goRecursive onLeaf scrutinees [] caseTree
+
+    let joinPointDefinitions = fromList $ map (\(_, statement) -> statement) (toList joinPoints)
+    pure (joinPointDefinitions <> caseStatements, caseExpr)
 
 boundVarsAndFrequencies :: forall goal. (Hashable goal) => RecursiveCaseTree goal -> HashMap goal (Seq Core.LocalCoreName, Int)
-boundVarsAndFrequencies tree = undefined
+boundVarsAndFrequencies tree = flip execState mempty $ do
+    PatternMatching.traverseLeavesWithBoundVars tree \locals goal -> do
+        modify $ flip alter goal \case
+            Nothing -> Just (fmap Core.UserProvided locals, 1)
+            Just (locals, count) -> Just (locals, count + 1)
 
 newLocal :: (Compile es) => Eff es Core.LocalCoreName
 newLocal = do
     unique <- newUnique
     pure (Core.Generated unique)
 
-booleanConstructor :: Bool -> Core.CoreName
-booleanConstructor = undefined
+booleanConstructor :: Bool -> Core.DataConstructor
+booleanConstructor True = Core.UserDefinedConstructor (Vega.Global (Vega.internalName "True"))
+booleanConstructor False = Core.UserDefinedConstructor (Vega.Global (Vega.internalName "False"))

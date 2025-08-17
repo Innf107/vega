@@ -1,4 +1,10 @@
-module Vega.Compilation.PatternMatching (CaseTree (..), RecursiveCaseTree (..), compileMatch, serializeSubPatterns) where
+module Vega.Compilation.PatternMatching (
+    CaseTree (..),
+    RecursiveCaseTree (..),
+    compileMatch,
+    serializeSubPatterns,
+    traverseLeavesWithBoundVars,
+) where
 
 import Data.Foldable1 (foldl1')
 import Data.Map qualified as Map
@@ -95,3 +101,25 @@ serializeSubPatterns patterns goal = case patterns of
     (pattern_ :<| rest) -> do
         let treeForRemainingElements = serializeSubPatterns rest goal
         Continue $ compileSinglePattern pattern_ treeForRemainingElements
+
+traverseLeavesWithBoundVars :: forall goal f. (Applicative f) => RecursiveCaseTree goal -> (Seq LocalName -> goal -> f ()) -> f ()
+traverseLeavesWithBoundVars tree onLeaf = goRecursive [] onLeaf tree
+  where
+    goRecursive :: forall goal. Seq LocalName -> (Seq LocalName -> goal -> f ()) -> RecursiveCaseTree goal -> f ()
+    goRecursive boundVars onLeaf = \case
+        Done goal -> onLeaf boundVars goal
+        Continue subTree -> go boundVars (\boundVars goal -> goRecursive boundVars onLeaf goal) subTree
+
+    go :: forall goal. Seq LocalName -> (Seq LocalName -> goal -> f ()) -> CaseTree goal -> f ()
+    go boundVars onLeaf = \case
+        OrDefault subTree default_ ->
+            -- ApplicativeDo doesn't work here for some reason??
+            go boundVars onLeaf subTree
+                *> onLeaf boundVars default_
+        Leaf goal -> onLeaf boundVars goal
+        ConstructorCase{constructors} -> do
+            for_ constructors \(_, subTree) -> do
+                goRecursive boundVars onLeaf subTree
+        TupleCase _ subTree -> goRecursive boundVars onLeaf subTree
+        BindVar name subTree -> do
+            go (boundVars :|> name) onLeaf subTree
