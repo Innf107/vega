@@ -57,6 +57,7 @@ compileExpr expr = do
     case expr of
         Vega.Var{} -> deferToValue
         Vega.DataConstructor{} -> deferToValue
+        Vega.Application _ (Vega.DataConstructor _ name) argumentExprs -> deferToValue
         Vega.Application _ functionExpr argExprs -> do
             (functionStatements, function) <- compileExprToValue functionExpr
             (argumentStatements, arguments) <-
@@ -102,8 +103,13 @@ compileExprToValue expr = do
     case expr of
         Vega.Var _ name -> pure ([], Core.Var (nameToCoreName name))
         Vega.DataConstructor _ name -> do
-            -- TODO: determine the number of parameters, then desugar to a lambda with that many parameters
-            undefined
+            -- TODO: THIS IS WRONG. It's just a temporary fix to get Nil working.
+            -- To do this correctly, we need a GraphPersistence hook to look up the arity of a data constructor
+            -- and desugar this to a lambda taking that many parameters
+            pure ([], Core.DataConstructorApplication (Core.UserDefinedConstructor name) [])
+        Vega.Application _ (Vega.DataConstructor _ name) argumentExprs -> do
+            (argumentStatements, arguments) <- Seq.unzip <$> for argumentExprs compileExprToValue
+            pure (fold argumentStatements, Core.DataConstructorApplication (Core.UserDefinedConstructor name) arguments)
         Vega.Application{} -> deferToLet
         Vega.PartialApplication{} -> undefined
         -- We can erase type applications since Core is untyped
@@ -189,7 +195,7 @@ compileCaseTree compileGoal caseTree scrutinees = do
                 NonEmpty scrutinees -> panic $ "more scrutinees consumed than produced (leftover:" <> Pretty.intercalateDoc ", " (fmap pretty scrutinees) <> ")"
             PatternMatching.Continue tree -> do
                 scrutinees <- case scrutinees of
-                    Empty -> panic "more scrutinees consumed than produced"
+                    Empty -> error "more scrutinees consumed than produced"
                     NonEmpty scrutinees -> pure scrutinees
                 let onLeaf boundValues nextTree = do
                         let (_ :<|| rest) = scrutinees
