@@ -38,9 +38,9 @@ data Category
     deriving (Generic, Show, Enum, Bounded)
 
 data Trace :: Effect where
-    Trace :: Category -> Doc Ann -> Trace m ()
+    Trace :: Category -> ~(Doc Ann) -> Trace m ()
     TraceEnabled :: Category -> Trace m Bool
-    WithTrace :: Category -> Doc Ann -> m a -> Trace m a
+    WithTrace :: Category -> ~(Doc Ann) -> m a -> Trace m a
 
 makeEffect ''Trace
 

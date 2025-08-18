@@ -10,18 +10,22 @@ import Vega.Driver qualified as Driver
 import Data.Text qualified as Text
 import Data.Text.IO qualified as Text
 import Data.Yaml (prettyPrintParseException)
-import Effectful (Eff, IOE, runEff)
+import Effectful (Eff, IOE, runEff, (:>))
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.FileSystem (FileSystem, runFileSystem)
 import Effectful.Reader.Static (runReader)
+import GHC.Read (readsPrec)
 import System.IO (hIsTerminalDevice)
 import Vega.BuildConfig (BuildConfigPresence (..), findBuildConfig)
+import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Driver (CompilationResult (..))
+import Vega.Effect.DebugEmit
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence.InMemory (runInMemory)
 import Vega.Effect.Trace (Trace, runTrace)
 import Vega.Error (ErrorMessage (..), PlainErrorMessage (..), prettyErrorWithLoc, renderCompilationError)
-import Vega.Pretty (Ann, Doc, PrettyANSIIConfig (MkPrettyANSIIConfig, includeUnique), align, emphasis, eprintANSII, keyword, pretty, prettyPlain, (<+>))
+import Vega.Pretty (Ann, Doc, PrettyANSIIConfig (MkPrettyANSIIConfig, includeUnique), align, emphasis, eprintANSII, intercalateDoc, keyword, pretty, prettyPlain, (<+>))
+import Vega.Syntax (GlobalName)
 import Vega.Util (constructorNames)
 
 data PersistenceBackend
@@ -32,12 +36,25 @@ data Options
     = Build
         { persistence :: PersistenceBackend
         , includeUnique :: Bool
+        , debugCore :: DebugEmitState
         }
     | Exec
         { file :: FilePath
         , mainFunction :: Text
         }
     deriving (Generic, Show)
+
+data DebugEmitState
+    = ToFile
+    | ToStderr
+    | None
+    deriving (Generic, Show)
+instance Read DebugEmitState where
+    readsPrec _ = \case
+        "file" -> [(ToFile, "")]
+        "stderr" -> [(ToStderr, "")]
+        "none" -> [(None, "")]
+        _ -> []
 
 buildOptions :: Parser Options
 buildOptions = do
@@ -62,7 +79,24 @@ buildOptions = do
                 <> help
                     ("Show unique identifiers in diagnostics where applicable")
             )
-    pure Build{persistence, includeUnique}
+    debugCore <-
+        option
+            auto
+            ( long "debug-core"
+                <> value None
+                <> showDefault
+                <> help ("Core output for debugging. Can be one of: file, stderr, none")
+            )
+    pure Build{persistence, includeUnique, debugCore}
+
+runCoreEmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitState -> Eff (DebugEmit (Seq Core.Declaration) : es) a -> Eff es a
+runCoreEmit debugCore cont = case debugCore of
+    None -> ignoreEmit cont
+    ToFile -> do
+        let render declarations = encodeUtf8 do
+                prettyPlain (intercalateDoc "\n\n" (fmap pretty declarations))
+        emitAllToFile render "core.vegacore" cont
+    ToStderr -> emitToStderr (\declarations -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
 
 execOptions :: Parser Options
 execOptions = do
@@ -79,23 +113,36 @@ parser =
             command "exec" (info execOptions fullDesc)
         ]
 
-run :: PersistenceBackend -> Eff '[Concurrent, GraphPersistence, FileSystem, Trace, IOE] a -> IO a
-run persistence action = case persistence of
-    InMemory -> runEff $ runTrace $ runFileSystem $ runInMemory $ runConcurrent $ action
+run ::
+    (?config :: PrettyANSIIConfig) =>
+    DebugEmitState ->
+    PersistenceBackend ->
+    Eff
+        '[ DebugEmit (Seq Core.Declaration)
+         , Concurrent
+         , GraphPersistence
+         , FileSystem
+         , Trace
+         , IOE
+         ]
+        a ->
+    IO a
+run coreEmitState persistence action = case persistence of
+    InMemory -> runEff $ runTrace $ runFileSystem $ runInMemory $ runConcurrent $ runCoreEmit coreEmitState action
 
 main :: IO ()
 main = do
     options <- execParser (info (parser <**> helper) fullDesc)
+    let ?config =
+            MkPrettyANSIIConfig
+                { includeUnique = options.includeUnique
+                }
     case options of
-        Build{persistence} -> run persistence do
+        Build{persistence, debugCore} -> run debugCore persistence do
             let eprint :: forall io. (MonadIO io) => Doc Ann -> io ()
-                eprint doc =
+                eprint doc = do
                     liftIO (hIsTerminalDevice stderr) >>= \case
                         True -> do
-                            let ?config =
-                                    MkPrettyANSIIConfig
-                                        { includeUnique = options.includeUnique
-                                        }
                             eprintANSII doc
                         False -> liftIO (Text.hPutStrLn stderr (prettyPlain doc))
 
@@ -125,5 +172,5 @@ main = do
                                         PlainError plainError -> pure $ pretty plainError
                                     eprint doc
                             exitFailure
-        Exec{file, mainFunction} -> run InMemory do
+        Exec{file, mainFunction} -> run None InMemory do
             Driver.execute file mainFunction

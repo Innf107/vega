@@ -1,5 +1,5 @@
-{-# OPTIONS_GHC -Wno-missing-export-lists #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# OPTIONS_GHC -Wno-missing-export-lists #-}
 
 module Vega.Effect.GraphPersistence where
 
@@ -11,8 +11,9 @@ import Effectful
 import Effectful.TH (makeEffect)
 
 import Vega.BuildConfig (Backend)
+import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Error (CompilationError, RenameErrorSet, TypeErrorSet)
-import Vega.Pretty (Pretty, pretty, keyword, (<+>))
+import Vega.Pretty (Pretty, keyword, pretty, (<+>))
 import Vega.SCC (SCCId)
 
 data GraphData error a
@@ -24,11 +25,13 @@ data WorkItem
     = Rename DeclarationName
     | TypeCheck DeclarationName
     | CompileToJS DeclarationName
+    | CompileToCore DeclarationName
     deriving (Show)
 instance Pretty WorkItem where
     pretty (Rename name) = keyword "rename" <+> pretty name
     pretty (TypeCheck name) = keyword "type-check" <+> pretty name
     pretty (CompileToJS name) = keyword "compile-to-js" <+> pretty name
+    pretty (CompileToCore name) = keyword "compile-to-core" <+> pretty name
 
 data CachedType
     = RenamingFailed
@@ -52,6 +55,8 @@ data GraphPersistence :: Effect where
     SetTyped :: Declaration Typed -> GraphPersistence m ()
     GetCompiledJS :: DeclarationName -> GraphPersistence m (GraphData Void Text)
     SetCompiledJS :: DeclarationName -> Text -> GraphPersistence m ()
+    GetCompiledCore :: DeclarationName -> GraphPersistence m (GraphData Void (Seq Core.Declaration))
+    SetCompiledCore :: DeclarationName -> Seq Core.Declaration -> GraphPersistence m ()
     -- Invalidation
     RemoveDeclaration :: DeclarationName -> GraphPersistence m ()
     Invalidate :: DeclarationName -> GraphPersistence m ()

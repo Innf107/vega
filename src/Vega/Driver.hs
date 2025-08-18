@@ -29,10 +29,13 @@ import Effectful.Exception (try)
 import System.FilePath qualified as FilePath
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
+import Vega.Compilation.Core.Syntax qualified as Core
+import Vega.Compilation.Core.VegaToCore qualified as VegaToCore
 import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
 import Vega.Compilation.JavaScript.VegaToJavaScript qualified as JavaScript
 import Vega.Diff (DiffChange (..))
 import Vega.Diff qualified as Diff
+import Vega.Effect.DebugEmit (DebugEmit, debugEmit)
 import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 import Vega.Effect.Trace (Category (..), Trace, trace, traceEnabled, whenTraceEnabled)
@@ -61,6 +64,7 @@ type Driver es =
     , FileSystem :> es
     , Concurrent :> es
     , Trace :> es
+    , DebugEmit (Seq Core.Declaration) :> es
     )
 
 findSourceFiles :: (Driver es) => Eff es (Seq FilePath)
@@ -187,6 +191,8 @@ performAllRemainingWork = do
                 typecheck name
             GraphPersistence.CompileToJS name -> do
                 compileToJS name
+            GraphPersistence.CompileToCore name -> do
+                compileToCore name
 
 rebuild :: (Driver es) => Eff es CompilationResult
 rebuild =
@@ -226,6 +232,8 @@ compileBackend = do
 
             -- TODO: make this configurable and make the path absolute
             writeFileLBS (toString $ config.contents.name <> ".js") (encodeUtf8 (TextBuilder.toText jsCode))
+        BuildConfig.NativeRelease -> do
+            undefined
         _ -> undefined
 
 execute :: FilePath -> Text -> Eff es ()
@@ -291,3 +299,13 @@ compileToJS name =
         Ok typedDeclaration -> do
             compiled <- JavaScript.compileDeclaration typedDeclaration
             GraphPersistence.setCompiledJS name compiled
+
+compileToCore :: (Driver es) => DeclarationName -> Eff es ()
+compileToCore name =
+    GraphPersistence.getTyped name >>= \case
+        Missing{} -> pure ()
+        Failed{} -> pure ()
+        Ok typedDeclaration -> do
+            compiled <- VegaToCore.compileDeclaration typedDeclaration
+            debugEmit compiled
+            GraphPersistence.setCompiledCore name compiled

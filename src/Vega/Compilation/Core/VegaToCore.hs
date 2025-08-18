@@ -41,9 +41,13 @@ compileDeclaration declaration =
 
 compileDeclarationSyntax :: (Compile es) => Vega.DeclarationSyntax Typed -> Eff es (Seq Core.Declaration)
 compileDeclarationSyntax = \case
-    Vega.DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body} -> do
-        undefined
-    Vega.DefineVariantType{} -> undefined
+    Vega.DefineFunction{name, typeSignature = _, declaredTypeParameters = _, parameters, body} -> do
+        locals <- for parameters \_ -> newLocal
+
+        let caseTree = PatternMatching.serializeSubPatterns parameters ()
+        (caseStatements, caseExpr) <- compileCaseTree (\() -> compileExpr body) caseTree (fmap (\local -> Core.Var (Core.Local local)) locals)
+        pure [Core.DefineFunction name locals caseStatements caseExpr]
+    Vega.DefineVariantType{} -> pure []
 
 compileExpr :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Expr)
 compileExpr expr = do

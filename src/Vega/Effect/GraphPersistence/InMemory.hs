@@ -17,6 +17,7 @@ import Vega.Effect.GraphPersistence hiding (
     doesDeclarationExist,
     findMatchingNames,
     getCachedGlobalKind,
+    getCompiledCore,
     getCompiledJS,
     getCurrentErrors,
     getDefiningDeclaration,
@@ -35,6 +36,7 @@ import Vega.Effect.GraphPersistence hiding (
     invalidateTyped,
     lastKnownDeclarations,
     removeDeclaration,
+    setCompiledCore,
     setCompiledJS,
     setKnownDeclarations,
     setModuleImportScope,
@@ -55,7 +57,8 @@ import Data.HashTable.IO qualified as HashTable
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Effectful.Concurrent.Async (forConcurrently, runConcurrent)
-import Vega.BuildConfig (Backend (JavaScript))
+import Vega.BuildConfig (Backend (..))
+import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Effect.Trace (Category (SCC), Trace, trace)
 import Vega.Pretty (Pretty (pretty))
 import Vega.SCC (SCCId, computeSCC)
@@ -67,6 +70,7 @@ data DeclarationData = MkDeclarationData
     , renamed :: IORef (GraphData RenameErrorSet (Declaration Renamed))
     , typed :: IORef (GraphData TypeErrorSet (Declaration Typed))
     , compiledJS :: IORef (GraphData Void Text)
+    , compiledCore :: IORef (GraphData Void (Seq Core.Declaration))
     , --
       dependencies :: IORef (HashSet DeclarationName)
     , dependents :: IORef (HashSet DeclarationName)
@@ -159,10 +163,11 @@ addDeclaration declaration = do
     renamed <- newIORef Missing{previous = Nothing}
     typed <- newIORef Missing{previous = Nothing}
     compiledJS <- newIORef Missing{previous = Nothing}
+    compiledCore <- newIORef Missing{previous = Nothing}
     dependencies <- newIORef mempty
     dependents <- newIORef mempty
     scc <- newIORef Nothing
-    let data_ = MkDeclarationData{parsed, renamed, typed, compiledJS, dependencies, dependents, scc}
+    let data_ = MkDeclarationData{parsed, renamed, typed, compiledJS, compiledCore, dependencies, dependents, scc}
     liftIO $ HashTable.mutate declarations declaration.name \case
         Nothing -> (Just data_, ())
         Just _ -> error $ "Trying to add declaration as new that already exists: '" <> show declaration.name <> "'"
@@ -219,6 +224,16 @@ setCompiledJS :: (InMemory es) => DeclarationName -> Text -> Eff es ()
 setCompiledJS name js = do
     data_ <- declarationData name
     writeIORef data_.compiledJS (Ok js)
+
+getCompiledCore :: (InMemory es) => DeclarationName -> Eff es (GraphData Void (Seq Core.Declaration))
+getCompiledCore name = do
+    data_ <- declarationData name
+    readIORef data_.compiledCore
+
+setCompiledCore :: (InMemory es) => DeclarationName -> Seq Core.Declaration -> Eff es ()
+setCompiledCore name core = do
+    data_ <- declarationData name
+    writeIORef data_.compiledCore (Ok core)
 
 removeDeclaration :: (InMemory es) => DeclarationName -> Eff es ()
 removeDeclaration name = do
@@ -291,13 +306,14 @@ invalidateRenamed maybeError name = do
 
 invalidateTyped :: (InMemory es) => Maybe TypeErrorSet -> DeclarationName -> Eff es ()
 invalidateTyped maybeError name = do
-    let invalidate = case maybeError of
+    let invalidateWithError = case maybeError of
             Nothing -> invalidateGraphData
             Just error -> failGraphData error
 
     data_ <- declarationData name
-    modifyIORef' data_.typed invalidate
+    modifyIORef' data_.typed invalidateWithError
     modifyIORef' data_.compiledJS invalidateGraphData
+    modifyIORef' data_.compiledCore invalidateGraphData
 
     cachedTypes <- ask @CachedTypes
     globals <- getDefinedGlobals name
@@ -431,6 +447,7 @@ remainingWorkItems backend name data_ = do
     -- TODO: ughhhh i hope this gets better once we switch to the work queue API
     let remainingCompilation = case backend of
             JavaScript -> [CompileToJS name]
+            NativeRelease -> [CompileToCore name]
             _ -> []
     readIORef data_.renamed >>= \case
         Missing{} -> pure $ [Rename name, TypeCheck name] <> remainingCompilation
@@ -445,6 +462,10 @@ remainingWorkItems backend name data_ = do
                         JavaScript -> do
                             readIORef data_.compiledJS >>= \case
                                 Missing{} -> pure [CompileToJS name]
+                                Ok{} -> pure []
+                        NativeRelease -> do
+                            readIORef data_.compiledCore >>= \case
+                                Missing{} -> pure [CompileToCore name]
                                 Ok{} -> pure []
                         _ -> undefined
 
@@ -461,6 +482,7 @@ getRemainingWork backend = do
         Rename{} -> 0
         TypeCheck{} -> 1
         CompileToJS{} -> 2
+        CompileToCore{} -> 2
 
 getDefiningDeclaration :: (InMemory es) => GlobalName -> Eff es (Maybe DeclarationName)
 getDefiningDeclaration name = do
@@ -511,6 +533,8 @@ runInMemory action = do
                 SetTyped name -> setTyped name
                 GetCompiledJS name -> getCompiledJS name
                 SetCompiledJS name js -> setCompiledJS name js
+                GetCompiledCore name -> getCompiledCore name
+                SetCompiledCore name core -> setCompiledCore name core
                 -- Invalidation
                 RemoveDeclaration name -> removeDeclaration name
                 Invalidate name -> invalidate name
