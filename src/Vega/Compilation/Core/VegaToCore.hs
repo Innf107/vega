@@ -13,7 +13,7 @@ import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Vega.Compilation.Core.Syntax (nameToCoreName)
 import Vega.Compilation.Core.Syntax qualified as Core
-import Vega.Compilation.PatternMatching (CaseTree, RecursiveCaseTree)
+import Vega.Compilation.PatternMatching (CaseTree)
 import Vega.Compilation.PatternMatching qualified as PatternMatching
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.GraphPersistence (GraphPersistence)
@@ -21,7 +21,7 @@ import Vega.Effect.GraphPersistence qualified as GraphPersistence
 import Vega.Effect.Trace (Category (Patterns), Trace, trace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
 import Vega.Panic (panic)
-import Vega.Pretty (align, indent, intercalateDoc, keyword, pretty)
+import Vega.Pretty (align, indent, intercalateDoc, keyword, pretty, (<+>))
 import Vega.Pretty qualified as Pretty
 import Vega.Seq.NonEmpty (NonEmpty (..), pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
@@ -48,6 +48,9 @@ compileDeclarationSyntax = \case
         locals <- for parameters \_ -> newLocal
 
         let caseTree = PatternMatching.serializeSubPatterns parameters ()
+
+        trace Patterns $ "compileDeclarationSyntax(" <> Vega.prettyGlobal Vega.VarKind name <> "):" <+> pretty caseTree
+
         (caseStatements, caseExpr) <- compileCaseTree (\() -> compileExpr body) caseTree (fmap (\local -> Core.Var (Core.Local local)) locals)
         pure [Core.DefineFunction name locals caseStatements caseExpr]
     Vega.DefineVariantType{} -> pure []
@@ -164,7 +167,7 @@ compilePatternMatch scrutinee = \case
                 case (NonEmpty.toSeq) cases Seq.!? goal of
                     Nothing -> error "tried to access a match RHS that doesn't exist"
                     Just (_, body) -> compileExpr body
-        let caseTree = PatternMatching.compileMatchRecursive (NonEmpty.mapWithIndex (\i (pattern_, _) -> (pattern_, i)) cases)
+        let caseTree = PatternMatching.compileMatch (NonEmpty.mapWithIndex (\i (pattern_, _) -> (pattern_, i)) cases)
         trace Patterns $
             "compilePatternMatch: ["
                 <> intercalateDoc (keyword ", ") (fmap (\(pattern_, _expr) -> showHeadConstructor pattern_) cases)
@@ -178,7 +181,7 @@ compileCaseTree ::
     forall goal es.
     (Compile es, Hashable goal) =>
     (goal -> Eff es (Seq Core.Statement, Core.Expr)) ->
-    RecursiveCaseTree goal ->
+    CaseTree goal ->
     Seq Core.Value ->
     Eff es (Seq Core.Statement, Core.Expr)
 compileCaseTree compileGoal caseTree scrutinees = do
@@ -190,63 +193,52 @@ compileCaseTree compileGoal caseTree scrutinees = do
                 pure (Just (goal, (local, Core.LetJoin local boundVars bodyStatements bodyExpr)))
     joinPoints <- fmap HashMap.fromList $ wither toJoinPoint $ HashMap.toList (boundVarsAndFrequencies caseTree)
 
-    let goRecursive ::
-            forall goal.
-            (Seq Core.LocalCoreName -> goal -> Eff es (Seq Core.Statement, Core.Expr)) ->
-            Seq Core.Value ->
-            Seq Core.LocalCoreName ->
-            RecursiveCaseTree goal ->
-            Eff es (Seq Core.Statement, Core.Expr)
-        goRecursive onDone scrutinees boundValues = \case
-            PatternMatching.Done goal -> case scrutinees of
-                Empty -> onDone boundValues goal
-                NonEmpty scrutinees -> panic $ "more scrutinees consumed than produced (leftover:" <> Pretty.intercalateDoc ", " (fmap pretty scrutinees) <> ")"
-            PatternMatching.Continue tree -> do
-                scrutinees <- case scrutinees of
-                    Empty -> error "more scrutinees consumed than produced"
-                    NonEmpty scrutinees -> pure scrutinees
-                let onLeaf boundValues nextTree = do
-                        let (_ :<|| rest) = scrutinees
-                        goRecursive onDone rest boundValues nextTree
-                go onLeaf scrutinees boundValues tree
+    let
+        consume :: (HasCallStack) => Seq Core.Value -> (Core.Value, Seq Core.Value)
+        consume Empty = panic "Consumed more scrutinees than were produced"
+        consume (x :<| xs) = (x, xs)
 
         go ::
-            forall goal.
-            (Seq Core.LocalCoreName -> goal -> Eff es (Seq Core.Statement, Core.Expr)) ->
-            NonEmpty Core.Value ->
+            Seq Core.Value ->
             Seq Core.LocalCoreName ->
             CaseTree goal ->
             Eff es (Seq Core.Statement, Core.Expr)
-        go onLeaf (scrutinee :<|| scrutinees) boundValues = \case
-            PatternMatching.Leaf leaf -> onLeaf boundValues leaf
+        go scrutinees boundValues = \case
+            PatternMatching.Leaf goal ->
+                case scrutinees of
+                    Empty -> case HashMap.lookup goal joinPoints of
+                        Nothing -> compileGoal goal
+                        Just (joinPointName, _) ->
+                            pure ([], Core.JumpJoin joinPointName (fmap (\var -> Core.Var (Core.Local var)) boundValues))
+                    _ -> panic $ "Not all scrutinees consumed. Remaining: [" <> intercalateDoc ", " (fmap pretty scrutinees) <> "]"
             PatternMatching.ConstructorCase{constructors} -> do
+                let (scrutinee, rest) = consume scrutinees
                 cases <-
                     fromList <$> for (Map.toList constructors) \(constructor, (argumentCount, subTree)) -> do
                         locals <- Seq.replicateA argumentCount newLocal
-                        (subTreeStatements, subTreeExpr) <- goRecursive onLeaf scrutinees boundValues subTree
+                        (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local) locals <> rest) boundValues subTree
 
                         pure (Core.UserDefinedConstructor constructor, (locals, subTreeStatements, subTreeExpr))
                 pure ([], Core.ConstructorCase scrutinee cases)
-            PatternMatching.OrDefault{} -> undefined
             PatternMatching.TupleCase count subTree -> do
+                let (scrutinee, rest) = consume scrutinees
                 locals <- Seq.replicateA count newLocal
-                (subTreeStatements, subTreeExpr) <- goRecursive onLeaf scrutinees boundValues subTree
+                (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local) locals <> rest) boundValues subTree
                 pure ([], Core.ConstructorCase scrutinee [(Core.TupleConstructor count, (locals, subTreeStatements, subTreeExpr))])
             PatternMatching.BindVar name subTree -> do
-                go onLeaf (scrutinee :<|| scrutinees) (boundValues :|> Core.UserProvided name) subTree
+                let (scrutinee, _) = consume scrutinees
+                (subStatements, subExpr) <- go scrutinees (boundValues :|> Core.UserProvided name) subTree
+                pure ([Core.Let (Core.UserProvided name) (Core.Value scrutinee)] <> subStatements, subExpr)
+            PatternMatching.Ignore subTree -> do
+                let (_, rest) = consume scrutinees
+                go rest boundValues subTree
 
-    let onLeaf boundValues goal = do
-            case HashMap.lookup goal joinPoints of
-                Nothing -> compileGoal goal
-                Just (joinPointName, _) ->
-                    pure ([], Core.JumpJoin joinPointName (fmap (\var -> Core.Var (Core.Local var)) boundValues))
-
-    (caseStatements, caseExpr) <- goRecursive onLeaf scrutinees [] caseTree
+    (caseStatements, caseExpr) <- go scrutinees [] caseTree
 
     let joinPointDefinitions = fromList $ map (\(_, statement) -> statement) (toList joinPoints)
     pure (joinPointDefinitions <> caseStatements, caseExpr)
 
-boundVarsAndFrequencies :: forall goal. (Hashable goal) => RecursiveCaseTree goal -> HashMap goal (Seq Core.LocalCoreName, Int)
+boundVarsAndFrequencies :: forall goal. (Hashable goal) => CaseTree goal -> HashMap goal (Seq Core.LocalCoreName, Int)
 boundVarsAndFrequencies tree = flip execState mempty $ do
     PatternMatching.traverseLeavesWithBoundVars tree \locals goal -> do
         modify $ flip alter goal \case

@@ -29,7 +29,7 @@ import Data.Traversable (for)
 import Data.Unique (hashUnique, newUnique)
 import Effectful.Error.Static (Error)
 import Vega.Compilation.JavaScript.Syntax qualified as JS
-import Vega.Compilation.PatternMatching (CaseTree (..), RecursiveCaseTree (..))
+import Vega.Compilation.PatternMatching (CaseTree (..))
 import Vega.Compilation.PatternMatching qualified as PatternMatching
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.Trace (Category (..), Trace, trace)
@@ -156,7 +156,7 @@ compileSequentialPatterns :: (Compile es) => Seq (JS.Name, Pattern Typed) -> Exp
 compileSequentialPatterns scrutineesAndPatterns expr = do
     let caseTree = PatternMatching.serializeSubPatterns (fmap snd scrutineesAndPatterns) expr
 
-    compileRecursiveCaseTree compileLeaf (fmap fst scrutineesAndPatterns) caseTree
+    compileCaseTree compileLeaf undefined caseTree
 
 compilePatternMatch :: (Compile es) => JS.Name -> Seq (MatchCase Typed) -> Eff es (Seq JS.Statement)
 compilePatternMatch scrutinee cases = case cases of
@@ -171,49 +171,4 @@ compileLeaf expr = do
     pure [JS.Return jsExpr]
 
 compileCaseTree :: (Compile es) => (goal -> Eff es (Seq JS.Statement)) -> JS.Name -> CaseTree goal -> Eff es (Seq JS.Statement)
-compileCaseTree compileGoal scrutinee = \case
-    Leaf goal -> compileGoal goal
-    ConstructorCase{constructors} -> do
-        cases <-
-            fromList <$> for (Map.toList constructors) \(constructor, (parameterCount, continuation)) -> case parameterCount of
-                0 -> do
-                    statements <- compileRecursiveCaseTree compileGoal [] continuation
-                    pure (JS.compileName constructor, statements)
-                _ -> do
-                    payloadVariables <- Seq.replicateM parameterCount (freshVar "p")
-                    rest <- compileRecursiveCaseTree compileGoal payloadVariables continuation
-
-                    pure
-                        ( JS.compileName constructor
-                        , [JS.DestructureArray payloadVariables (JS.FieldAccess (JS.Var scrutinee) "payload")]
-                            <> rest
-                        )
-        pure
-            [ JS.SwitchString
-                { scrutinee = JS.FieldAccess (JS.Var scrutinee) "tag"
-                , default_ = Nothing
-                , cases = cases
-                }
-            ]
-    TupleCase size continuation -> do
-        variables <- Seq.replicateM size (freshVar "x")
-
-        rest <- compileRecursiveCaseTree compileGoal variables continuation
-
-        pure $ [JS.DestructureArray variables (JS.Var scrutinee)] <> rest
-    BindVar varName cont -> do
-        rest <- compileCaseTree compileGoal scrutinee cont
-        pure $ [JS.Const (JS.compileLocalName varName) (JS.Var scrutinee)] <> rest
-    OrDefault{} -> undefined
-
-compileRecursiveCaseTree :: (HasCallStack, Compile es) => (goal -> Eff es (Seq JS.Statement)) -> Seq JS.Name -> RecursiveCaseTree goal -> Eff es (Seq JS.Statement)
-compileRecursiveCaseTree compileGoal scrutinees tree = case (scrutinees, tree) of
-    (Empty, Done goal) -> compileGoal goal
-    (scrutinee :<| scrutinees, Continue caseTree) -> do
-        let continue nextCaseTree = compileRecursiveCaseTree compileGoal scrutinees nextCaseTree
-
-        compileCaseTree continue scrutinee caseTree
-    (_ :<| _, Done _) -> do
-        panic $ "Recursive case tree finished compilation early. Remaining scrutinees: " <> show scrutinees
-    (Empty, Continue caseTree) -> do
-        panic $ "Recursive case tree returned continue after all scrutinees were exhausted. Next case tree: " <> showHeadConstructor caseTree
+compileCaseTree compileGoal scrutinee = undefined

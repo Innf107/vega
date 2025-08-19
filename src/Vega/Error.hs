@@ -422,7 +422,7 @@ renderCompilationError = \case
                             <> note " file"
     Panic exception -> do
         let message = case fromException @Panic.Panic exception of
-                Just (Panic.Panic prettyMessage) -> prettyMessage
+                Just (Panic.Panic callStack prettyMessage) -> prettyMessage <> "\n" <> align (Panic.prettyCallStack callStack)
                 Nothing -> emphasis (show exception)
 
         pure $ PlainError $ MkPlainErrorMessage $ align $ errorText "PANIC (the 'impossible' happened): " <> message

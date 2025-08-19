@@ -273,3 +273,6 @@ instance (PrettyGenUntagged f) => PrettyGenUntagged (M1 i t f) where
 
 instance Pretty Int where
     pretty = number
+
+instance Pretty () where
+    pretty () = keyword "()"
