@@ -3,7 +3,7 @@
 module Vega.Compilation.Core.VegaToCore where
 
 import Effectful
-import Relude hiding (NonEmpty)
+import Relude hiding (NonEmpty, trace)
 
 import Data.HashMap.Strict (alter)
 import Data.HashMap.Strict qualified as HashMap
@@ -15,11 +15,13 @@ import Vega.Compilation.Core.Syntax (nameToCoreName)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.PatternMatching (CaseTree, RecursiveCaseTree)
 import Vega.Compilation.PatternMatching qualified as PatternMatching
+import Vega.Debug (showHeadConstructor)
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
+import Vega.Effect.Trace (Category (Patterns), Trace, trace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
 import Vega.Panic (panic)
-import Vega.Pretty (pretty)
+import Vega.Pretty (align, indent, intercalateDoc, keyword, pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Seq.NonEmpty (NonEmpty (..), pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
@@ -32,9 +34,10 @@ import Witherable (wither)
 type Compile es =
     ( GraphPersistence :> es
     , NewUnique :> es
+    , Trace :> es
     )
 
-compileDeclaration :: (GraphPersistence :> es, IOE :> es) => Vega.Declaration Typed -> Eff es (Seq Core.Declaration)
+compileDeclaration :: (GraphPersistence :> es, IOE :> es, Trace :> es) => Vega.Declaration Typed -> Eff es (Seq Core.Declaration)
 compileDeclaration declaration =
     runNewUnique $
         compileDeclarationSyntax declaration.syntax
@@ -57,7 +60,7 @@ compileExpr expr = do
     case expr of
         Vega.Var{} -> deferToValue
         Vega.DataConstructor{} -> deferToValue
-        Vega.Application _ (Vega.DataConstructor _ name) argumentExprs -> deferToValue
+        Vega.Application _ (Vega.DataConstructor _ _) _ -> deferToValue
         Vega.Application _ functionExpr argExprs -> do
             (functionStatements, function) <- compileExprToValue functionExpr
             (argumentStatements, arguments) <-
@@ -162,6 +165,11 @@ compilePatternMatch scrutinee = \case
                     Nothing -> error "tried to access a match RHS that doesn't exist"
                     Just (_, body) -> compileExpr body
         let caseTree = PatternMatching.compileMatchRecursive (NonEmpty.mapWithIndex (\i (pattern_, _) -> (pattern_, i)) cases)
+        trace Patterns $
+            "compilePatternMatch: ["
+                <> intercalateDoc (keyword ", ") (fmap (\(pattern_, _expr) -> showHeadConstructor pattern_) cases)
+                <> "]\n"
+                <> indent 2 ("~>" <> align (pretty caseTree))
         (matchStatements, matchExpr) <- compileCaseTree compileGoal caseTree [scrutineeValue]
 
         pure (scrutineeStatements <> matchStatements, matchExpr)

@@ -270,3 +270,6 @@ instance (Pretty c) => PrettyGenUntagged (K1 i c) where
 
 instance (PrettyGenUntagged f) => PrettyGenUntagged (M1 i t f) where
     prettyGenUntagged (M1 x) = prettyGenUntagged x
+
+instance Pretty Int where
+    pretty = number

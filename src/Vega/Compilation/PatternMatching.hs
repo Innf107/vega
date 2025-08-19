@@ -17,7 +17,7 @@ import Relude hiding (NonEmpty)
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Panic (panic)
-import Vega.Pretty ((<+>))
+import Vega.Pretty (Ann, Doc, Pretty, align, indent, keyword, lparen, number, pretty, rparen, vsep, (<+>))
 import Vega.Seq.NonEmpty
 import Vega.Syntax
 
@@ -131,3 +131,26 @@ traverseLeavesWithBoundVars tree onLeaf = goRecursive [] onLeaf tree
         TupleCase _ subTree -> goRecursive boundVars onLeaf subTree
         BindVar name subTree -> do
             go (boundVars :|> name) onLeaf subTree
+
+instance (Pretty goal) => Pretty (CaseTree goal) where
+    pretty = \case
+        Leaf goal -> keyword "Leaf" <+> pretty goal
+        BindVar name subTree -> keyword "BindVar" <+> prettyLocal VarKind name <> prettySubTree subTree
+        ConstructorCase{constructors} -> do
+            let prettyCase (name, (count, subTree)) = do
+                    prettyName DataConstructorKind name <> lparen "(" <> number count <> rparen ")" <> prettySubTree subTree
+            keyword "ConstructorCase"
+                <> "\n"
+                <> indent 2 (align $ vsep (fmap prettyCase (Map.toList constructors)))
+        TupleCase count subTree ->
+            keyword "TupleCase" <> lparen "(" <> number count <> rparen ")" <> prettySubTree subTree
+        OrDefault subTree default_ -> 
+            align (keyword "OrDefault" <> prettySubTree subTree <> "\n" <> keyword "default" <+> pretty default_)
+
+prettySubTree :: (Pretty a) => a -> Doc Ann
+prettySubTree subTree = "\n" <> indent 2 (align $ pretty subTree)
+
+instance (Pretty goal) => Pretty (RecursiveCaseTree goal) where
+    pretty = \case
+        Done goal -> keyword "Done" <+> pretty goal
+        Continue caseTree -> keyword "Continue" <+> pretty caseTree
