@@ -1,10 +1,12 @@
-module Vega.Compilation.LIR (
+module Vega.Compilation.LIR.Syntax (
     Program (..),
     LocalVariable (..),
     Declaration (..),
     Block (..),
+    BlockDescriptor (..),
     Instruction (..),
     Terminator (..),
+    Value (..),
     Layout (MkLayout, MkLayoutUnchecked),
 ) where
 
@@ -12,6 +14,11 @@ import Data.Sequence (Seq (..))
 import GHC.Num (integerLog2)
 import Relude
 import Prelude (log)
+
+-- TODO: move this somewhere else
+import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName)
+import Vega.Compilation.Core.Syntax qualified as Core
+import Vega.Effect.Unique.Static.Local (Unique)
 
 newtype LocalVariable = MkVariable Int
 
@@ -21,32 +28,44 @@ data Program = MkProgram
     { declarations :: Seq Declaration
     }
 
-data Declaration = Function
-    { name :: FunctionName
-    , locals :: Seq Layout
-    , init :: Block
+data Declaration = DefineFunction
+    { name :: CoreName
+    , parameters :: Seq LocalCoreName
+    , locals :: HashMap LocalCoreName Layout
+    , init :: BlockDescriptor
+    , blocks :: HashMap BlockDescriptor Block
     }
 
+newtype BlockDescriptor = MkBlockDescriptor Unique
+    deriving stock (Generic)
+    deriving newtype (Eq, Hashable)
+
 data Block = MkBlock
-    { instructions :: Seq Instruction
+    { arguments :: Seq LocalCoreName
+    , instructions :: Seq Instruction
     , terminator :: Terminator
     }
 
 data Instruction
     = Add LocalVariable LocalVariable LocalVariable
-    | Allocate LocalVariable Layout
-    | AllocateClosure LocalVariable FunctionName (Seq LocalVariable)
+    | Allocate LocalCoreName Layout
+    | AllocateClosure LocalCoreName FunctionName (Seq LocalVariable)
     | Store
         { pointer :: LocalVariable
         , value :: LocalVariable
         , offset :: Int
         }
 
+data Value
+    = Var CoreName
+    | Literal Core.Literal
+
 data Terminator
-    = Return LocalVariable
-    | CallDirect LocalVariable FunctionName (Seq LocalVariable) Block
-    | CallIndirect LocalVariable LocalVariable (Seq LocalVariable) Block
-    | TailCallDirect FunctionName (Seq LocalVariable)
+    = Return Value
+    | Jump BlockDescriptor (Seq Value)
+    | CallDirect LocalVariable FunctionName (Seq LocalVariable) BlockDescriptor
+    | CallIndirect LocalVariable LocalVariable (Seq LocalVariable) BlockDescriptor
+    | TailCallDirect CoreName (Seq Value)
     | TailCallIndirect LocalVariable (Seq LocalVariable)
 
 data LayoutStructure

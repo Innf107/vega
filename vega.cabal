@@ -33,11 +33,9 @@ library
       Vega.Compilation.JavaScript.Syntax
       Vega.Compilation.JavaScript.VegaToJavaScript
       Vega.Compilation.LayoutGeneration
-      Vega.Compilation.LIR
-      Vega.Compilation.MIR
-      Vega.Compilation.MIRToLIR
+      Vega.Compilation.LIR.CoreToLIR
+      Vega.Compilation.LIR.Syntax
       Vega.Compilation.PatternMatching
-      Vega.Compilation.VegaToMIR
       Vega.Debug
       Vega.Diff
       Vega.Disambiguate

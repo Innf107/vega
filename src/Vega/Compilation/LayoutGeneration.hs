@@ -4,7 +4,7 @@ import Relude hiding (Type)
 import Effectful
 
 import Vega.Syntax(Type(..))
-import Vega.Compilation.LIR (Layout(..))
+import Vega.Compilation.LIR.Syntax (Layout(..))
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Data.Traversable (for)
 
