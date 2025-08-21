@@ -28,7 +28,8 @@ data Expr
     | -- INVARIANT: JumpJoin never occurs in a let
       JumpJoin LocalCoreName (Seq Value)
     | Lambda (Seq LocalCoreName) (Seq Statement) Expr
-    | ConstructorCase Value (HashMap DataConstructor (Seq LocalCoreName, Seq Statement, Expr))
+    | TupleAccess Value Int
+    | ConstructorCase Value (HashMap Vega.Name (Seq LocalCoreName, Seq Statement, Expr))
 
 data Statement
     = Let LocalCoreName Expr
@@ -71,9 +72,11 @@ instance Pretty Expr where
         Application funValue argValues -> pretty funValue <> arguments argValues
         JumpJoin name jumpArguments -> keyword "join" <+> pretty name <> arguments jumpArguments
         Lambda parameters bodyStatements bodyExpr -> keyword "\\" <> arguments parameters <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
+        TupleAccess tupleValue index -> do
+            pretty tupleValue <> lparen "[" <> number index <> rparen "]"
         ConstructorCase scrutinee cases -> do
             let prettyCase (constructor, (locals, bodyStatements, bodyExpr)) =
-                    prettyConstructorApplication constructor locals <+> keyword "->" <> prettyBody bodyStatements bodyExpr
+                    Vega.prettyName Vega.DataConstructorKind constructor <> arguments locals <+> keyword "->" <> prettyBody bodyStatements bodyExpr
 
             keyword "match" <+> pretty scrutinee <+> lparen "{"
                 <> "\n"

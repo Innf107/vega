@@ -93,8 +93,8 @@ compileExpr expr = do
                 ( conditionStatements
                 , Core.ConstructorCase
                     conditionValue
-                    [ (booleanConstructor True, ([], thenStatements, thenExpr))
-                    , (booleanConstructor False, ([], elseStatements, elseExpr))
+                    [ (booleanConstructorName True, ([], thenStatements, thenExpr))
+                    , (booleanConstructorName False, ([], elseStatements, elseExpr))
                     ]
                 )
         Vega.SequenceBlock{statements} -> compileStatements statements
@@ -218,13 +218,15 @@ compileCaseTree compileGoal caseTree scrutinees = do
                         locals <- Seq.replicateA argumentCount newLocal
                         (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local) locals <> rest) boundValues subTree
 
-                        pure (Core.UserDefinedConstructor constructor, (locals, subTreeStatements, subTreeExpr))
+                        pure (constructor, (locals, subTreeStatements, subTreeExpr))
                 pure ([], Core.ConstructorCase scrutinee cases)
             PatternMatching.TupleCase count subTree -> do
                 let (scrutinee, rest) = consume scrutinees
                 locals <- Seq.replicateA count newLocal
+                let accessStatements = Seq.mapWithIndex (\i local -> Core.Let local (Core.TupleAccess scrutinee i)) locals
+
                 (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local) locals <> rest) boundValues subTree
-                pure ([], Core.ConstructorCase scrutinee [(Core.TupleConstructor count, (locals, subTreeStatements, subTreeExpr))])
+                pure (accessStatements <> subTreeStatements, subTreeExpr)
             PatternMatching.BindVar name subTree -> do
                 let (scrutinee, _) = consume scrutinees
                 (subStatements, subExpr) <- go scrutinees (boundValues :|> Core.UserProvided name) subTree
@@ -250,6 +252,6 @@ newLocal = do
     unique <- newUnique
     pure (Core.Generated unique)
 
-booleanConstructor :: Bool -> Core.DataConstructor
-booleanConstructor True = Core.UserDefinedConstructor (Vega.Global (Vega.internalName "True"))
-booleanConstructor False = Core.UserDefinedConstructor (Vega.Global (Vega.internalName "False"))
+booleanConstructorName :: Bool -> Vega.Name
+booleanConstructorName True = Vega.Global (Vega.internalName "True")
+booleanConstructorName False = Vega.Global (Vega.internalName "False")

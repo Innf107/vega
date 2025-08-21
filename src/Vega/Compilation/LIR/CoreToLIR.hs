@@ -79,6 +79,8 @@ compileLet block local = \case
         panic $ "JumpJoin for join point " <> pretty joinPoint <> " in non-tail position"
     Core.Lambda parameters statements returnExpr -> do
         undefined
+    Core.TupleAccess tupleValue index -> do
+        undefined
     Core.ConstructorCase scrutinee cases -> do
         undefined
 
@@ -97,6 +99,8 @@ compileReturn block = \case
         joinPointBlock <- joinPointBlockFor joinPoint
         finish block (LIR.Jump joinPointBlock arguments)
     Core.Lambda parameters statements returnExpr -> do
+        undefined
+    Core.TupleAccess tupleValue index -> do
         undefined
     Core.ConstructorCase scrutinee cases ->
         undefined
