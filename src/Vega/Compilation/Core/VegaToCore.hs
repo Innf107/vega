@@ -3,7 +3,9 @@
 module Vega.Compilation.Core.VegaToCore where
 
 import Effectful
-import Relude hiding (NonEmpty, trace)
+import Effectful.State.Static.Local (State, evalState, get, modify, put)
+import Relude hiding (NonEmpty, State, evalState, get, modify, put, runState, trace)
+import Relude qualified
 
 import Data.HashMap.Strict (alter)
 import Data.HashMap.Strict qualified as HashMap
@@ -38,9 +40,9 @@ type Compile es =
     )
 
 compileDeclaration :: (GraphPersistence :> es, IOE :> es, Trace :> es) => Vega.Declaration Typed -> Eff es (Seq Core.Declaration)
-compileDeclaration declaration =
-    runNewUnique $
-        compileDeclarationSyntax declaration.syntax
+compileDeclaration declaration = do
+    declarations <- runNewUnique $ compileDeclarationSyntax declaration.syntax
+    traverse coalesceVariables declarations
 
 compileDeclarationSyntax :: (Compile es) => Vega.DeclarationSyntax Typed -> Eff es (Seq Core.Declaration)
 compileDeclarationSyntax = \case
@@ -243,7 +245,7 @@ compileCaseTree compileGoal caseTree scrutinees = do
 boundVarsAndFrequencies :: forall goal. (Hashable goal) => CaseTree goal -> HashMap goal (Seq Core.LocalCoreName, Int)
 boundVarsAndFrequencies tree = flip execState mempty $ do
     PatternMatching.traverseLeavesWithBoundVars tree \locals goal -> do
-        modify $ flip alter goal \case
+        Relude.modify $ flip alter goal \case
             Nothing -> Just (fmap Core.UserProvided locals, 1)
             Just (locals, count) -> Just (locals, count + 1)
 
@@ -255,3 +257,130 @@ newLocal = do
 booleanConstructorName :: Bool -> Vega.Name
 booleanConstructorName True = Vega.Global (Vega.internalName "True")
 booleanConstructorName False = Vega.Global (Vega.internalName "False")
+
+type Substitution = HashMap Core.LocalCoreName Core.Value
+
+coalesceVariables :: Core.Declaration -> Eff es Core.Declaration
+coalesceVariables = \case
+    Core.DefineFunction name parameters statements returnExpr -> do
+        let substitution :: Substitution = mempty
+        (substitution, makeStatements) <- coalesceStatements substitution statements
+        (substitution, makeReturnExpr) <- coalesceExpr substitution returnExpr
+        pure
+            ( Core.DefineFunction
+                name
+                (fmap (getFinalName substitution) parameters)
+                (makeStatements substitution)
+                (makeReturnExpr substitution)
+            )
+
+coalesceStatements :: Substitution -> Seq Core.Statement -> Eff es (Substitution, Substitution -> Seq Core.Statement)
+coalesceStatements substitution = \case
+    Empty -> pure (substitution, \_ -> Empty)
+    Core.Let name (Core.Value value) :<| rest -> do
+        substitution <- coalesceBinding name value substitution
+        (substitution, makeRest) <- coalesceStatements substitution rest
+        pure (substitution, makeRest)
+    Core.Let name expr :<| rest -> do
+        (substitution, makeExpr) <- coalesceExpr substitution expr
+        (substitution, makeRest) <- coalesceStatements substitution rest
+        pure
+            ( substitution
+            , \substitution -> do
+                Core.Let (getFinalName substitution name) (makeExpr substitution) :<| makeRest substitution
+            )
+    Core.LetJoin name parameters statements returnExpr :<| rest -> do
+        (substitution, makeStatements) <- coalesceStatements substitution statements
+        (substitution, makeExpr) <- coalesceExpr substitution returnExpr
+        (substitution, makeRest) <- coalesceStatements substitution rest
+        pure
+            ( substitution
+            , \substitution -> do
+                Core.LetJoin
+                    name
+                    (fmap (getFinalName substitution) parameters)
+                    (makeStatements substitution)
+                    (makeExpr substitution)
+                    :<| makeRest substitution
+            )
+
+coalesceExpr :: Substitution -> Core.Expr -> Eff es (Substitution, Substitution -> Core.Expr)
+coalesceExpr substitution = \case
+    Core.Value value -> pure (substitution, \substitution -> Core.Value (applySubst substitution value))
+    Core.Application functionName argValues ->
+        pure
+            ( substitution
+            , \substitution -> do
+                let name = case functionName of
+                        Core.Local localName -> Core.Local (getFinalName substitution localName)
+                        Core.Global globalName -> Core.Global globalName
+                Core.Application name (fmap (applySubst substitution) argValues)
+            )
+    Core.JumpJoin joinPoint arguments ->
+        pure
+            ( substitution
+            , \substitution ->
+                Core.JumpJoin joinPoint (fmap (applySubst substitution) arguments)
+            )
+    Core.Lambda parameters statements expr -> do
+        (substitution, makeStatements) <- coalesceStatements substitution statements
+        (substitution, makeExpr) <- coalesceExpr substitution expr
+        pure
+            ( substitution
+            , \substitution ->
+                Core.Lambda
+                    (fmap (getFinalName substitution) parameters)
+                    (makeStatements substitution)
+                    (makeExpr substitution)
+            )
+    Core.TupleAccess value index -> pure (substitution, \substitution -> Core.TupleAccess (applySubst substitution value) index)
+    Core.ConstructorCase scrutinee cases -> do
+        let coalesceCase substitution (parameters, statements, expr) = do
+                (substitution, makeStatements) <- coalesceStatements substitution statements
+                (substitution, makeExpr) <- coalesceExpr substitution expr
+                pure
+                    ( substitution
+                    , \substitution ->
+                        (fmap (getFinalName substitution) parameters, makeStatements substitution, makeExpr substitution)
+                    )
+        (substitution, makeCases) <- Util.mapAccumLM coalesceCase substitution cases
+        pure
+            ( substitution
+            , \substitution ->
+                Core.ConstructorCase (applySubst substitution scrutinee) (fmap ($ substitution) makeCases)
+            )
+
+applySubst :: Substitution -> Core.Value -> Core.Value
+applySubst substitution = \case
+    Core.Var (Core.Global globalName) -> Core.Var (Core.Global globalName)
+    Core.Var (Core.Local localName) -> getFinalValue substitution localName
+    Core.Literal literal -> Core.Literal literal
+    Core.DataConstructorApplication constructor arguments ->
+        Core.DataConstructorApplication constructor (fmap (applySubst substitution) arguments)
+
+coalesceBinding :: (HasCallStack) => Core.LocalCoreName -> Core.Value -> Substitution -> Eff es Substitution
+coalesceBinding name newValue substitution = case newValue of
+    Core.Var (Core.Local localVar) -> case getFinalValue substitution localVar of
+        Core.Var (Core.Local nextVar) -> do
+            let chosenName = Core.Var (Core.Local (chooseName name nextVar))
+            pure $ HashMap.insert name chosenName (HashMap.insert nextVar chosenName substitution)
+        value -> pure $ (HashMap.insert name value substitution)
+    _ -> pure (HashMap.insert name newValue substitution)
+
+chooseName :: Core.LocalCoreName -> Core.LocalCoreName -> Core.LocalCoreName
+chooseName _ (Core.UserProvided name) = Core.UserProvided name
+chooseName (Core.UserProvided name) _ = Core.UserProvided name
+chooseName _ name = name
+
+getFinalValue :: (HasCallStack) => Substitution -> Core.LocalCoreName -> Core.Value
+getFinalValue substitution var = case HashMap.lookup var substitution of
+    Just (Core.Var (Core.Local nextLocal))
+        | nextLocal == var -> Core.Var (Core.Local nextLocal)
+        | otherwise -> getFinalValue substitution nextLocal
+    Just value -> value
+    Nothing -> (Core.Var (Core.Local var))
+
+getFinalName :: (HasCallStack) => Substitution -> Core.LocalCoreName -> Core.LocalCoreName
+getFinalName substitution name = case getFinalValue substitution name of
+    Core.Var (Core.Local name) -> name
+    value -> panic $ "supposed parameter " <> pretty name <> " was coalesced with a non-local value: " <> pretty value
