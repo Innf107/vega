@@ -1,4 +1,9 @@
-module Vega.Disambiguate (Disambiguate, new, disambiguate) where
+module Vega.Disambiguate (
+    Disambiguate,
+    new,
+    disambiguate,
+    disambiguate0,
+) where
 
 import Relude
 import Relude.Extra
@@ -26,3 +31,13 @@ disambiguate dis name unique = do
                 pure $ name <> show id
             Just 0 -> pure name
             Just id -> pure $ name <> show id
+
+-- | Like disambiguate but includes a `0` for the first entry
+disambiguate0 :: Disambiguate s -> Text -> Unique -> ST s Text
+disambiguate0 dis name unique = do
+    disambiguated <- disambiguate dis name unique
+    if disambiguated == name
+        then
+            pure $ name <> "0"
+        else
+            pure disambiguated

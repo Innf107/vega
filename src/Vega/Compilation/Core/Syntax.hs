@@ -119,8 +119,8 @@ arguments elements = lparen "(" <> intercalateDoc (keyword ", ") (map pretty (to
 instance Pretty LocalCoreName where
     pretty = \case
         UserProvided local -> prettyLocal VarKind local
-        Generated unique -> skolem unique "x"
-        
+        Generated unique -> generatedVar unique "x"
+
 instance Pretty CoreName where
     pretty = \case
         Global global -> prettyGlobal VarKind global

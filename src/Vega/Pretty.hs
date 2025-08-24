@@ -10,6 +10,7 @@ module Vega.Pretty (
     localConstructorText,
     globalConstructorText,
     skolem,
+    generatedVar,
     number,
     numberDoc,
     emphasis,
@@ -48,7 +49,7 @@ module Vega.Pretty (
 
 import Relude
 
-import Vega.Disambiguate (disambiguate)
+import Vega.Disambiguate (disambiguate, disambiguate0)
 import Vega.Disambiguate qualified as Disambiguate
 import Vega.Util (Untagged (..))
 
@@ -80,6 +81,7 @@ data Ann
     | RParen
     | Meta Text Unique
     | Unique Unique
+    | GeneratedVar Text Unique
 
 plain :: Text -> Doc Ann
 plain = PP.pretty
@@ -98,6 +100,9 @@ globalConstructorText name = PP.annotate GlobalConstructor (PP.pretty name)
 
 skolem :: Unique -> Text -> Doc Ann
 skolem unique name = PP.annotate (Unique unique) $ PP.annotate (Skolem name unique) (PP.pretty name)
+
+generatedVar :: Unique -> Text -> Doc Ann
+generatedVar unique name = PP.annotate (Unique unique) $ PP.annotate (GeneratedVar name unique) (PP.pretty name)
 
 number :: (Num a, Show a) => a -> Doc Ann
 number = PP.annotate Number . PP.pretty . show @Text
@@ -145,6 +150,7 @@ renderPlain :: PP.SimpleDocTree Ann -> Text
 renderPlain tree = runST do
     skolems <- Disambiguate.new
     metas <- Disambiguate.new
+    generated <- Disambiguate.new
     tree & PP.renderSimplyDecoratedA pure \ann textA -> do
         text <- textA
         case ann of
@@ -165,6 +171,7 @@ renderPlain tree = runST do
             RParen -> pure text
             Meta name unique -> disambiguate metas name unique
             Unique _ -> pure text
+            GeneratedVar unique name -> disambiguate0 generated unique name
 
 data PrettyANSIIConfig = MkPrettyANSIIConfig
     { includeUnique :: Bool
@@ -179,6 +186,7 @@ renderANSII :: (?config :: PrettyANSIIConfig) => PP.SimpleDocTree Ann -> Text
 renderANSII tree = runST do
     skolems <- Disambiguate.new
     metas <- Disambiguate.new
+    generated <- Disambiguate.new
     flip evalStateT 0 $
         tree & PP.renderSimplyDecoratedA pure \ann textA -> do
             text <- textA
@@ -221,6 +229,12 @@ renderANSII tree = runST do
                     | ?config.includeUnique ->
                         pure $ text <> "\ESC[38;5;8m\STX#" <> show (hashUnique unique) <> "\ESC[0m\STX"
                     | otherwise -> pure text
+                GeneratedVar name unique -> lift do
+                    text <- case ?config.includeUnique of
+                        -- If we include the unique anyway, we don't need to disambiguate
+                        True -> pure name
+                        False -> disambiguate0 generated name unique
+                    pure $ "\ESC[38;5;230m\STX" <> text <> "\ESC[0m\STX"
   where
     parenColors = ["\ESC[38;5;46m\STX", "\ESC[38;5;50m\STX", "\ESC[38;5;191m\STX"]
 
