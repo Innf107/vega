@@ -71,11 +71,10 @@ buildOptions = do
                     )
             )
     includeUnique <-
-        option
-            auto
+        flag
+            False
+            True
             ( long "include-uniques"
-                <> value False
-                <> showDefault
                 <> help
                     ("Show unique identifiers in diagnostics where applicable")
             )

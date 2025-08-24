@@ -76,7 +76,7 @@ instance Pretty Expr where
             pretty tupleValue <> lparen "[" <> number index <> rparen "]"
         ConstructorCase scrutinee cases -> do
             let prettyCase (constructor, (locals, bodyStatements, bodyExpr)) =
-                    Vega.prettyName Vega.DataConstructorKind constructor <> arguments locals <+> keyword "->" <> prettyBody bodyStatements bodyExpr
+                    Vega.prettyName Vega.DataConstructorKind constructor <> arguments locals <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
 
             keyword "match" <+> pretty scrutinee <+> lparen "{"
                 <> "\n"
@@ -119,8 +119,8 @@ arguments elements = lparen "(" <> intercalateDoc (keyword ", ") (map pretty (to
 instance Pretty LocalCoreName where
     pretty = \case
         UserProvided local -> prettyLocal VarKind local
-        Generated unique -> skolem unique "x" <> note ("@" <> show (hashUnique unique))
-
+        Generated unique -> skolem unique "x"
+        
 instance Pretty CoreName where
     pretty = \case
         Global global -> prettyGlobal VarKind global
