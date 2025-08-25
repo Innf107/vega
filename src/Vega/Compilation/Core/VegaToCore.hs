@@ -75,7 +75,20 @@ compileExpr expr = do
                 Core.Var name -> pure name
                 value -> panic $ "function compiled to non-variable value: " <> pretty value <> ". this should have been a type error"
             pure (functionStatements <> fold argumentStatements, Core.Application functionVar arguments)
-        Vega.PartialApplication{} -> undefined
+        Vega.PartialApplication{loc = _, functionExpr, partialArguments} -> do
+            (functionStatements, function) <- compileExprToValue functionExpr
+            functionName <- case function of
+                Core.Var name -> pure name
+                value -> panic $ "function compiled to non-variable value: " <> pretty value <> ". this should have been a type error"
+            (locals, argumentStatements, arguments) <-
+                Util.unzip3Seq <$> for partialArguments \case
+                    Nothing -> do
+                        local <- newLocal
+                        pure ([local], [], Core.Var (Core.Local local))
+                    Just vegaExpr -> do
+                        (exprStatements, value) <- compileExprToValue vegaExpr
+                        pure ([], exprStatements, value)
+            pure (functionStatements <> fold argumentStatements, Core.Lambda (fold locals) [] (Core.Application functionName arguments))
         Vega.VisibleTypeApplication{} -> deferToValue
         Vega.Lambda{parameters, body} -> do
             let caseTree = PatternMatching.serializeSubPatterns parameters ()
@@ -119,7 +132,7 @@ compileExprToValue expr = do
             (argumentStatements, arguments) <- Seq.unzip <$> for argumentExprs compileExprToValue
             pure (fold argumentStatements, Core.DataConstructorApplication (Core.UserDefinedConstructor name) arguments)
         Vega.Application{} -> deferToLet
-        Vega.PartialApplication{} -> undefined
+        Vega.PartialApplication{} -> deferToLet
         -- We can erase type applications since Core is untyped
         Vega.VisibleTypeApplication{varName} -> pure ([], Core.Var (nameToCoreName varName))
         Vega.Lambda{} -> deferToLet
