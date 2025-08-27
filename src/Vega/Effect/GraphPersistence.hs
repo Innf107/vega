@@ -3,13 +3,17 @@
 
 module Vega.Effect.GraphPersistence where
 
-import Relude hiding (Type)
+import Relude hiding (State, Type, evalState, get, modify, put)
 
 import Vega.Syntax hiding (Effect)
 
 import Effectful
+import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import Effectful.TH (makeEffect)
 
+import Data.HashSet qualified as HashSet
+import Streaming (Stream, hoist)
+import Streaming.Prelude (Of, yield)
 import Vega.BuildConfig (Backend)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Error (CompilationError, RenameErrorSet, TypeErrorSet)
@@ -83,3 +87,16 @@ data GraphPersistence :: Effect where
     GetDefiningDeclaration :: GlobalName -> GraphPersistence m (Maybe DeclarationName)
 
 makeEffect ''GraphPersistence
+
+reachableFrom :: (GraphPersistence :> es) => DeclarationName -> Stream (Of DeclarationName) (Eff es) ()
+reachableFrom name = hoist (evalState (mempty :: HashSet DeclarationName)) $ go name
+  where
+    go :: (GraphPersistence :> es, State (HashSet DeclarationName) :> es) => DeclarationName -> Stream (Of DeclarationName) (Eff es) ()
+    go name = do
+        dependencies <- lift $ getDependencies name
+        for_ dependencies \dependency -> do
+            seenSoFar <- lift get
+            when (not (HashSet.member dependency seenSoFar)) do
+                yield name
+                lift $ modify (HashSet.insert dependency)
+                go dependency

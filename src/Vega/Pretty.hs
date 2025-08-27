@@ -1,3 +1,4 @@
+{-# LANGUAGE RequiredTypeArguments #-}
 {-# LANGUAGE UndecidableInstances #-}
 -- We include a Num constraint on 'number' to prevent mistakes so -Wredundant-constraints doesn't make sense here
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
@@ -62,6 +63,7 @@ import Data.Text.IO qualified as Text
 import Data.Unique (Unique, hashUnique, newUnique)
 import Data.Vector ((!))
 import GHC.Generics
+import GHC.TypeLits (KnownSymbol, symbolVal)
 
 data Ann
     = LocalIdent
@@ -290,3 +292,52 @@ instance Pretty Int where
 
 instance Pretty () where
     pretty () = keyword "()"
+
+instance (Generic a, PrettyGen (Rep a)) => Pretty (Generically a) where
+    pretty (Generically x) = prettyGen (from x)
+
+class PrettyGen f where
+    prettyGen :: f x -> Doc Ann
+
+instance PrettyGen V1 where
+    prettyGen = \case {}
+
+instance (Pretty a) => PrettyGen (K1 _r a) where
+    prettyGen (K1 x) = pretty x
+
+instance (PrettyGen f, PrettyGen g) => PrettyGen (f :+: g) where
+    prettyGen (L1 x) = prettyGen x
+    prettyGen (R1 x) = prettyGen x
+
+instance (PrettyGen f) => PrettyGen (D1 _meta f) where
+    prettyGen (M1 x) = prettyGen x
+
+instance (PrettyGenArguments f, KnownSymbol name) => PrettyGen (C1 (MetaCons name _fixity False) f) where
+    prettyGen (M1 x) = globalConstructorText (toText $ symbolVal (Proxy @name)) <> lparen "(" <> prettyGenArguments x <> rparen ")"
+
+instance (PrettyGenArguments f, KnownSymbol name) => PrettyGen (C1 (MetaCons name _fixity True) f) where
+    prettyGen (M1 x) = globalConstructorText (toText $ symbolVal (Proxy @name)) <> lparen "{" <> prettyGenArguments x <> rparen "}"
+
+class PrettyGenArguments f where
+    prettyGenArguments :: f x -> Doc Ann
+
+instance PrettyGenArguments V1 where
+    prettyGenArguments = \case {}
+
+instance PrettyGenArguments U1 where
+    prettyGenArguments = mempty
+
+instance {-# OVERLAPPING #-} (Pretty a) => PrettyGenArguments (K1 _r (Seq a)) where
+    prettyGenArguments (K1 seq) = lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty seq) <> rparen "]"
+
+instance (Pretty a) => PrettyGenArguments (K1 _r a) where
+    prettyGenArguments (K1 y) = pretty y
+
+instance (PrettyGenArguments f, PrettyGenArguments g) => PrettyGenArguments (f :*: g) where
+    prettyGenArguments (x :*: y) = prettyGenArguments x <> keyword "," PP.<+> prettyGenArguments y
+
+instance (PrettyGenArguments f) => PrettyGenArguments (S1 (MetaSel Nothing _unpacked _sourceStrictness _realStrictness) f) where
+    prettyGenArguments (M1 x) = prettyGenArguments x
+
+instance (PrettyGenArguments f, KnownSymbol name) => PrettyGenArguments (S1 (MetaSel (Just name) _unpacked _sourceStrictness _realStrictness) f) where
+    prettyGenArguments (M1 x) = globalIdentText (toText (symbolVal (Proxy @name))) PP.<+> keyword "::" PP.<+> prettyGenArguments x

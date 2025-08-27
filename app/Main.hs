@@ -18,6 +18,7 @@ import GHC.Read (readsPrec)
 import System.IO (hIsTerminalDevice)
 import Vega.BuildConfig (BuildConfigPresence (..), findBuildConfig)
 import Vega.Compilation.Core.Syntax qualified as Core
+import Vega.Compilation.LIR.Syntax qualified as LIR
 import Vega.Driver (CompilationResult (..))
 import Vega.Effect.DebugEmit
 import Vega.Effect.GraphPersistence (GraphPersistence)
@@ -36,25 +37,29 @@ data Options
     = Build
         { persistence :: PersistenceBackend
         , includeUnique :: Bool
-        , debugCore :: DebugEmitState
+        , debugEmitConfig :: DebugEmitConfig
         }
     | Exec
         { file :: FilePath
         , mainFunction :: Text
         }
-    deriving (Generic, Show)
+    deriving (Generic)
 
-data DebugEmitState
+data DebugEmitOption
     = ToFile
     | ToStderr
     | None
     deriving (Generic, Show)
-instance Read DebugEmitState where
+instance Read DebugEmitOption where
     readsPrec _ = \case
         "file" -> [(ToFile, "")]
         "stderr" -> [(ToStderr, "")]
         "none" -> [(None, "")]
         _ -> []
+data DebugEmitConfig = MkDebugEmitConfig {
+    debugCore :: DebugEmitOption,
+    debugLIR :: DebugEmitOption
+}
 
 buildOptions :: Parser Options
 buildOptions = do
@@ -83,19 +88,35 @@ buildOptions = do
             auto
             ( long "debug-core"
                 <> value None
-                <> showDefault
                 <> help ("Core output for debugging. Can be one of: file, stderr, none")
             )
-    pure Build{persistence, includeUnique, debugCore}
+    debugLIR <-
+        option
+            auto
+            ( long "debug-lir"
+                <> value None
+                <> help ("LIR output for debugging. Can be one of: file, stderr, none")
+            )
+    pure Build{persistence, includeUnique, debugEmitConfig=MkDebugEmitConfig{ debugCore, debugLIR}}
 
-runCoreEmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitState -> Eff (DebugEmit (Seq Core.Declaration) : es) a -> Eff es a
-runCoreEmit debugCore cont = case debugCore of
+runCoreEmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Seq Core.Declaration) : es) a -> Eff es a
+runCoreEmit config cont = case config.debugCore of
     None -> ignoreEmit cont
     ToFile -> do
         let render declarations = encodeUtf8 do
                 prettyPlain (intercalateDoc "\n\n" (fmap pretty declarations))
         emitAllToFile render "core.vegacore" cont
     ToStderr -> emitToStderr (\declarations -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
+
+runLIREmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Seq LIR.Declaration) : es) a -> Eff es a
+runLIREmit config cont = case config.debugCore of
+    None -> ignoreEmit cont
+    ToFile -> do
+        let render declarations = encodeUtf8 do
+                prettyPlain (intercalateDoc "\n\n" (fmap pretty declarations))
+        emitAllToFile render "lir.vegalir" cont
+    ToStderr -> emitToStderr (\declarations -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
+
 
 execOptions :: Parser Options
 execOptions = do
@@ -114,10 +135,11 @@ parser =
 
 run ::
     (?config :: PrettyANSIIConfig) =>
-    DebugEmitState ->
+    DebugEmitConfig ->
     PersistenceBackend ->
     Eff
         '[ DebugEmit (Seq Core.Declaration)
+         , DebugEmit (Seq LIR.Declaration)
          , Concurrent
          , GraphPersistence
          , FileSystem
@@ -126,8 +148,8 @@ run ::
          ]
         a ->
     IO a
-run coreEmitState persistence action = case persistence of
-    InMemory -> runEff $ runTrace $ runFileSystem $ runInMemory $ runConcurrent $ runCoreEmit coreEmitState action
+run debugConfig persistence action = case persistence of
+    InMemory -> runEff $ runTrace $ runFileSystem $ runInMemory $ runConcurrent $ runLIREmit debugConfig $ runCoreEmit debugConfig action
 
 main :: IO ()
 main = do
@@ -137,7 +159,7 @@ main = do
                 { includeUnique = options.includeUnique
                 }
     case options of
-        Build{persistence, debugCore} -> run debugCore persistence do
+        Build{persistence, debugEmitConfig} -> run debugEmitConfig persistence do
             let eprint :: forall io. (MonadIO io) => Doc Ann -> io ()
                 eprint doc = do
                     liftIO (hIsTerminalDevice stderr) >>= \case
@@ -171,5 +193,5 @@ main = do
                                         PlainError plainError -> pure $ pretty plainError
                                     eprint doc
                             exitFailure
-        Exec{file, mainFunction} -> run None InMemory do
+        Exec{file, mainFunction} -> run MkDebugEmitConfig{debugCore=None, debugLIR=None} InMemory do
             Driver.execute file mainFunction

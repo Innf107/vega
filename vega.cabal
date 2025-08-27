@@ -98,6 +98,7 @@ library
     , optparse-applicative
     , prettyprinter
     , relude
+    , streaming
     , text
     , text-builder
     , time
@@ -148,6 +149,7 @@ executable vega
     , optparse-applicative
     , prettyprinter
     , relude
+    , streaming
     , text
     , text-builder
     , time
@@ -200,6 +202,7 @@ test-suite vega-test
     , optparse-applicative
     , prettyprinter
     , relude
+    , streaming
     , text
     , text-builder
     , time

@@ -32,6 +32,7 @@ dependencies:
 - text
 - uuid
 - text-builder
+- streaming
 
 ghc-options:
 - -Wall
