@@ -290,10 +290,11 @@ checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <>
             (innerPattern, innerTrans) <- checkPattern env innerType innerPattern
             subsumes loc env innerType expectedType
             pure (TypePattern loc innerPattern innerTypeSyntax, innerTrans)
-        OrPattern loc subPatterns -> do
-            (subPatterns, envTransformers) <- NonEmpty.unzip <$> for subPatterns \subPattern -> do
-                checkPattern env expectedType subPattern
-            pure (OrPattern loc subPatterns, Util.compose envTransformers)
+        OrPattern loc branches -> do
+            -- TODO: this was wrong. we can't just compose the environment transformers from the branches.
+            -- all cases need to return *the same* environment constructor, but we need to actually
+            -- check that (i.e. check that every variable is bound to the same type in every branch)
+            undefined
         WildcardPattern loc -> pure (WildcardPattern loc, id)
         TuplePattern loc elementPatterns -> do
             elementTypes <-
