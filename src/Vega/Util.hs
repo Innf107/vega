@@ -15,10 +15,14 @@ module Vega.Util (
     for2,
     partitionWithSeq,
     frequencies,
+    forIndexed,
+    These (..),
+    zipWithLongest,
 ) where
 
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
+import Data.Traversable (for)
 import GHC.Base qualified
 import GHC.Exts (IsList (..))
 import GHC.Generics (C1, Generic (Rep), M1, Meta (..), (:+:))
@@ -119,3 +123,19 @@ frequencies foldable = flip execState mempty do
                 Just n -> Just (n + 1)
         modify' (HashMap.alter update x)
 
+forIndexed :: forall t f a b. (Traversable t, Applicative f) => t a -> (a -> Int -> f b) -> f (t b)
+forIndexed traversable f =
+    flip evalState 0 $
+        getCompose $
+            for @t @(Compose (State Int) f) traversable \x -> Compose $ do
+                i <- state (\i -> (i, i + 1))
+                pure (f x i)
+
+data These a b = This a | That b | Both a b
+
+zipWithLongest :: (These a b -> c) -> Seq a -> Seq b -> Seq c
+zipWithLongest f seq1 seq2 = case (seq1, seq2) of
+    (Empty, Empty) -> Empty
+    (x :<| xs, y :<| ys) -> f (Both x y) :<| zipWithLongest f xs ys
+    (x :<| xs, Empty) -> f (This x) :<| zipWithLongest f xs Empty
+    (Empty, y :<| ys) -> f (That y) :<| zipWithLongest f Empty ys

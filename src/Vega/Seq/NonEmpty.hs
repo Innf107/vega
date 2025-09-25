@@ -10,12 +10,12 @@ module Vega.Seq.NonEmpty (
     first,
     last,
     mapWithIndex,
+    foldl1',
 ) where
 
 import Relude hiding (NonEmpty, first, last, unzip)
 import Relude qualified
 
-import Data.Foldable1 (Foldable1)
 import Data.Sequence qualified as Seq
 
 newtype NonEmpty a = MkNonEmpty (Seq a)
@@ -75,3 +75,6 @@ last (_ :||> x) = x
 
 mapWithIndex :: (Int -> a -> b) -> NonEmpty a -> NonEmpty b
 mapWithIndex f = coerce (Seq.mapWithIndex f)
+
+foldl1' :: (a -> a -> a) -> NonEmpty a -> a
+foldl1' f (x :<|| xs) = foldl' f x xs

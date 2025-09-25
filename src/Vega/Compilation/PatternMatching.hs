@@ -5,7 +5,6 @@ module Vega.Compilation.PatternMatching (
     traverseLeavesWithBoundVars,
 ) where
 
-import Data.Foldable1 (foldl1')
 import Data.Map qualified as Map
 import Data.Sequence (Seq (..))
 import Data.Unique (Unique)
@@ -94,7 +93,7 @@ invalidMergeCombination tree1 tree2 =
             <> ". This should have been a type error."
 
 mergeAll :: NonEmpty (CaseTree goal) -> CaseTree goal
-mergeAll caseTrees = foldl1' merge (toNonEmptyList caseTrees)
+mergeAll caseTrees = foldl1' merge caseTrees
 
 compileMatch :: NonEmpty (Pattern Typed, goal) -> CaseTree goal
 compileMatch patterns = mergeAll $ fmap (\(pattern_, goal) -> compileSinglePattern pattern_ (Leaf goal)) patterns
