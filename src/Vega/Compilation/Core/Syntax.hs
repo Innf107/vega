@@ -50,6 +50,17 @@ data Literal
     | DoubleLiteral Rational
     | StringLiteral Text
 
+data Representation
+    = ProductRep (Seq Representation)
+    | SumRep (Seq Representation)
+    | PrimitiveRep Vega.PrimitiveRep
+
+literalRepresentation :: Literal -> Representation
+literalRepresentation = \case
+    IntLiteral _ -> PrimitiveRep Vega.IntRep
+    DoubleLiteral _ -> PrimitiveRep Vega.DoubleRep
+    StringLiteral _ -> undefined
+
 nameToCoreName :: Vega.Name -> CoreName
 nameToCoreName = \case
     Vega.Local localName -> Local (UserProvided localName)

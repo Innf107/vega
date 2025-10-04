@@ -1,12 +1,11 @@
 module Vega.Compilation.LIR.Syntax (
     Program (..),
-    LocalVariable (..),
+    Variable (..),
     Declaration (..),
     Block (..),
     BlockDescriptor (..),
     Instruction (..),
     Terminator (..),
-    Value (..),
     Layout (..),
     UnboxedLayout (..),
 ) where
@@ -19,6 +18,7 @@ import Prelude (log)
 -- TODO: move this somewhere else
 
 import Data.HashMap.Strict qualified as HashMap
+import Data.Sequence qualified as Seq
 import Data.Unique (hashUnique)
 import GHC.Generics (Generically (..))
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName)
@@ -26,7 +26,7 @@ import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Effect.Unique.Static.Local (Unique)
 import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, localIdentText, lparen, number, pretty, rparen, vsep, (<+>))
 
-newtype LocalVariable = MkVariable Int
+newtype Variable = MkVariable Int
 
 data FunctionName
 
@@ -38,7 +38,7 @@ data Program = MkProgram
 data Declaration = DefineFunction
     { name :: CoreName
     , parameters :: Seq LocalCoreName
-    , locals :: HashMap LocalCoreName Layout
+    , layouts :: Seq Layout
     , init :: BlockDescriptor
     , blocks :: HashMap BlockDescriptor Block
     }
@@ -49,35 +49,27 @@ newtype BlockDescriptor = MkBlockDescriptor Unique
     deriving newtype (Eq, Hashable)
 
 data Block = MkBlock
-    { arguments :: Seq LocalCoreName
+    { arguments :: Seq Variable
     , instructions :: Seq Instruction
     , terminator :: Terminator
     }
     deriving (Generic)
 
 data Instruction
-    = Add LocalCoreName LocalCoreName LocalCoreName
-    | Allocate LocalCoreName Layout
-    | AllocateClosure LocalCoreName FunctionName (Seq LocalVariable)
-    | Store
-        { pointer :: LocalVariable
-        , value :: LocalVariable
-        , offset :: Int
-        }
-    deriving (Generic)
-
-data Value
-    = Var CoreName
-    | Literal Core.Literal
+    = Add Variable Variable Variable
+    | Allocate Variable Layout
+    | AllocateClosure Variable CoreName Layout
+    | IntConstant Variable Int
+    | Global Variable CoreName
     deriving (Generic)
 
 data Terminator
-    = Return Value
-    | Jump BlockDescriptor (Seq Value)
-    | CallDirect LocalVariable FunctionName (Seq LocalVariable) BlockDescriptor
-    | CallIndirect LocalVariable LocalVariable (Seq LocalVariable) BlockDescriptor
-    | TailCallDirect CoreName (Seq Value)
-    | TailCallIndirect LocalVariable (Seq LocalVariable)
+    = Return Variable
+    | Jump BlockDescriptor (Seq Variable)
+    | CallDirect Variable CoreName (Seq Variable) BlockDescriptor
+    | CallIndirect Variable Variable (Seq Variable) BlockDescriptor
+    | TailCallDirect CoreName (Seq Variable)
+    | TailCallIndirect Variable (Seq Variable)
     deriving (Generic)
 
 data Layout
@@ -92,15 +84,15 @@ data UnboxedLayout
 
 instance Pretty Declaration where
     pretty = \case
-        DefineFunction{name, parameters, locals, init, blocks} -> do
+        DefineFunction{name, parameters, layouts, init, blocks} -> do
             pretty name
                 <> arguments parameters
                 <> keyword "="
                 <> lparen "{"
                 <> "\n  "
                 <> align
-                    ( keyword "locals:"
-                        <+> align (vsep (fmap (\(name, layout) -> pretty name <+> keyword ":" <+> pretty layout) (HashMap.toList locals)))
+                    ( keyword "layouts:"
+                        <+> align (vsep (Seq.mapWithIndex (\index layout -> number index <+> keyword ":" <+> pretty layout) layouts))
                         <> "\n"
                         <> keyword "init:"
                         <+> pretty init
@@ -135,12 +127,7 @@ deriving via Generically UnboxedLayout instance Pretty UnboxedLayout
 instance Pretty BlockDescriptor where
     pretty (MkBlockDescriptor unique) = number (hashUnique unique)
 
-instance Pretty Value where
-    pretty = \case
-        Var name -> pretty name
-        Literal literal -> pretty literal
-
-instance Pretty LocalVariable where
+instance Pretty Variable where
     pretty = undefined
 instance Pretty FunctionName where
     pretty = \case {}
