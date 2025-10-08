@@ -26,6 +26,7 @@ module Vega.Pretty (
     meta,
     literal,
     Pretty (..),
+    PrettyId (..),
     PP.Doc,
     renderPlain,
     PrettyANSIIConfig (..),
@@ -147,6 +148,11 @@ literal = PP.annotate Literal . PP.pretty
 
 class Pretty a where
     pretty :: a -> Doc Ann
+
+newtype PrettyId = PrettyId (Doc Ann)
+
+instance Pretty PrettyId where
+    pretty = coerce
 
 renderPlain :: PP.SimpleDocTree Ann -> Text
 renderPlain tree = runST do

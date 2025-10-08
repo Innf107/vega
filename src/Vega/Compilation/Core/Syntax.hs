@@ -20,20 +20,31 @@ data LocalCoreName
 -- TODO: representations?
 -- TODO: do we really want to use a seq of declarations over a hash map or something?
 data Declaration
-    = DefineFunction GlobalName (Seq LocalCoreName) (Seq Statement) Expr
+    = DefineFunction
+    { name :: GlobalName
+    , parameters :: Seq (LocalCoreName, Representation)
+    , returnRepresentation :: Representation
+    , statements :: Seq Statement
+    , result :: Expr
+    }
 
 data Expr
     = Value Value
     | Application CoreName (Seq Value)
     | -- INVARIANT: JumpJoin never occurs in a let
       JumpJoin LocalCoreName (Seq Value)
-    | Lambda (Seq LocalCoreName) (Seq Statement) Expr
+    | Lambda (Seq (LocalCoreName, Representation)) (Seq Statement) Expr
     | TupleAccess Value Int
     | ConstructorCase Value (HashMap Vega.Name (Seq LocalCoreName, Seq Statement, Expr))
 
 data Statement
-    = Let LocalCoreName Expr
-    | LetJoin LocalCoreName (Seq LocalCoreName) (Seq Statement) Expr
+    = Let LocalCoreName Representation Expr
+    | LetJoin
+        { name :: LocalCoreName
+        , parameters :: Seq (LocalCoreName, Representation)
+        , statements :: Seq Statement
+        , result :: Expr
+        }
 
 data Value
     = Var CoreName
@@ -55,34 +66,39 @@ data Representation
     | SumRep (Seq Representation)
     | PrimitiveRep Vega.PrimitiveRep
 
-literalRepresentation :: Literal -> Representation
-literalRepresentation = \case
-    IntLiteral _ -> PrimitiveRep Vega.IntRep
-    DoubleLiteral _ -> PrimitiveRep Vega.DoubleRep
-    StringLiteral _ -> undefined
-
 nameToCoreName :: Vega.Name -> CoreName
 nameToCoreName = \case
     Vega.Local localName -> Local (UserProvided localName)
     Vega.Global globalName -> Global globalName
 
+instance Pretty Representation where
+    pretty (ProductRep representations) = lparen "(" <> intercalateDoc (" " <> keyword "*" <> " ") (fmap pretty representations) <> rparen ")"
+    pretty (SumRep representations) = lparen "(" <> intercalateDoc (" " <> keyword "+" <> " ") (fmap pretty representations) <> rparen ")"
+    pretty (PrimitiveRep rep) = pretty rep
+
 instance Pretty Declaration where
     pretty = \case
-        DefineFunction name parameters bodyStatements bodyExpr ->
-            prettyGlobal VarKind name <> arguments parameters <+> keyword "=" <+> prettyBody bodyStatements bodyExpr
+        DefineFunction
+            { name
+            , parameters
+            , returnRepresentation
+            , statements
+            , result
+            } ->
+                prettyGlobal VarKind name <> arguments (fmap (\(param, rep) -> PrettyId (pretty param <+> keyword ":" <+> pretty rep)) parameters) <+> ":" <+> pretty returnRepresentation <+> keyword "=" <+> prettyBody statements result
 
 instance Pretty Statement where
     pretty = \case
-        Let name expr -> keyword "let" <+> pretty name <+> keyword "=" <+> pretty expr
+        Let name representation expr -> keyword "let" <+> pretty name <+> pretty representation <+> keyword "=" <+> pretty expr
         LetJoin name parameters bodyStatements bodyExpr ->
-            keyword "letjoin" <+> pretty name <> arguments parameters <+> keyword "=" <+> prettyBody bodyStatements bodyExpr
+            keyword "letjoin" <+> pretty name <> typedParameters parameters <+> keyword "=" <+> prettyBody bodyStatements bodyExpr
 
 instance Pretty Expr where
     pretty = \case
         Value value -> pretty value
         Application funValue argValues -> pretty funValue <> arguments argValues
         JumpJoin name jumpArguments -> keyword "join" <+> pretty name <> arguments jumpArguments
-        Lambda parameters bodyStatements bodyExpr -> keyword "\\" <> arguments parameters <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
+        Lambda parameters bodyStatements bodyExpr -> keyword "\\" <> typedParameters parameters <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
         TupleAccess tupleValue index -> do
             pretty tupleValue <> lparen "[" <> number index <> rparen "]"
         ConstructorCase scrutinee cases -> do
@@ -125,7 +141,10 @@ prettyBody statements expr =
         <> rparen "}"
 
 arguments :: (Pretty a, Foldable f) => f a -> Doc Ann
-arguments elements = lparen "(" <> intercalateDoc (keyword ", ") (map pretty (toList elements)) <> rparen ")"
+arguments elements = lparen "(" <> intercalateDoc (keyword "," <> " ") (map pretty (toList elements)) <> rparen ")"
+
+typedParameters :: (Pretty a, Foldable f) => f (a, Representation) -> Doc Ann
+typedParameters elements = lparen "(" <> intercalateDoc (keyword "," <> " ") (map (\(elem, rep) -> pretty elem <> " " <> keyword ":" <> " " <> pretty rep) (toList elements))
 
 instance Pretty LocalCoreName where
     pretty = \case

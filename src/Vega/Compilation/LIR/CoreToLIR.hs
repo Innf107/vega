@@ -46,11 +46,18 @@ registerAdditionalDeclarations declarations = modify (\state -> state{additional
 
 compileDeclaration :: (Trace :> es, NewUnique :> es) => Core.Declaration -> Eff es (Seq LIR.Declaration)
 compileDeclaration = \case
-    Core.DefineFunction functionName parameters statements finalExpr -> do
-        compileFunction (Core.Global functionName) parameters statements finalExpr
+    Core.DefineFunction functionName parameters returnRepresentation statements finalExpr -> do
+        compileFunction (Core.Global functionName) parameters returnRepresentation statements finalExpr
 
-compileFunction :: (Trace :> es, NewUnique :> es) => CoreName -> Seq LocalCoreName -> Seq Core.Statement -> Core.Expr -> Eff es (Seq LIR.Declaration)
-compileFunction functionName parameters statements returnExpr = do
+compileFunction ::
+    (Trace :> es, NewUnique :> es) =>
+    CoreName ->
+    Seq (LocalCoreName, Core.Representation) ->
+    Core.Representation ->
+    Seq Core.Statement ->
+    Core.Expr ->
+    Eff es (Seq LIR.Declaration)
+compileFunction functionName parameters returnRepresentation statements returnExpr = do
     (initDescriptor, finalDeclarationState) <- runState initialDeclarationState $ do
         initialBlock <- newBlock []
         compileBody initialBlock statements returnExpr
@@ -58,7 +65,7 @@ compileFunction functionName parameters statements returnExpr = do
     let declaration =
             LIR.DefineFunction
                 { name = functionName
-                , parameters
+                , parameters = undefined
                 , layouts = finalDeclarationState.layouts
                 , blocks = finalDeclarationState.blocks
                 , init = initDescriptor
@@ -68,13 +75,13 @@ compileFunction functionName parameters statements returnExpr = do
 compileBody :: (Compile es) => BlockBuilder -> Seq Core.Statement -> Core.Expr -> Eff es ()
 compileBody block statements returnExpr = case statements of
     Empty -> compileReturn block returnExpr
-    Core.Let name expr :<| rest -> do
+    Core.Let name representation expr :<| rest -> do
         var <- newVar undefined
         registerVariable name var
         block <- compileLet block var expr
         compileBody block rest returnExpr
     Core.LetJoin name parameters statements returnExpr :<| rest -> do
-        parameterVariables <- for parameters \parameter -> do
+        parameterVariables <- for parameters \(parameter, _representation) -> do
             variable <- newVar undefined
             registerVariable parameter variable
             pure variable
@@ -95,7 +102,8 @@ compileLet block local = \case
     Core.JumpJoin joinPoint _arguments -> do
         panic $ "JumpJoin for join point " <> pretty joinPoint <> " in non-tail position"
     Core.Lambda parameters statements returnExpr -> do
-        compileLambda block local parameters statements returnExpr
+        let returnRepresentation = undefined returnExpr
+        compileLambda block local parameters returnRepresentation statements returnExpr
     Core.TupleAccess tupleValue index -> do
         undefined
     Core.ConstructorCase scrutinee cases -> do
@@ -121,7 +129,8 @@ compileReturn block = \case
         undefined
     Core.Lambda parameters statements returnExpr -> do
         lambdaName <- undefined
-        lambdaDeclarations <- compileFunction lambdaName parameters statements returnExpr
+        let returnRepresentation = undefined returnExpr
+        lambdaDeclarations <- compileFunction lambdaName parameters returnRepresentation statements returnExpr
         registerAdditionalDeclarations lambdaDeclarations
         let value = undefined
         finish block (LIR.Return value)
@@ -143,11 +152,11 @@ compileValue block = \case
         (block, arguments) <- compileValues block arguments
         undefined
 
-compileLambda :: (Compile es) => BlockBuilder -> LIR.Variable -> Seq LocalCoreName -> Seq Core.Statement -> Core.Expr -> Eff es BlockBuilder
-compileLambda block local parameters statements returnExpr = do
+compileLambda :: (Compile es) => BlockBuilder -> LIR.Variable -> Seq (LocalCoreName, Core.Representation) -> Core.Representation -> Seq Core.Statement -> Core.Expr -> Eff es BlockBuilder
+compileLambda block local parameters returnRepresentation statements returnExpr = do
     lambdaName <- undefined
 
-    lambdaDeclarations <- compileFunction lambdaName parameters statements returnExpr
+    lambdaDeclarations <- compileFunction lambdaName parameters returnRepresentation statements returnExpr
     registerAdditionalDeclarations lambdaDeclarations
     -- TODO: do this properly with the right layout
     let locals = undefined

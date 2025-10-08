@@ -47,14 +47,24 @@ compileDeclaration declaration = do
 compileDeclarationSyntax :: (Compile es) => Vega.DeclarationSyntax Typed -> Eff es (Seq Core.Declaration)
 compileDeclarationSyntax = \case
     Vega.DefineFunction{name, typeSignature = _, declaredTypeParameters = _, parameters, body} -> do
-        locals <- for parameters \_ -> newLocal
+        coreParameters <- for parameters \(pattern_) -> do
+            local <- newLocal
+            pure (local, undefined pattern_)
 
         let caseTree = PatternMatching.serializeSubPatterns parameters ()
 
         trace Patterns $ "compileDeclarationSyntax(" <> Vega.prettyGlobal Vega.VarKind name <> "):" <+> pretty caseTree
 
-        (caseStatements, caseExpr) <- compileCaseTree (\() -> compileExpr body) caseTree (fmap (\local -> Core.Var (Core.Local local)) locals)
-        pure [Core.DefineFunction name locals caseStatements caseExpr]
+        (caseStatements, caseExpr) <- compileCaseTree (\() -> compileExpr body) caseTree (fmap (\(local, _) -> Core.Var (Core.Local local)) coreParameters)
+        pure
+            [ Core.DefineFunction
+                { name
+                , parameters = coreParameters
+                , returnRepresentation = undefined
+                , statements = caseStatements
+                , result = caseExpr
+                }
+            ]
     Vega.DefineVariantType{} -> pure []
 
 compileExpr :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Expr)
@@ -84,7 +94,8 @@ compileExpr expr = do
                 Util.unzip3Seq <$> for partialArguments \case
                     Nothing -> do
                         local <- newLocal
-                        pure ([local], [], Core.Var (Core.Local local))
+                        representation <- undefined
+                        pure ([(local, representation)], [], Core.Var (Core.Local local))
                     Just vegaExpr -> do
                         (exprStatements, value) <- compileExprToValue vegaExpr
                         pure ([], exprStatements, value)
@@ -92,8 +103,11 @@ compileExpr expr = do
         Vega.VisibleTypeApplication{} -> deferToValue
         Vega.Lambda{parameters, body} -> do
             let caseTree = PatternMatching.serializeSubPatterns parameters ()
-            variables <- for parameters \_ -> newLocal
-            (bodyStatements, body) <- compileCaseTree (\() -> compileExpr body) caseTree (fmap (\localName -> Core.Var (Core.Local localName)) variables)
+            variables <- for parameters \_ -> do
+                local <- newLocal
+                representation <- undefined
+                pure (local, representation)
+            (bodyStatements, body) <- compileCaseTree (\() -> compileExpr body) caseTree (fmap (\(localName, _) -> Core.Var (Core.Local localName)) variables)
             pure ([], Core.Lambda variables bodyStatements body)
         Vega.StringLiteral{} -> deferToValue
         Vega.IntLiteral{} -> deferToValue
@@ -119,8 +133,9 @@ compileExprToValue :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statem
 compileExprToValue expr = do
     let deferToLet = do
             (statements, expr) <- compileExpr expr
+            representation <- undefined
             name <- newLocal
-            pure (statements <> [Core.Let name expr], Core.Var (Core.Local name))
+            pure (statements <> [Core.Let name representation expr], Core.Var (Core.Local name))
     case expr of
         Vega.Var _ name -> pure ([], Core.Var (nameToCoreName name))
         Vega.DataConstructor _ name -> do
@@ -156,9 +171,10 @@ compileStatements = \case
     [Vega.Run _ expr] -> compileExpr expr
     (Vega.Run _ expr :<| rest) -> do
         local <- newLocal
+        representation <- undefined expr
         (statements, coreExpr) <- compileExpr expr
         (restStatements, result) <- compileStatements rest
-        pure (statements <> [Core.Let local coreExpr] <> restStatements, result)
+        pure (statements <> [Core.Let local representation coreExpr] <> restStatements, result)
     (Vega.Let _ pattern_ expr :<| rest) -> do
         (scrutineeStatements, scrutineeValue) <- compileExprToValue expr
 
@@ -238,14 +254,14 @@ compileCaseTree compileGoal caseTree scrutinees = do
             PatternMatching.TupleCase count subTree -> do
                 let (scrutinee, rest) = consume scrutinees
                 locals <- Seq.replicateA count newLocal
-                let accessStatements = Seq.mapWithIndex (\i local -> Core.Let local (Core.TupleAccess scrutinee i)) locals
+                let accessStatements = Seq.mapWithIndex (\i local -> Core.Let local undefined (Core.TupleAccess scrutinee i)) locals
 
                 (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local) locals <> rest) boundValues subTree
                 pure (accessStatements <> subTreeStatements, subTreeExpr)
             PatternMatching.BindVar name subTree -> do
                 let (scrutinee, _) = consume scrutinees
                 (subStatements, subExpr) <- go scrutinees (boundValues :|> Core.UserProvided name) subTree
-                pure ([Core.Let (Core.UserProvided name) (Core.Value scrutinee)] <> subStatements, subExpr)
+                pure ([Core.Let (Core.UserProvided name) undefined (Core.Value scrutinee)] <> subStatements, subExpr)
             PatternMatching.Ignore subTree -> do
                 let (_, rest) = consume scrutinees
                 go rest boundValues subTree
@@ -255,11 +271,13 @@ compileCaseTree compileGoal caseTree scrutinees = do
     let joinPointDefinitions = fromList $ map (\(_, statement) -> statement) (toList joinPoints)
     pure (joinPointDefinitions <> caseStatements, caseExpr)
 
-boundVarsAndFrequencies :: forall goal. (Hashable goal) => CaseTree goal -> HashMap goal (Seq Core.LocalCoreName, Int)
+boundVarsAndFrequencies :: forall goal. (Hashable goal) => CaseTree goal -> HashMap goal (Seq (Core.LocalCoreName, Core.Representation), Int)
 boundVarsAndFrequencies tree = flip execState mempty $ do
     PatternMatching.traverseLeavesWithBoundVars tree \locals goal -> do
         Relude.modify $ flip alter goal \case
-            Nothing -> Just (fmap Core.UserProvided locals, 1)
+            Nothing -> do
+                let localsWithRepresentations = fmap (\local -> (Core.UserProvided local, undefined)) locals
+                Just (localsWithRepresentations, 1)
             Just (locals, count) -> Just (locals, count + 1)
 
 newLocal :: (Compile es) => Eff es Core.LocalCoreName
@@ -275,14 +293,15 @@ type Substitution = HashMap Core.LocalCoreName Core.Value
 
 coalesceVariables :: Core.Declaration -> Eff es Core.Declaration
 coalesceVariables = \case
-    Core.DefineFunction name parameters statements returnExpr -> do
+    Core.DefineFunction name parameters returnRepresentation statements returnExpr -> do
         let substitution :: Substitution = mempty
         (substitution, makeStatements) <- coalesceStatements substitution statements
         (substitution, makeReturnExpr) <- coalesceExpr substitution returnExpr
         pure
             ( Core.DefineFunction
                 name
-                (fmap (getFinalName substitution) parameters)
+                (fmap (first (getFinalName substitution)) parameters)
+                returnRepresentation
                 (makeStatements substitution)
                 (makeReturnExpr substitution)
             )
@@ -290,17 +309,17 @@ coalesceVariables = \case
 coalesceStatements :: Substitution -> Seq Core.Statement -> Eff es (Substitution, Substitution -> Seq Core.Statement)
 coalesceStatements substitution = \case
     Empty -> pure (substitution, \_ -> Empty)
-    Core.Let name (Core.Value value) :<| rest -> do
+    Core.Let name _representation (Core.Value value) :<| rest -> do
         substitution <- coalesceBinding name value substitution
         (substitution, makeRest) <- coalesceStatements substitution rest
         pure (substitution, makeRest)
-    Core.Let name expr :<| rest -> do
+    Core.Let name representation expr :<| rest -> do
         (substitution, makeExpr) <- coalesceExpr substitution expr
         (substitution, makeRest) <- coalesceStatements substitution rest
         pure
             ( substitution
             , \substitution -> do
-                Core.Let (getFinalName substitution name) (makeExpr substitution) :<| makeRest substitution
+                Core.Let (getFinalName substitution name) representation (makeExpr substitution) :<| makeRest substitution
             )
     Core.LetJoin name parameters statements returnExpr :<| rest -> do
         (substitution, makeStatements) <- coalesceStatements substitution statements
@@ -311,7 +330,7 @@ coalesceStatements substitution = \case
             , \substitution -> do
                 Core.LetJoin
                     name
-                    (fmap (getFinalName substitution) parameters)
+                    (fmap (\(name, representation) -> (getFinalName substitution name, representation)) parameters)
                     (makeStatements substitution)
                     (makeExpr substitution)
                     :<| makeRest substitution
@@ -342,7 +361,7 @@ coalesceExpr substitution = \case
             ( substitution
             , \substitution ->
                 Core.Lambda
-                    (fmap (getFinalName substitution) parameters)
+                    (fmap (\(name, representation) -> (getFinalName substitution name, representation)) parameters)
                     (makeStatements substitution)
                     (makeExpr substitution)
             )
