@@ -5,7 +5,7 @@ module Vega.TypeCheck (checkDeclaration) where
 import Vega.Syntax
 
 import Effectful hiding (Effect)
-import Relude hiding (State, Type, evalState, get, put, runState, trace)
+import Relude hiding (NonEmpty, State, Type, evalState, get, put, runState, trace)
 import Relude.Extra
 
 import Vega.Error (TypeError (..), TypeErrorSet (MkTypeErrorSet))
@@ -29,7 +29,7 @@ import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.Panic (panic)
 import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>))
-import Vega.Seq.NonEmpty (toSeq)
+import Vega.Seq.NonEmpty (toSeq, pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.TypeCheck.Zonk (zonk)
 import Vega.Util qualified as Util
@@ -766,6 +766,9 @@ kindOf loc env = \case
     TypeVar name -> pure $ typeVariableKind name env
     Forall _bindings body -> do
         undefined
+    Exists binders body -> do
+        let innerEnv = foldr (\(name, kind) env -> bindTypeVariable name (TypeVar name) kind Parametric env) env binders
+        kindOf loc innerEnv body
     Function{} -> pure (Type (PrimitiveRep BoxedRep))
     Tuple elements -> Type . ProductRep <$> traverse (kindOf loc env) elements
     MetaVar meta -> pure meta.kind
@@ -860,6 +863,12 @@ substituteTypeVariables substitution type_ =
                 pure (MkForallBinder{varName, visibility, kind, monomorphization})
             body <- substituteTypeVariables substitution body
             pure (Forall binders body)
+        Exists binders body -> do
+            binders <- for binders \(name, kind) -> do
+                kind <- substituteTypeVariables substitution kind
+                pure (name, kind)
+            body <- substituteTypeVariables substitution body
+            pure (Exists binders body)
         Function parameters effect result -> do
             parameters <- traverse (substituteTypeVariables substitution) parameters
             effect <- substituteTypeVariables substitution effect
@@ -973,6 +982,31 @@ instantiate loc env type_ = instantiateGeneric instantiateToMetaStrategy instant
 skolemize :: (TypeCheck es) => Loc -> Env -> Type -> Eff es Type
 skolemize loc env type_ = instantiateGeneric skolemizeStrategy skolemizeStrategy loc env type_
 
+instantiateExistentialGeneric :: (TypeCheck es) => (LocalName -> Kind -> Eff es Type) -> Type -> Eff es Type
+instantiateExistentialGeneric intstantiateVar type_ = do
+    (binders, body) <- collectBinders type_
+    case binders of
+        Empty -> pure type_
+        NonEmpty binders -> do
+            substitution <-
+                fromList <$> for (toList binders) \(name, kind) -> do
+                    instantiated <- intstantiateVar name kind
+                    pure (name, instantiated)
+            substituteTypeVariables substitution body
+  where
+    collectBinders type_ =
+        followMetas type_ >>= \case
+            Exists binders body -> do
+                (remainingBinders, finalBody) <- collectBinders body
+                pure (toSeq binders <> remainingBinders, finalBody)
+            type_ -> pure (Empty, type_)
+
+instantiateExistential :: (TypeCheck es) => Type -> Eff es Type
+instantiateExistential type_ = instantiateExistentialGeneric (\name kind -> MetaVar <$> freshMeta name.name kind) type_
+
+skolemizeExistential :: (TypeCheck es) => Type -> Eff es Type
+skolemizeExistential type_ = instantiateExistentialGeneric (\name kind -> Skolem <$> freshSkolem name Parametric kind) type_
+
 {- | Collect repeated foralls into a single one.
 For example, this will turn `forall a b. forall c d. Int` into `forall a b c d. Int`
 
@@ -1019,6 +1053,11 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
                         Forall binders2 body -> do
                             undefined
                         _ -> unificationFailure
+                    Exists binders1 body1 -> do
+                        -- To unify two existentials, we have to check that they are
+                        -- mutual subtypes
+                        unifyExistentialSubtype loc env type1 type2
+                        unifyExistentialSubtype loc env type2 type1
                     Function parameters1 effect1 result1 -> case type2 of
                         Function parameters2 effect2 result2
                             | length parameters1 == length parameters2 -> do
@@ -1068,6 +1107,22 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
                         Kind -> pure ()
                         _ -> unificationFailure
 
+{- | Ensure that the first type is a subtype of the second one, only considering existential quantifiers.
+Notably, this will *not* take Foralls into account
+-}
+unifyExistentialSubtype :: (TypeCheck es) => Loc -> Env -> Type -> Type -> Eff es ()
+unifyExistentialSubtype loc env subtype supertype =
+    followMetas subtype >>= \case
+        Exists{} -> do
+            subtype <- skolemizeExistential subtype
+            unifyExistentialSubtype loc env subtype supertype
+        type1 ->
+            followMetas supertype >>= \case
+                Exists{} -> do
+                    supertype <- instantiateExistential supertype
+                    unifyExistentialSubtype loc env subtype supertype
+                type2 -> unify loc env type1 type2
+
 bindMeta :: (TypeCheck es) => Loc -> Env -> MetaVar -> Type -> Eff es ()
 bindMeta loc env meta boundType =
     followMetas (MetaVar meta) >>= \case
@@ -1103,7 +1158,9 @@ occursAndAdjust meta type_ = do
                 for_ arguments go
             TypeVar{} -> pure ()
             Forall _typeVarBinders body -> do
+                -- TODO: do we need to look into kinds here? (and likewise for existentials)
                 go body
+            Exists _binders body -> go body
             Function parameters effect result -> do
                 for_ parameters go
                 go effect
@@ -1204,6 +1261,7 @@ solveMonomorphized onMetaVar loc env type_ =
                 go constructor
                 for_ arguments go
             Forall{} -> undefined -- not entirely sure about this
+            Exists{} -> undefined
             Function parameters effect result -> do
                 for_ parameters go
                 go effect

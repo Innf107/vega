@@ -316,6 +316,7 @@ data Type
     | TypeApplication Type (Seq Type)
     | TypeVar LocalName
     | Forall (NonEmpty ForallBinder) Type
+    | Exists (NonEmpty (LocalName, Kind)) Type
     | Function (Seq Type) Effect Type
     | Tuple (Seq Type)
     | MetaVar MetaVar
@@ -407,7 +408,11 @@ instance Pretty Type where
         TypeApplication typeConstructor argTypes ->
             pretty typeConstructor <> prettyArguments argTypes
         TypeVar name -> prettyLocal VarKind name
-        Forall binders body -> keyword "forall" <+> intercalateDoc " " (fmap prettyForallBinder binders) <> "." <+> pretty body
+        Forall binders body -> keyword "forall" <+> intercalateDoc " " (fmap prettyForallBinder binders) <> keyword "." <+> pretty body
+        Exists binders body ->
+            keyword "exists"
+                <+> intercalateDoc " " (fmap (\(name, kind) -> lparen "(" <> prettyLocal VarKind name <+> keyword ":" <+> pretty kind <> rparen ")") binders)
+                <> keyword "." <+> pretty body
         Function arguments Pure result ->
             prettyArguments arguments <+> keyword "->" <+> pretty result
         Function arguments effect result ->

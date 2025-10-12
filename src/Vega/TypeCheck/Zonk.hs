@@ -60,6 +60,7 @@ instance (Zonkable a) => Zonkable (NonEmpty a) where
     zonk seq = traverse zonk seq
 
 instance (Zonkable a) => Zonkable (Maybe a)
+instance (Zonkable a, Zonkable b) => Zonkable (a, b)
 
 instance Zonkable MetaVar where
     zonk (MkMetaVar{kind, identity, underlying, name}) = do
