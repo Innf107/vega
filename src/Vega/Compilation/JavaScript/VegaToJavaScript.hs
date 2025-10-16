@@ -170,5 +170,49 @@ compileLeaf expr = do
     jsExpr <- compileExpr expr
     pure [JS.Return jsExpr]
 
+-- TODO: Unlike VegaToCore, this currently doesn't attempt to deduplicate join points at all.
+-- However, in the future, we're going to replace this entire module with CoreToJavaScript anyway
+-- so it's probably not worth the effort.
 compileCaseTree :: (Compile es) => (goal -> Eff es (Seq JS.Statement)) -> JS.Name -> CaseTree goal -> Eff es (Seq JS.Statement)
-compileCaseTree compileGoal scrutinee = undefined
+compileCaseTree compileGoal scrutinee caseTree = go [scrutinee] caseTree
+  where
+    go scrutinees = \case
+        Leaf goal -> compileGoal goal
+        ConstructorCase{constructors, default_} -> do
+            let (scrutinee, rest) = consume scrutinees
+            cases <-
+                fromList <$> for (Map.toList constructors) \(constructor, (parameterCount, continuation)) -> case parameterCount of
+                    0 -> do
+                        statements <- go rest continuation
+                        pure (JS.compileName constructor, statements)
+                    _ -> do
+                        payloadVariables <- Seq.replicateM parameterCount (freshVar "p")
+                        statements <- go (payloadVariables <> rest) continuation
+                        pure
+                            ( JS.compileName constructor
+                            , JS.DestructureArray payloadVariables (JS.FieldAccess (JS.Var scrutinee) "payload")
+                                :<| statements
+                            )
+            default_ <- traverse (go rest) default_
+            pure
+                [ JS.SwitchString
+                    { scrutinee = JS.FieldAccess (JS.Var scrutinee) "tag"
+                    , default_
+                    , cases
+                    }
+                ]
+        TupleCase count subTree -> do
+            variables <- Seq.replicateA count (freshVar "t")
+            let (scrutinee, rest) = consume scrutinees
+            subTreeStatements <- go (variables <> rest) subTree
+            pure $ JS.DestructureArray variables (JS.Var scrutinee) :<| subTreeStatements
+        BindVar name subTree -> do
+            let (scrutinee, rest) = consume scrutinees
+            subTreeStatements <- go rest subTree
+            pure $ JS.Const (JS.compileLocalName name) (JS.Var scrutinee) :<| subTreeStatements
+        Ignore subTree -> do
+            let (_, rest) = consume scrutinees
+            go rest subTree
+    consume :: (HasCallStack) => Seq JS.Name -> (JS.Name, Seq JS.Name)
+    consume Empty = panic "Consumed more scrutinees than were produced"
+    consume (x :<| xs) = (x, xs)
