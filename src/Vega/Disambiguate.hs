@@ -12,7 +12,7 @@ import Control.Monad.ST.Strict (ST)
 import Data.STRef (STRef, newSTRef, readSTRef, writeSTRef)
 import Data.Unique (Unique)
 
-newtype Disambiguate s = MkDisambiguate {contents :: STRef s (Map Text (Map Unique Int))}
+newtype Disambiguate s = MkDisambiguate {contents :: STRef s (HashMap Text (HashMap Unique Int))}
 
 new :: ST s (Disambiguate s)
 new = MkDisambiguate <$> newSTRef mempty

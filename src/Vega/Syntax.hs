@@ -448,7 +448,7 @@ instance Pretty MetaVar where
     pretty (MkMetaVar{identity, name}) = meta identity ("?" <> name)
 
 instance Pretty Skolem where
-    pretty (MkSkolem{identity, originalName}) = skolem identity (renderLocalName originalName)
+    pretty (MkSkolem{identity, originalName}) = skolem identity originalName.name
 
 prettyName :: NameKind -> Name -> Doc Ann
 prettyName kind = \case
