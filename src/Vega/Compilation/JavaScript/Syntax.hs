@@ -2,6 +2,7 @@ module Vega.Compilation.JavaScript.Syntax (
     Name,
     Statement (..),
     Expr (..),
+    BinaryOperator (..),
     renderStatements,
     compileGlobalName,
     compileLocalName,
@@ -40,6 +41,22 @@ data Expr
     | DoubleLiteral Rational
     | ArrayLiteral (Seq Expr)
     | ObjectLiteral (Seq (Name, Expr))
+    | BinaryOperator Expr BinaryOperator Expr
+
+data BinaryOperator
+    = Add
+    | Subtract
+    | Multiply
+    | Divide
+    | And
+    | Or
+    | Less
+    | LessEqual
+    | Equal
+    | NotEqual
+    | GreaterEqual
+    | Greater
+    deriving stock (Generic)
 
 renderStatement :: Statement -> TextBuilder
 renderStatement = \case
@@ -94,7 +111,23 @@ renderExpr = \case
     IntLiteral int -> show int
     DoubleLiteral rational -> undefined
     ArrayLiteral elements -> "[" <> intercalateMap ", " renderExpr elements <> "]"
-    ObjectLiteral bindings -> "{" <> intercalateMap ", " (\(name, expr) -> TextBuilder.text name <> ": "<> renderExpr expr) bindings <> "}"
+    ObjectLiteral bindings -> "{" <> intercalateMap ", " (\(name, expr) -> TextBuilder.text name <> ": " <> renderExpr expr) bindings <> "}"
+    BinaryOperator left operator right -> "(" <> renderExpr left <> " " <> renderBinaryOperator operator <> " " <> renderExpr right <> ")"
+
+renderBinaryOperator :: BinaryOperator -> TextBuilder
+renderBinaryOperator = \case
+    Add -> "+"
+    Subtract -> "-"
+    Multiply -> "*"
+    Divide -> "/"
+    And -> "&&"
+    Or -> "||"
+    Less -> "<"
+    LessEqual -> "<="
+    Equal -> "=="
+    NotEqual -> "!="
+    GreaterEqual -> ">="
+    Greater -> ">"
 
 intercalateMap :: (Foldable f) => TextBuilder -> (a -> TextBuilder) -> f a -> TextBuilder
 intercalateMap separator f xs = TextBuilder.intercalate separator (map f (toList xs))

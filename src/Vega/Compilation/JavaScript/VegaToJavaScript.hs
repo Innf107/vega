@@ -110,7 +110,10 @@ compileExpr = \case
     TupleLiteral _ elements -> do
         jsElements <- for elements compileExpr
         pure $ JS.ArrayLiteral jsElements
-    BinaryOperator{} -> undefined
+    BinaryOperator _ left operator right -> do
+        leftExpr <- compileExpr left
+        rightExpr <- compileExpr right
+        pure (JS.BinaryOperator leftExpr (binaryOperatorToJS operator) rightExpr)
     If{condition, thenBranch, elseBranch} -> do
         jsCondition <- compileExpr condition
         jsThen <- compileExpr thenBranch
@@ -216,3 +219,18 @@ compileCaseTree compileGoal scrutinees caseTree = go scrutinees caseTree
     consume :: (HasCallStack) => Seq JS.Name -> (JS.Name, Seq JS.Name)
     consume Empty = panic "Consumed more scrutinees than were produced"
     consume (x :<| xs) = (x, xs)
+
+binaryOperatorToJS :: BinaryOperator -> JS.BinaryOperator
+binaryOperatorToJS = \case
+    Add -> JS.Add
+    Subtract -> JS.Subtract
+    Multiply -> JS.Multiply
+    Divide -> JS.Divide
+    And -> JS.And
+    Or -> JS.Or
+    Less -> JS.Less
+    LessEqual -> JS.LessEqual
+    Equal -> JS.Equal
+    NotEqual -> JS.NotEqual
+    GreaterEqual -> JS.GreaterEqual
+    Greater -> JS.Greater

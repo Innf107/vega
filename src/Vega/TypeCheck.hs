@@ -22,6 +22,7 @@ import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
 import Effectful.State.Static.Local (evalState, get, put, runState)
 import GHC.Exts (isTrue#, reallyUnsafePtrEquality)
 import GHC.List (List)
+import Vega.Builtins (boolType, intType)
 import Vega.Builtins qualified as Builtins
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
@@ -455,7 +456,7 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
 
             pure (TupleLiteral loc elements)
         PartialApplication{} -> deferToInference
-        BinaryOperator{} -> undefined
+        BinaryOperator{} -> deferToInference
         Match{loc, scrutinee, cases} -> do
             (scrutineeType, scrutinee) <- infer env ambientEffect scrutinee
             cases <- for cases \MkMatchCase{loc, pattern_, body} -> do
@@ -535,7 +536,11 @@ infer env ambientEffect expr = do
         StringLiteral loc literal -> pure (Builtins.stringType, StringLiteral loc literal)
         IntLiteral loc literal -> pure (Builtins.intType, IntLiteral loc literal)
         DoubleLiteral loc literal -> pure (Builtins.doubleType, DoubleLiteral loc literal)
-        BinaryOperator{} -> undefined
+        BinaryOperator loc left operator right -> do
+            let (leftType, rightType, resultType) = binaryOperatorType operator
+            left <- check env ambientEffect leftType left
+            right <- check env ambientEffect rightType right
+            pure (resultType, BinaryOperator loc left operator right)
         If{loc, condition, thenBranch, elseBranch} -> do
             (condition) <- check env ambientEffect Builtins.boolType condition
             (thenType, thenBranch) <- infer env ambientEffect thenBranch
@@ -894,6 +899,21 @@ substituteTypeVariables substitution type_ =
             pure (ProductRep elements)
         type_@PrimitiveRep{} -> pure type_
         type_@Kind -> pure type_
+
+binaryOperatorType :: BinaryOperator -> (Type, Type, Type)
+binaryOperatorType = \case
+    Add -> (intType, intType, intType)
+    Subtract -> (intType, intType, intType)
+    Multiply -> (intType, intType, intType)
+    Divide -> (intType, intType, intType)
+    And -> (boolType, boolType, boolType)
+    Or -> (boolType, boolType, boolType)
+    Less -> (intType, intType, boolType)
+    LessEqual -> (intType, intType, boolType)
+    Equal -> (intType, intType, boolType)
+    NotEqual -> (intType, intType, boolType)
+    GreaterEqual -> (intType, intType, boolType)
+    Greater -> (intType, intType, boolType)
 
 data InstantiationResult
     = -- | Stop instantiating and keep the affected binder intact
