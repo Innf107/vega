@@ -136,17 +136,22 @@ fatalTypeError error = do
 
 getGlobalType :: (TypeCheck es) => GlobalName -> Eff es Type
 getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobal VarKind name) do
-    GraphPersistence.getGlobalType name >>= \case
-        CachedType cachedType -> do
-            trace TypeCheck $ "cached ~> " <> pretty cachedType
-            pure cachedType
-        CachedTypeSyntax syntax -> do
-            (_rep, type_, _) <- inferTypeRep emptyEnv syntax
-            GraphPersistence.cacheGlobalType name type_
-            pure type_
-        RenamingFailed -> do
-            dummyMeta <- MetaVar <$> freshTypeMeta "err"
-            pure dummyMeta
+    case isInternalName name of
+        True -> case lookup name Builtins.builtinTypes of
+            Just type_ -> pure type_
+            Nothing -> panic $ "builtin variable without a type: " <> prettyGlobal VarKind name
+        False ->
+            GraphPersistence.getGlobalType name >>= \case
+                CachedType cachedType -> do
+                    trace TypeCheck $ "cached ~> " <> pretty cachedType
+                    pure cachedType
+                CachedTypeSyntax syntax -> do
+                    (_rep, type_, _) <- inferTypeRep emptyEnv syntax
+                    GraphPersistence.cacheGlobalType name type_
+                    pure type_
+                RenamingFailed -> do
+                    dummyMeta <- MetaVar <$> freshTypeMeta "err"
+                    pure dummyMeta
 
 globalConstructorKind :: (TypeCheck es) => GlobalName -> Eff es Kind
 globalConstructorKind name = do
@@ -732,6 +737,9 @@ inferType env syntax = do
         ProductRepS loc elementSyntax -> do
             (elements, elementSyntax) <- Seq.unzip <$> traverse (checkType env Parametric Rep) elementSyntax
             pure (Rep, ProductRep elements, ProductRepS loc elementSyntax)
+        ArrayRepS loc inner -> do
+            (inner, innerSyntax) <- checkType env Parametric Rep inner
+            pure (Rep, ArrayRep inner, ArrayRepS loc innerSyntax)
         PrimitiveRepS loc rep -> pure (Rep, PrimitiveRep rep, PrimitiveRepS loc rep)
         KindS loc -> pure (Kind, Kind, KindS loc)
 
@@ -784,6 +792,7 @@ kindOf loc env = \case
     Effect -> pure Kind
     SumRep{} -> pure Rep
     ProductRep{} -> pure Rep
+    ArrayRep{} -> pure Rep
     PrimitiveRep{} -> pure Rep
     Kind -> pure Kind
 
@@ -897,6 +906,9 @@ substituteTypeVariables substitution type_ =
         ProductRep elements -> do
             elements <- traverse (substituteTypeVariables substitution) elements
             pure (ProductRep elements)
+        ArrayRep inner -> do
+            inner <- substituteTypeVariables substitution inner
+            pure (ArrayRep inner)
         type_@PrimitiveRep{} -> pure type_
         type_@Kind -> pure type_
 
@@ -1119,6 +1131,9 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
                                 _ <- zipWithSeqM go elements1 elements2
                                 pure ()
                         _ -> unificationFailure
+                    ArrayRep rep1 -> case type2 of
+                        ArrayRep rep2 -> go rep1 rep2
+                        _ -> unificationFailure
                     PrimitiveRep rep1 -> case type2 of
                         PrimitiveRep rep2
                             | rep1 == rep2 -> pure ()
@@ -1198,6 +1213,7 @@ occursAndAdjust meta type_ = do
             Effect -> pure ()
             SumRep elements -> for_ elements go
             ProductRep elements -> for_ elements go
+            ArrayRep inner -> go inner
             PrimitiveRep{} -> pure ()
             Kind -> pure ()
 
@@ -1294,6 +1310,7 @@ solveMonomorphized onMetaVar loc env type_ =
             Effect -> pure ()
             SumRep elements -> for_ elements go
             ProductRep elements -> for_ elements go
+            ArrayRep inner -> go inner
             PrimitiveRep{} -> pure ()
             Kind -> pure ()
 

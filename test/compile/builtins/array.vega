@@ -1,0 +1,7 @@
+import internal:Internal (replicateArray, readArray)
+
+main : () -> ();
+main() = {
+    let array = replicateArray(5, "a");
+    let _ = readArray(array, 2);
+}

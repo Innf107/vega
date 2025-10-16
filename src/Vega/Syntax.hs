@@ -13,6 +13,7 @@ import GHC.Generics (Generically (..))
 import System.IO.Unsafe (unsafePerformIO)
 import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, lparen, meta, rparen, skolem, (<+>))
 import Vega.Seq.NonEmpty (NonEmpty (..))
+import qualified Data.HashMap.Strict as HashMap
 
 newtype PackageName = MkPackageName Text
     deriving stock (Generic, Eq, Show, Ord)
@@ -70,6 +71,9 @@ unqualifiedName = \case
 
 internalModuleName :: ModuleName
 internalModuleName = MkModuleName{package = MkPackageName "internal", subModules = "Internal" :<|| []}
+
+internalDeclarationName :: DeclarationName
+internalDeclarationName = MkDeclarationName{moduleName = internalModuleName, name = "internal"}
 
 internalName :: Text -> GlobalName
 internalName name = MkGlobalName{name, moduleName = internalModuleName}
@@ -256,6 +260,7 @@ data TypeSyntax p
     | EffectS Loc
     | SumRepS Loc (Seq (TypeSyntax p))
     | ProductRepS Loc (Seq (TypeSyntax p))
+    | ArrayRepS Loc (TypeSyntax p)
     | PrimitiveRepS Loc PrimitiveRep
     | KindS Loc
     deriving stock (Generic)
@@ -330,6 +335,7 @@ data Type
     | -- Representations
       SumRep (Seq Type)
     | ProductRep (Seq Type)
+    | ArrayRep Type -- TODO: this should really be an AbstractRep (just like the primitiveReps)
     | PrimitiveRep PrimitiveRep
     deriving (Generic)
 
@@ -392,14 +398,18 @@ newtype ImportScope
     = MkImportScope
     { imports :: HashMap ModuleName ImportedItems
     }
-    deriving stock (Eq, Generic)
-    deriving newtype (Semigroup, Monoid)
+    deriving stock (Show, Eq, Generic)
+    deriving newtype (Monoid)
+
+-- TODO: if we use a hash map here this is actually quite inefficient
+instance Semigroup ImportScope where
+    scope1 <> scope2 = MkImportScope {imports = HashMap.unionWith (<>) scope1.imports scope2.imports }
 
 data ImportedItems = MkImportedItems
     { qualifiedAliases :: HashSet Text
     , unqualifiedItems :: HashSet Text
     }
-    deriving (Eq, Generic)
+    deriving (Show, Eq, Generic)
     deriving (Semigroup, Monoid) via Generically ImportedItems
 
 instance Pretty Type where
@@ -431,6 +441,7 @@ instance Pretty Type where
         Effect -> keyword "Effect"
         SumRep reps -> lparen "(" <> intercalateDoc (keyword "+") (fmap pretty reps) <> rparen ")"
         ProductRep reps -> lparen "(" <> intercalateDoc (keyword "*") (fmap pretty reps) <> rparen ")"
+        ArrayRep inner -> keyword "ArrayRep" <> lparen "(" <> pretty inner <> rparen ")"
         PrimitiveRep rep -> pretty rep
         Kind -> keyword "Kind"
 

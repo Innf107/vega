@@ -145,7 +145,7 @@ findGlobalOrDummy loc nameKind name =
             pure (Local (dummyLocalName parent name))
 
 isInScope :: GlobalName -> ImportScope -> Bool
-isInScope name scope = do
+isInScope name scope =
     case lookup name.moduleName scope.imports of
         Nothing -> False
         Just importedItems ->
@@ -258,6 +258,9 @@ renameTypeSyntax env = \case
     ProductRepS loc elements -> do
         elements <- traverse (renameTypeSyntax env) elements
         pure (ProductRepS loc elements)
+    ArrayRepS loc inner -> do
+        inner <- renameTypeSyntax env inner
+        pure (ArrayRepS loc inner)
     PrimitiveRepS loc rep -> pure (PrimitiveRepS loc rep)
     KindS loc -> pure (KindS loc)
 
