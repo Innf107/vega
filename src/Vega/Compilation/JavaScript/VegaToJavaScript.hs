@@ -207,8 +207,8 @@ compileCaseTree compileGoal scrutinees caseTree = go scrutinees caseTree
             subTreeStatements <- go (variables <> rest) subTree
             pure $ JS.DestructureArray variables (JS.Var scrutinee) :<| subTreeStatements
         BindVar name subTree -> do
-            let (scrutinee, rest) = consume scrutinees
-            subTreeStatements <- go rest subTree
+            let (scrutinee, _) = consume scrutinees
+            subTreeStatements <- go scrutinees subTree
             pure $ JS.Const (JS.compileLocalName name) (JS.Var scrutinee) :<| subTreeStatements
         Ignore subTree -> do
             let (_, rest) = consume scrutinees
