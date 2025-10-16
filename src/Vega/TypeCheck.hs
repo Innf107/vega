@@ -29,7 +29,7 @@ import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutput
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.Panic (panic)
-import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>))
+import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>), intercalateDoc)
 import Vega.Seq.NonEmpty (toSeq, pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.TypeCheck.Zonk (zonk)

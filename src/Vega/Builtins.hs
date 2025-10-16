@@ -74,6 +74,7 @@ arrayType = TypeConstructor (Global (internalName "Array"))
 (@@) :: Type -> Seq Type -> Type
 (@@) = TypeApplication
 
+infixr 0 -->
 (-->) :: Seq Type -> Type -> Type
 parameters --> result = Function parameters Pure result
 
