@@ -141,7 +141,7 @@ compileStatements (statement :<| rest) = case statement of
 
         let caseTree = PatternMatching.compileMatch ((pattern_, ()) :<|| [])
         rest <- compileStatements rest
-        matchStatements <- compileCaseTree (\_ -> pure rest) varName caseTree
+        matchStatements <- compileCaseTree (\_ -> pure rest) [varName] caseTree
 
         pure $ ([JS.Const varName jsExpr] <> matchStatements)
     LetFunction{name, typeSignature = _, parameters, body} -> do
@@ -156,14 +156,14 @@ compileSequentialPatterns :: (Compile es) => Seq (JS.Name, Pattern Typed) -> Exp
 compileSequentialPatterns scrutineesAndPatterns expr = do
     let caseTree = PatternMatching.serializeSubPatterns (fmap snd scrutineesAndPatterns) expr
 
-    compileCaseTree compileLeaf undefined caseTree
+    compileCaseTree compileLeaf (fmap fst scrutineesAndPatterns) caseTree
 
 compilePatternMatch :: (Compile es) => JS.Name -> Seq (MatchCase Typed) -> Eff es (Seq JS.Statement)
 compilePatternMatch scrutinee cases = case cases of
-    Empty -> undefined
+    Empty -> pure [JS.Panic "PANIC: empty match expression evaluated"]
     NonEmpty cases -> do
         let caseTree = PatternMatching.compileMatch (fmap (\MkMatchCase{pattern_, body} -> (pattern_, body)) cases)
-        compileCaseTree compileLeaf scrutinee caseTree
+        compileCaseTree compileLeaf [scrutinee] caseTree
 
 compileLeaf :: (Compile es) => Expr Typed -> Eff es (Seq JS.Statement)
 compileLeaf expr = do
@@ -173,8 +173,8 @@ compileLeaf expr = do
 -- TODO: Unlike VegaToCore, this currently doesn't attempt to deduplicate join points at all.
 -- However, in the future, we're going to replace this entire module with CoreToJavaScript anyway
 -- so it's probably not worth the effort.
-compileCaseTree :: (Compile es) => (goal -> Eff es (Seq JS.Statement)) -> JS.Name -> CaseTree goal -> Eff es (Seq JS.Statement)
-compileCaseTree compileGoal scrutinee caseTree = go [scrutinee] caseTree
+compileCaseTree :: (Compile es) => (goal -> Eff es (Seq JS.Statement)) -> Seq JS.Name -> CaseTree goal -> Eff es (Seq JS.Statement)
+compileCaseTree compileGoal scrutinees caseTree = go scrutinees caseTree
   where
     go scrutinees = \case
         Leaf goal -> compileGoal goal

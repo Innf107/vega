@@ -27,6 +27,7 @@ data Statement
         , default_ :: Maybe (Seq Statement)
         }
     | DestructureArray (Seq Name) Expr
+    | Panic Text
 
 data Expr
     = IIFE (Seq Statement)
@@ -77,6 +78,7 @@ renderStatement = \case
             <> renderedDefault
             <> "}\n"
     DestructureArray bindings arrayExpr -> "const [" <> intercalateMap ", " TextBuilder.text bindings <> "] = " <> renderExpr arrayExpr
+    Panic message -> "throw '" <> escapeString message <> "'"
 
 renderStatements :: (Foldable f) => f Statement -> TextBuilder
 renderStatements statements = intercalateMap ";\n" renderStatement statements
