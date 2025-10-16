@@ -1063,6 +1063,7 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
         let unificationFailure = typeError (UnableToUnify{loc, expectedType = type2, actualType = type1})
         type1 <- followMetas type1
         type2 <- followMetas type2
+        trace UnifyAll (pretty type1 <+> keyword "~" <+> pretty type2)
         case (type1, type2) of
             (!type1, !type2) | isTrue# (reallyUnsafePtrEquality type1 type2) -> pure ()
             (MetaVar meta1, _) -> bindMeta loc env meta1 type2
