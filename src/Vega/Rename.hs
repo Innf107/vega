@@ -235,6 +235,14 @@ renameTypeSyntax env = \case
         (env, typeVarBinders) <- renameTypeVarBinders env typeVarBinders
         body <- renameTypeSyntax env body
         pure (ForallS loc typeVarBinders body)
+    ExistsS loc binders body -> do
+        let renameExistentialBinder env (name, kind) = do
+                (name, envTrans) <- bindTypeVariable name
+                kind <- renameKindSyntax env kind
+                pure (envTrans env, (name, kind))
+        (env, binders) <- mapAccumLM renameExistentialBinder env binders
+        body <- renameTypeSyntax env body
+        pure (ExistsS loc binders body)
     PureFunctionS loc parameters resultType -> do
         parameters <- traverse (renameTypeSyntax env) parameters
         resultType <- renameTypeSyntax env resultType

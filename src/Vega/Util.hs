@@ -18,6 +18,7 @@ module Vega.Util (
     forIndexed,
     These (..),
     zipWithLongest,
+    spanMaybe,
 ) where
 
 import Data.HashMap.Strict qualified as HashMap
@@ -139,3 +140,12 @@ zipWithLongest f seq1 seq2 = case (seq1, seq2) of
     (x :<| xs, y :<| ys) -> f (Both x y) :<| zipWithLongest f xs ys
     (x :<| xs, Empty) -> f (This x) :<| zipWithLongest f xs Empty
     (Empty, y :<| ys) -> f (That y) :<| zipWithLongest f Empty ys
+
+spanMaybe :: (a -> Maybe b) -> Seq a -> (Seq b, Seq a)
+spanMaybe f seq = go [] seq
+  where
+    go passed = \case
+        Empty -> (passed, Empty)
+        (x :<| xs)
+            | Just y <- f x -> go (passed :|> y) xs
+            | otherwise -> (passed, x :<| xs)

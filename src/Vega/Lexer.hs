@@ -248,6 +248,7 @@ lexIdentifier chars state = case state of
         case fromString (reverse chars) of
             "data" -> pure (Data, state)
             "forall" -> pure (Forall, state)
+            "exists" -> pure (Exists, state)
             "as" -> pure (As, state)
             "if" -> pure (If, state)
             "then" -> pure (Then, state)

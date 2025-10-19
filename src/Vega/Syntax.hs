@@ -1,4 +1,5 @@
 {-# OPTIONS_GHC -Wno-missing-export-lists #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Vega.Syntax where
 
@@ -251,6 +252,7 @@ data TypeSyntax p
     | TypeApplicationS Loc (TypeSyntax p) (Seq (TypeSyntax p))
     | TypeVarS Loc (XLocalName p)
     | ForallS Loc (NonEmpty (ForallBinderS p)) (TypeSyntax p)
+    | ExistsS Loc (NonEmpty (XLocalName p, KindSyntax p)) (TypeSyntax p)
     | PureFunctionS Loc (Seq (TypeSyntax p)) (TypeSyntax p)
     | FunctionS Loc (Seq (TypeSyntax p)) (EffectSyntax p) (TypeSyntax p)
     | TupleS Loc (Seq (TypeSyntax p))
@@ -265,6 +267,9 @@ data TypeSyntax p
     | KindS Loc
     deriving stock (Generic)
     deriving anyclass (HasLoc)
+
+deriving instance (Eq (XName p), Eq (XLocalName p)) => Eq (TypeSyntax p)
+deriving instance (Ord (XName p), Ord (XLocalName p)) => Ord (TypeSyntax p)
 
 type KindSyntax = TypeSyntax
 
@@ -283,12 +288,12 @@ forall_ (x :<| xs) result = Forall (x :<|| xs) result
 data Monomorphization
     = Monomorphized
     | Parametric
-    deriving (Generic, Show, Eq)
+    deriving (Generic, Show, Eq, Ord)
 
 data BinderVisibility
     = Visible
     | Inferred
-    deriving (Generic, Show, Eq)
+    deriving (Generic, Show, Eq, Ord)
 
 data ForallBinderS p
     = UnspecifiedBinderS
@@ -305,6 +310,9 @@ data ForallBinderS p
         }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
+
+deriving instance (Eq (XName p), Eq (XLocalName p)) => Eq (ForallBinderS p)
+deriving instance (Ord (XName p), Ord (XLocalName p)) => Ord (ForallBinderS p)
 
 data ForallBinder = MkForallBinder
     { varName :: LocalName
@@ -345,7 +353,7 @@ data PrimitiveRep
     | BoxedRep
     | IntRep
     | DoubleRep
-    deriving (Generic, Eq)
+    deriving (Generic, Eq, Ord)
 
 instance Pretty PrimitiveRep where
     pretty = \case
@@ -507,3 +515,11 @@ typeOfGlobal global = \case
                 case parameterTypes of
                     Empty -> forallS loc typeParameters $ appliedType
                     _ -> forallS loc typeParameters $ PureFunctionS loc parameterTypes appliedType
+
+{- NOTE: Ord instances
+-----------------------------------------------------
+Nearly all derived `Ord` instances in this module are entirely meaningless.
+We only need to derive them because megaparsec stores its custom parse errors
+in a `Set` and we sometimes need to store AST nodes to improve our error messages
+(e.g. InvalidExistentialBinder contains the ForallBinderS value the user actually wrote)
+-}

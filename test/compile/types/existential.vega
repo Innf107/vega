@@ -1,0 +1,11 @@
+
+f : forall () -> exists (a : Type(IntRep)). (Int -> a, a -> String);
+f() = (\_ -> True, \_ -> "a");
+
+main : () -> ();
+main() = {
+    let (makeA, render) = f();
+    let blah = makeA(5);
+    let _ = render(blah);
+}
+

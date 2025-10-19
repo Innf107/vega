@@ -32,6 +32,7 @@ data Token
     | Let
     | Data
     | Forall
+    | Exists
     | As
     | DoubleAmpersand
     | DoublePipe
@@ -82,6 +83,7 @@ instance Pretty Token where
         Let -> Pretty.keyword "let"
         Data -> Pretty.keyword "data"
         Forall -> Pretty.keyword "forall"
+        Exists -> Pretty.keyword "exists"
         As -> Pretty.keyword "as"
         DoubleAmpersand -> Pretty.keyword "&&"
         DoublePipe -> Pretty.keyword "||"

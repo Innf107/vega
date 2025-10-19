@@ -14,9 +14,10 @@ import Text.Megaparsec hiding (Token, many, parse, sepBy, sepBy1, sepEndBy, sing
 import Text.Megaparsec qualified as MegaParsec
 import Vega.Lexer.Token as Lexer (Token (..))
 import Vega.Loc (HasLoc, Loc (MkLoc, endColumn, endLine, file, startColumn, startLine), getLoc)
-import Vega.Seq.NonEmpty (NonEmpty (..), pattern (:<||))
+import Vega.Seq.NonEmpty (NonEmpty (..), pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax qualified as Syntax
+import Vega.Util (partitionWithSeq)
 
 data AdditionalParseError
     = MismatchedFunctionName
@@ -26,6 +27,7 @@ data AdditionalParseError
         }
     | UnknowNamedKind Loc Text
     | NonVarInFunctionDefinition Loc
+    | InvalidExistentialBinder (ForallBinderS Parsed)
     deriving stock (Eq, Ord, Generic)
     deriving anyclass (HasLoc)
 
@@ -309,6 +311,29 @@ forall_ = do
     _ <- single Lexer.Period
     remainingType <- type_
     pure (ForallS (startLoc <> getLoc remainingType) vars remainingType)
+
+exists :: Parser (TypeSyntax Parsed)
+exists = do
+    startLoc <- single Lexer.Exists
+    binders <- many1Seq typeVarBinder
+    _ <- single Lexer.Period
+    remainingType <- type_
+
+    let (invalidBinders, existentials) = partitionWithSeq (NonEmpty.toSeq binders) \case
+            TypeVarBinderS{varName, kind, monomorphization = Parametric, visibility = Visible} -> Right (varName, kind)
+            binder -> Left binder
+
+    case invalidBinders of
+        Empty -> pure ()
+        _ ->
+            registerFancyFailure
+                (fromList (fmap (\binder -> ErrorCustom (InvalidExistentialBinder binder)) (toList invalidBinders)))
+
+    case existentials of
+        Empty ->
+            {- this is only possible if all binders were invalid -}
+            pure remainingType
+        NonEmpty existentials -> pure (ExistsS (startLoc <> getLoc remainingType) existentials remainingType)
 
 typeVarBinder :: Parser (ForallBinderS Parsed)
 typeVarBinder =

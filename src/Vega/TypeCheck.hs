@@ -29,8 +29,8 @@ import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutput
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.Panic (panic)
-import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>), intercalateDoc)
-import Vega.Seq.NonEmpty (toSeq, pattern NonEmpty)
+import Vega.Pretty (emphasis, errorText, intercalateDoc, keyword, pretty, (<+>))
+import Vega.Seq.NonEmpty (NonEmpty (..), toSeq, pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.TypeCheck.Zonk (zonk)
 import Vega.Util qualified as Util
@@ -606,7 +606,16 @@ bindTypeParameters loc env initialParameters polytype = fmap swap $ evalState (t
                     case rest of
                         [] -> pure (LastInstantiation skolem)
                         _ -> pure (InstantiateWith skolem)
-    remainingType <- instantiateGeneric skolemizeStrategy onVisible loc env polytype
+    remainingType <-
+        instantiateGeneric
+            MkGenericInstantiation
+                { onInferred = skolemizeStrategy
+                , onVisible = onVisible
+                , onExistential = instantiateExistentialToMetaStrategy
+                }
+            loc
+            env
+            polytype
     parameters <- get @(List (Loc, LocalName))
     case parameters of
         [] -> pure remainingType
@@ -714,6 +723,8 @@ inferType env syntax = do
                 , forall_ (fold typeVarBinders) body
                 , ForallS loc typeVarBinderSyntax bodySyntax
                 )
+        ExistsS loc binders body -> do
+            undefined
         PureFunctionS loc parameters result -> do
             (_parameterReps, parameterTypes, parameterTypeSyntax) <- unzip3Seq <$> traverse (inferTypeRep env) parameters
             (_resultRep, resultType, resultTypeSyntax) <- inferTypeRep env result
@@ -941,40 +952,86 @@ instantiateToMetaStrategy loc env MkForallBinder{varName, visibility = _, kind, 
     assertMonomorphizability loc env meta monomorphization
     pure (InstantiateWith meta)
 
+instantiateExistentialToMetaStrategy :: (TypeCheck es) => Loc -> Env -> LocalName -> Kind -> Eff es InstantiationResult
+instantiateExistentialToMetaStrategy _loc _env varName kind = do
+    meta <- MetaVar <$> freshMeta varName.name kind
+    pure (InstantiateWith meta)
+
 skolemizeStrategy :: (TypeCheck es) => Loc -> Env -> ForallBinder -> Eff es InstantiationResult
 skolemizeStrategy _loc _env MkForallBinder{varName, visibility = _, kind, monomorphization} = do
     skolem <- Skolem <$> freshSkolem varName monomorphization kind
     pure (InstantiateWith skolem)
 
+skolemizeExistentialStrategy :: (TypeCheck es) => Loc -> Env -> LocalName -> Kind -> Eff es InstantiationResult
+skolemizeExistentialStrategy _loc _env varName kind = do
+    skolem <- Skolem <$> freshSkolem varName Parametric kind
+    pure (InstantiateWith skolem)
+
+data GenericInstantiation es = MkGenericInstantiation
+    { onInferred :: Loc -> Env -> ForallBinder -> Eff es InstantiationResult
+    , onVisible :: Loc -> Env -> ForallBinder -> Eff es InstantiationResult
+    , onExistential :: Loc -> Env -> LocalName -> Kind -> Eff es InstantiationResult
+    }
+
 instantiateGeneric ::
     forall es.
     (TypeCheck es) =>
-    (Loc -> Env -> ForallBinder -> Eff es InstantiationResult) ->
-    (Loc -> Env -> ForallBinder -> Eff es InstantiationResult) ->
+    GenericInstantiation es ->
     Loc ->
     Env ->
     Type ->
     Eff es Type
-instantiateGeneric onInferred onVisible loc env type_ = case normalizeForalls type_ of
-    Forall binders body -> do
-        let substituteBinder substitution MkForallBinder{varName, visibility, kind, monomorphization} = do
-                kind <- substituteTypeVariables substitution kind
-                pure (MkForallBinder{varName, visibility, kind, monomorphization})
+instantiateGeneric instantiation loc env type_ = do
+    let (binders, body) = collectPrenexBinders type_
 
-        let go substitution = \case
-                Empty -> substituteTypeVariables substitution body
-                binder :<| remainingBinders -> do
-                    binder <- substituteBinder substitution binder
+    case binders of
+        [] -> pure type_
+        _ -> do
+            let substituteForallBinder substitution MkForallBinder{varName, visibility, kind, monomorphization} = do
+                    kind <- substituteTypeVariables substitution kind
+                    pure (MkForallBinder{varName, visibility, kind, monomorphization})
 
-                    result <- case binder.visibility of
-                        Inferred -> onInferred loc env binder
-                        Visible -> onVisible loc env binder
-                    case result of
-                        StopInstantiating -> substituteTypeVariables substitution (forall_ (binder :<| remainingBinders) body)
-                        LastInstantiation type_ -> substituteTypeVariables (insert binder.varName type_ substitution) (forall_ remainingBinders body)
-                        InstantiateWith type_ -> go (insert binder.varName type_ substitution) remainingBinders
-        go mempty (toSeq binders)
-    type_ -> pure type_
+            let substituteExistentialBinder substitution (varName, kind) = do
+                    kind <- substituteTypeVariables substitution kind
+                    pure (varName, kind)
+
+            let go substitution = \case
+                    Empty -> substituteTypeVariables substitution body
+                    binder :<| remainingBinders -> do
+                        (varName, result) <- case binder of
+                            Left forallBinder -> do
+                                forallBinder <- substituteForallBinder substitution forallBinder
+
+                                result <- case forallBinder.visibility of
+                                    Inferred -> instantiation.onInferred loc env forallBinder
+                                    Visible -> instantiation.onVisible loc env forallBinder
+                                pure (forallBinder.varName, result)
+                            Right existentialBinder -> do
+                                (varName, kind) <- substituteExistentialBinder substitution existentialBinder
+                                result <- instantiation.onExistential loc env varName kind
+                                pure (varName, result)
+                        case result of
+                            StopInstantiating -> substituteTypeVariables substitution (reAddBinders (binder :<| remainingBinders) body)
+                            LastInstantiation type_ -> substituteTypeVariables (insert varName type_ substitution) (reAddBinders remainingBinders body)
+                            InstantiateWith type_ -> go (insert varName type_ substitution) remainingBinders
+            go mempty binders
+
+collectPrenexBinders :: Type -> (Seq (Either ForallBinder (LocalName, Kind)), Type)
+collectPrenexBinders type_ = go [] type_
+  where
+    go foundBinders (Forall binders body) = go (foundBinders <> fmap Left (toSeq binders)) body
+    go foundBinders (Exists binders body) = go (foundBinders <> fmap Right (toSeq binders)) body
+    go foundBinders rhoType = (foundBinders, rhoType)
+
+reAddBinders :: Seq (Either ForallBinder (LocalName, Kind)) -> Type -> Type
+reAddBinders binders body = case binders of
+    Empty -> body
+    (Left forallBinder :<| remainingBinders) -> do
+        let (remainingPrefix, rest) = Util.spanMaybe (\case Left forallBinder -> Just forallBinder; Right _ -> Nothing) remainingBinders
+        forall_ (forallBinder :<| remainingPrefix) (reAddBinders rest body)
+    (Right existentialBinder :<| remainingBinders) -> do
+        let (remainingPrefix, rest) = Util.spanMaybe (\case Right existentialBinder -> Just existentialBinder; Left _ -> Nothing) remainingBinders
+        Exists (existentialBinder :<|| remainingPrefix) (reAddBinders rest body)
 
 instantiateWith :: (TypeCheck es) => Loc -> Env -> Type -> Seq Type -> Eff es Type
 instantiateWith loc env polytype initialArguments = evalState initialArguments do
@@ -989,7 +1046,16 @@ instantiateWith loc env polytype initialArguments = evalState initialArguments d
                     put rest
                     pure (InstantiateWith argument)
 
-    type_ <- instantiateGeneric instantiateToMetaStrategy onVisible loc env polytype
+    type_ <-
+        instantiateGeneric
+            MkGenericInstantiation
+                { onInferred = instantiateToMetaStrategy
+                , onVisible
+                , onExistential = skolemizeExistentialStrategy
+                }
+            loc
+            env
+            polytype
     remainingArguments <- get @(Seq Type)
     case remainingArguments of
         Empty -> pure type_
@@ -1009,35 +1075,28 @@ instantiateWith loc env polytype initialArguments = evalState initialArguments d
             pure type_
 
 instantiate :: (TypeCheck es) => Loc -> Env -> Type -> Eff es Type
-instantiate loc env type_ = instantiateGeneric instantiateToMetaStrategy instantiateToMetaStrategy loc env type_
+instantiate loc env type_ =
+    instantiateGeneric
+        MkGenericInstantiation
+            { onInferred = instantiateToMetaStrategy
+            , onVisible = instantiateToMetaStrategy
+            , onExistential = skolemizeExistentialStrategy
+            }
+        loc
+        env
+        type_
 
 skolemize :: (TypeCheck es) => Loc -> Env -> Type -> Eff es Type
-skolemize loc env type_ = instantiateGeneric skolemizeStrategy skolemizeStrategy loc env type_
-
-instantiateExistentialGeneric :: (TypeCheck es) => (LocalName -> Kind -> Eff es Type) -> Type -> Eff es Type
-instantiateExistentialGeneric intstantiateVar type_ = do
-    (binders, body) <- collectBinders type_
-    case binders of
-        Empty -> pure type_
-        NonEmpty binders -> do
-            substitution <-
-                fromList <$> for (toList binders) \(name, kind) -> do
-                    instantiated <- intstantiateVar name kind
-                    pure (name, instantiated)
-            substituteTypeVariables substitution body
-  where
-    collectBinders type_ =
-        followMetas type_ >>= \case
-            Exists binders body -> do
-                (remainingBinders, finalBody) <- collectBinders body
-                pure (toSeq binders <> remainingBinders, finalBody)
-            type_ -> pure (Empty, type_)
-
-instantiateExistential :: (TypeCheck es) => Type -> Eff es Type
-instantiateExistential type_ = instantiateExistentialGeneric (\name kind -> MetaVar <$> freshMeta name.name kind) type_
-
-skolemizeExistential :: (TypeCheck es) => Type -> Eff es Type
-skolemizeExistential type_ = instantiateExistentialGeneric (\name kind -> Skolem <$> freshSkolem name Parametric kind) type_
+skolemize loc env type_ =
+    instantiateGeneric
+        MkGenericInstantiation
+            { onInferred = skolemizeStrategy
+            , onVisible = skolemizeStrategy
+            , onExistential = instantiateExistentialToMetaStrategy
+            }
+        loc
+        env
+        type_
 
 {- | Collect repeated foralls into a single one.
 For example, this will turn `forall a b. forall c d. Int` into `forall a b c d. Int`
@@ -1150,12 +1209,12 @@ unifyExistentialSubtype :: (TypeCheck es) => Loc -> Env -> Type -> Type -> Eff e
 unifyExistentialSubtype loc env subtype supertype =
     followMetas subtype >>= \case
         Exists{} -> do
-            subtype <- skolemizeExistential subtype
+            subtype <- instantiate loc env subtype
             unifyExistentialSubtype loc env subtype supertype
         type1 ->
             followMetas supertype >>= \case
                 Exists{} -> do
-                    supertype <- instantiateExistential supertype
+                    supertype <- skolemize loc env supertype
                     unifyExistentialSubtype loc env subtype supertype
                 type2 -> unify loc env type1 type2
 
