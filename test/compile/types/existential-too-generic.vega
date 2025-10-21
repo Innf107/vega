@@ -1,6 +1,6 @@
 
 f : forall *(r : Rep). () -> exists (a : Type(r)). (Int -> a, a -> String);
-f() = (\_ -> True, \_ -> "a");
+f() = (\_ -> 4, \_ -> "a");
 
 main : () -> ();
 main() = {

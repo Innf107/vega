@@ -1,6 +1,6 @@
 
 f : exists (a : Type(IntRep)). (Int -> a, a -> String);
-f() = (\_ -> 3, \_ -> "a");
+f() = (\_ -> "not of kind IntRep", \_ -> "a");
 
 main : () -> ();
 main() = {

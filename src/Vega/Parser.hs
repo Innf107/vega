@@ -234,22 +234,27 @@ defineVariantType = do
 type_ :: Parser (TypeSyntax Parsed)
 type_ =
     choice
-        [ chainl1 type1 (single Arrow *> pure (\type1 type2 -> PureFunctionS (getLoc type1 <> getLoc type2) (fromList [type1]) type2))
-        , chainl1 type1 (effectArrow >>= \effect -> pure (\type1 type2 -> FunctionS (getLoc type1 <> getLoc type2) (fromList [type1]) effect type2))
+        [ chainl1 typeWithExistential (single Arrow *> pure (\type1 type2 -> PureFunctionS (getLoc type1 <> getLoc type2) (fromList [type1]) type2))
+        , chainl1 typeWithExistential (effectArrow >>= \effect -> pure (\type1 type2 -> FunctionS (getLoc type1 <> getLoc type2) (fromList [type1]) effect type2))
         ]
   where
-    type1 = do
-        typeConstructor <- type2
+    typeWithExistential =
+        choice
+            [ exists
+            , typeWithApplication
+            ]
+
+    typeWithApplication = do
+        typeConstructor <- typeLeaf
         applications <- many @[_] $ argumentsWithLoc type_
         pure $
             foldl'
                 (\constr (arguments, endLoc) -> TypeApplicationS (getLoc typeConstructor <> endLoc) constr arguments)
                 typeConstructor
                 applications
-    type2 =
+    typeLeaf =
         choice
-            [ -- typeApplication
-              forall_
+            [ forall_
             , do
                 (name, loc) <- constructorWithLoc
                 applications <- many @[_] (argumentsWithLoc type_)
