@@ -724,7 +724,19 @@ inferType env syntax = do
                 , ForallS loc typeVarBinderSyntax bodySyntax
                 )
         ExistsS loc binders body -> do
-            undefined
+            let applyExistentialBinder env (name, kindSyntax) = do
+                    (kind, kindSyntax) <- checkType env Parametric Kind kindSyntax
+                    pure (bindTypeVariable name (TypeVar name) kind Parametric env, (name, kind, kindSyntax))
+            (env, binders) <- mapAccumLM applyExistentialBinder env binders
+            (bodyKind, body, bodySyntax) <- inferType env body
+            pure
+            -- TODO: If the program is well-typed, this is definitely okay since the body kind cannot mention any of the variables
+            -- bound by the existential anyway (they're parametric). If it isn't, this might cause panics about unresolved type variables
+            -- later on though.
+                ( bodyKind
+                , Exists (fmap (\(name, kind, _) -> (name, kind)) binders) body
+                , ExistsS loc (fmap (\(name, _, kindSyntax) -> (name, kindSyntax)) binders) bodySyntax
+                )
         PureFunctionS loc parameters result -> do
             (_parameterReps, parameterTypes, parameterTypeSyntax) <- unzip3Seq <$> traverse (inferTypeRep env) parameters
             (_resultRep, resultType, resultTypeSyntax) <- inferTypeRep env result

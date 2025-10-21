@@ -447,8 +447,8 @@ instance Pretty Type where
         Rep -> keyword "Rep"
         Type rep -> keyword "Type" <> prettyArguments @[] [rep]
         Effect -> keyword "Effect"
-        SumRep reps -> lparen "(" <> intercalateDoc (keyword "+") (fmap pretty reps) <> rparen ")"
-        ProductRep reps -> lparen "(" <> intercalateDoc (keyword "*") (fmap pretty reps) <> rparen ")"
+        SumRep reps -> lparen "(" <> intercalateDoc (" " <> keyword "+" <> " ") (fmap pretty reps) <> rparen ")"
+        ProductRep reps -> lparen "(" <> intercalateDoc (" " <> keyword "*" <> " ") (fmap pretty reps) <> rparen ")"
         ArrayRep inner -> keyword "ArrayRep" <> lparen "(" <> pretty inner <> rparen ")"
         PrimitiveRep rep -> pretty rep
         Kind -> keyword "Kind"

@@ -1,0 +1,14 @@
+$FILE:7:27: ERROR:
+Unable to monomorphize ambiguous type ?r
+    Try adding a type signature
+  ┃ 
+7 ┃     let (makeA, render) = f();
+  ┃                           ▔
+$FILE:3:14: ERROR:
+Type mismatch
+  Unable to unify
+    expected type r
+      actual type IntRep
+  ┃ 
+3 ┃ f() = (\_ -> 4, \_ -> "a");
+  ┃              ▔

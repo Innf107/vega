@@ -1,5 +1,5 @@
 
-f : exists (a : Type(IntRep)). (Int -> a, a -> String);
+f : () -> exists (a : Type(IntRep)). (Int -> a, a -> String);
 f() = (\_ -> 3, \_ -> "a");
 
 main : () -> ();
