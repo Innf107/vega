@@ -59,7 +59,7 @@ import Data.Traversable (for)
 import Effectful.Concurrent.Async (forConcurrently, runConcurrent)
 import Vega.BuildConfig (Backend (..))
 import Vega.Compilation.Core.Syntax qualified as Core
-import Vega.Effect.Trace (Category (SCC), Trace, trace)
+import Vega.Effect.Trace (Category (SCC), Trace, trace, withTrace)
 import Vega.Pretty (Pretty (pretty))
 import Vega.SCC (SCCId, computeSCC)
 
@@ -359,7 +359,8 @@ getSCC declarationName = do
 
             sccs <- computeSCC outEdgesOrPrecomputedSCC declarationName
 
-            for_ (HashMap.toList sccs) \(declaration, scc) -> do
+            withTrace SCC ("SCCs determined for " <> pretty declarationName <> ":") $ for_ (HashMap.toList sccs) \(declaration, scc) -> do
+                trace SCC $ pretty declaration <> ": " <> show scc
                 setSCCId declaration scc
             case lookup declarationName sccs of
                 Nothing -> error $ "SCC map for declaration " <> show declarationName <> " is missing its own binding.\nSCCs: " <> show sccs

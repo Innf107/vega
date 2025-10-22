@@ -45,17 +45,23 @@ computeSCC outEdgesOrPrecomputedSCC node = do
             writeIORef currentDFSNum (dfsNum + 1)
             modifyIORef' dfsNums (insert node dfsNum)
             outEdgesOrPrecomputedSCC node >>= \case
-                Nothing -> pure ()
+                Nothing -> do
+                    pure ()
                 Just neighbors -> do
                     for_ neighbors \neighbor -> do
                         visitedUntilNow <- readIORef visited
                         case HashSet.member neighbor visitedUntilNow of
-                            False -> do
-                                modifyIORef' visited (HashSet.insert neighbor)
-                                modifyIORef' openSCCs (neighbor :)
-                                modifyIORef' openNodes (neighbor :)
+                            False -> outEdgesOrPrecomputedSCC neighbor >>= \case
+                                    Nothing -> 
+                                        -- If the neighboring node cannot be part of this SCC, we shouldn't insert it into
+                                        -- openSCCs/openNodes
+                                        pure ()
+                                    Just _ -> do
+                                        modifyIORef' visited (HashSet.insert neighbor)
+                                        modifyIORef' openSCCs (neighbor :)
+                                        modifyIORef' openNodes (neighbor :)
 
-                                go neighbor
+                                        go neighbor
                             True -> do
                                 dfsNumsUntilNow <- readIORef dfsNums
                                 let dfsNumOf otherNode = case lookup otherNode dfsNumsUntilNow of
