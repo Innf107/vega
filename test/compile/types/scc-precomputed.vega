@@ -1,0 +1,13 @@
+
+data GameState = GameState;
+
+data TurnResult =
+    | Success(GameState);
+
+turn : GameState -> TurnResult;
+turn(x) = turn(x);
+
+main : () -> ();
+main() = {
+    let _ = turn;
+};
