@@ -1392,5 +1392,11 @@ solveConstraints :: (SolveConstraints es) => List DeferredConstraint -> Eff es (
 solveConstraints = \case
     [] -> pure ()
     (AssertMonomorphized loc env type_ : rest) -> do
-        solveMonomorphized (\meta -> typeError (AmbiguousMono{loc, type_ = MetaVar meta})) loc env type_
+        solveMonomorphized (\meta -> 
+            -- If this gets called, we know that the meta variable was definitely unused and so we could default it to
+            -- whatever we want, including () which is monomorphizable and satisfies this constraint.
+            -- (Note that we don't *literally* assign the meta variable since we don't want to mess up error messages.
+            -- Instead, Core generation gives unbound unification variables a `Unit` representation, which accomplishes
+            -- the same goal.)
+            pure ()) loc env type_
         solveConstraints rest

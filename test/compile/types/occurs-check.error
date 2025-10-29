@@ -7,21 +7,3 @@ Occurs check violation
   ┃ 
 9 ┃     let g = \y -> sameType(y, Wrapper(y));
   ┃                               ▔▔▔▔▔▔▔▔▔▔
-$FILE:9:19: ERROR:
-Unable to monomorphize ambiguous type ?r
-    Try adding a type signature
-  ┃ 
-9 ┃     let g = \y -> sameType(y, Wrapper(y));
-  ┃                   ▔▔▔▔▔▔▔▔
-$FILE:9:31: ERROR:
-Unable to monomorphize ambiguous type ?r
-    Try adding a type signature
-  ┃ 
-9 ┃     let g = \y -> sameType(y, Wrapper(y));
-  ┃                               ▔▔▔▔▔▔▔
-$FILE:9:31: ERROR:
-Unable to monomorphize ambiguous type ?r
-    Try adding a type signature
-  ┃ 
-9 ┃     let g = \y -> sameType(y, Wrapper(y));
-  ┃                               ▔▔▔▔▔▔▔▔▔▔

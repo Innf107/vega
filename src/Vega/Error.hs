@@ -130,10 +130,6 @@ data TypeError
         , varName :: LocalName
         , fullType :: Maybe Type
         }
-    | AmbiguousMono
-        { loc :: Loc
-        , type_ :: Type
-        }
     | TryingToBindTooManyTypeParameters
         { loc :: Loc
         , boundCount :: Int
@@ -374,10 +370,6 @@ renderCompilationError = \case
                             Just type_ ->
                                 "\n    Trying to unify type" <+> pretty type_
                                     <> "\n    with a monomorphizable type parameter"
-        AmbiguousMono{loc = _, type_} ->
-            align $
-                emphasis "Unable to monomorphize ambiguous type" <+> pretty type_
-                    <> "\n    Try adding a type signature"
         TryingToBindTooManyTypeParameters{loc = _, type_, boundCount, actualCount = 0} ->
             align $
                 emphasis "Trying to bind" <+> pluralNumber emphasis boundCount "type parameter" <+> emphasis "of the" <+> emphasis "monomorphic type"

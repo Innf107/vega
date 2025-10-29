@@ -1,0 +1,8 @@
+
+doesntReturn : forall a. () -> a;
+doesntReturn() = doesntReturn();
+
+main : () -> ();
+main() = {
+    let _ = doesntReturn;
+}
