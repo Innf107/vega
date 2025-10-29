@@ -64,6 +64,7 @@ data Literal
 data Representation
     = ProductRep (Seq Representation)
     | SumRep (Seq Representation)
+    | ArrayRep Representation
     | PrimitiveRep Vega.PrimitiveRep
 
 nameToCoreName :: Vega.Name -> CoreName
@@ -74,6 +75,7 @@ nameToCoreName = \case
 instance Pretty Representation where
     pretty (ProductRep representations) = lparen "(" <> intercalateDoc (" " <> keyword "*" <> " ") (fmap pretty representations) <> rparen ")"
     pretty (SumRep representations) = lparen "(" <> intercalateDoc (" " <> keyword "+" <> " ") (fmap pretty representations) <> rparen ")"
+    pretty (ArrayRep inner) = keyword "ArrayRep" <> lparen "(" <> pretty inner <> rparen ")"
     pretty (PrimitiveRep rep) = pretty rep
 
 instance Pretty Declaration where

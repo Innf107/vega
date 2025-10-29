@@ -1,5 +1,5 @@
-{-# OPTIONS_GHC -Wno-missing-export-lists #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS_GHC -Wno-missing-export-lists #-}
 
 module Vega.Syntax where
 
@@ -7,6 +7,8 @@ import Data.Unique (Unique)
 import Relude hiding (NonEmpty, State, Type, evalState, get, put)
 import Vega.Loc (HasLoc, Loc)
 
+import Data.HashMap.Strict qualified as HashMap
+import Data.Kind qualified as Haskell (Type)
 import Data.Sequence (Seq (..))
 import Data.Text qualified as Text
 import Effectful (Eff, IOE, runEff, (:>))
@@ -14,7 +16,6 @@ import GHC.Generics (Generically (..))
 import System.IO.Unsafe (unsafePerformIO)
 import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, lparen, meta, rparen, skolem, (<+>))
 import Vega.Seq.NonEmpty (NonEmpty (..))
-import qualified Data.HashMap.Strict as HashMap
 
 newtype PackageName = MkPackageName Text
     deriving stock (Generic, Eq, Show, Ord)
@@ -111,7 +112,8 @@ data Declaration p = MkDeclaration
 
 data DeclarationSyntax p
     = DefineFunction
-        { name :: GlobalName
+        { ext :: XDefineFunction p
+        , name :: GlobalName
         , typeSignature :: TypeSyntax p
         , declaredTypeParameters :: Seq (Loc, XLocalName p)
         , parameters :: Seq (Pattern p)
@@ -123,6 +125,15 @@ data DeclarationSyntax p
         , constructors :: Seq (Loc, GlobalName, Seq (TypeSyntax p))
         }
     deriving stock (Generic)
+
+type family XDefineFunction p where
+    XDefineFunction Parsed = ()
+    XDefineFunction Renamed = ()
+    XDefineFunction Typed = DefineFunctionTypedExt
+
+data DefineFunctionTypedExt = MkDefineFunctionTypedExt
+    { returnRepresentation :: Kind
+    }
 
 data Expr p
     = Var Loc (XName p)
@@ -411,7 +422,7 @@ newtype ImportScope
 
 -- TODO: if we use a hash map here this is actually quite inefficient
 instance Semigroup ImportScope where
-    scope1 <> scope2 = MkImportScope {imports = HashMap.unionWith (<>) scope1.imports scope2.imports }
+    scope1 <> scope2 = MkImportScope{imports = HashMap.unionWith (<>) scope1.imports scope2.imports}
 
 data ImportedItems = MkImportedItems
     { qualifiedAliases :: HashSet Text

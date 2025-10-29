@@ -140,5 +140,6 @@ deriving via DiffFromEq Text instance Diff Text
 deriving via DiffFromEq Int instance Diff Int
 deriving via DiffFromEq Integer instance Diff Integer
 deriving via DiffFromEq Rational instance Diff Rational
+deriving via DiffFromEq () instance Diff ()
 
 deriving via IgnoredInDiff Loc instance Diff Loc

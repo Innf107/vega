@@ -187,7 +187,8 @@ defineFunction = do
             { name = declarationName
             , syntax =
                 DefineFunction
-                    { name
+                    { ext = ()
+                    , name
                     , typeSignature
                     , declaredTypeParameters
                     , parameters

@@ -235,7 +235,7 @@ computeAndCacheKind declaration = withTrace KindCheck ("computeAndCacheKind: " <
 
 checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
 checkDeclarationSyntax loc = \case
-    DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body} -> do
+    DefineFunction{ext, name, typeSignature, declaredTypeParameters, parameters, body} -> do
         let env = emptyEnv
         (functionType, typeSignature) <- checkType env Parametric (Type (PrimitiveRep BoxedRep)) typeSignature
 
@@ -267,7 +267,18 @@ checkDeclarationSyntax loc = \case
 
         body <- check env effect returnType body
 
-        pure DefineFunction{name, typeSignature, declaredTypeParameters, parameters, body}
+        -- TODO: add metadata for error messages in case this fails (i think it should have thrown earlier in that case though)
+        returnRepresentation <- representationOfType (getLoc typeSignature) env returnType
+
+        pure
+            DefineFunction
+                { ext = MkDefineFunctionTypedExt{returnRepresentation = returnRepresentation}
+                , name
+                , typeSignature
+                , declaredTypeParameters
+                , parameters
+                , body
+                }
     DefineVariantType{name, typeParameters, constructors} -> do
         let env = emptyEnv
         (env, binders) <- mapAccumLM applyForallBinder env typeParameters
@@ -730,9 +741,9 @@ inferType env syntax = do
             (env, binders) <- mapAccumLM applyExistentialBinder env binders
             (bodyKind, body, bodySyntax) <- inferType env body
             pure
-            -- TODO: If the program is well-typed, this is definitely okay since the body kind cannot mention any of the variables
-            -- bound by the existential anyway (they're parametric). If it isn't, this might cause panics about unresolved type variables
-            -- later on though.
+                -- TODO: If the program is well-typed, this is definitely okay since the body kind cannot mention any of the variables
+                -- bound by the existential anyway (they're parametric). If it isn't, this might cause panics about unresolved type variables
+                -- later on though.
                 ( bodyKind
                 , Exists (fmap (\(name, kind, _) -> (name, kind)) binders) body
                 , ExistsS loc (fmap (\(name, _, kindSyntax) -> (name, kindSyntax)) binders) bodySyntax
@@ -882,6 +893,15 @@ splitFunctionType loc env expectedParameterCount type_ = do
             result <- MetaVar <$> freshTypeMeta "b"
             subsumes loc env type_ (Function parameters effect result)
             pure (parameters, effect, result, Nothing)
+
+representationOfType :: (TypeCheck es) => Loc -> Env -> Type -> Eff es Kind
+representationOfType loc env type_ =
+    kindOf loc env type_ >>= \case
+        Type repr -> pure repr
+        kind -> do
+            representationMeta <- MetaVar <$> freshMeta "r" Kind
+            unify loc env kind (Type representationMeta)
+            pure representationMeta
 
 substituteTypeVariables :: (TypeCheck es) => (HashMap LocalName Type) -> Type -> Eff es Type
 substituteTypeVariables substitution type_ =
@@ -1392,11 +1412,16 @@ solveConstraints :: (SolveConstraints es) => List DeferredConstraint -> Eff es (
 solveConstraints = \case
     [] -> pure ()
     (AssertMonomorphized loc env type_ : rest) -> do
-        solveMonomorphized (\meta -> 
-            -- If this gets called, we know that the meta variable was definitely unused and so we could default it to
-            -- whatever we want, including () which is monomorphizable and satisfies this constraint.
-            -- (Note that we don't *literally* assign the meta variable since we don't want to mess up error messages.
-            -- Instead, Core generation gives unbound unification variables a `Unit` representation, which accomplishes
-            -- the same goal.)
-            pure ()) loc env type_
+        solveMonomorphized
+            ( \_meta ->
+                -- If this gets called, we know that the meta variable was definitely unused and so we could default it to
+                -- whatever we want, including () which is monomorphizable and satisfies this constraint.
+                -- (Note that we don't *literally* assign the meta variable since we don't want to mess up error messages.
+                -- Instead, Core generation gives unbound unification variables a `Unit` representation, which accomplishes
+                -- the same goal.)
+                pure ()
+            )
+            loc
+            env
+            type_
         solveConstraints rest

@@ -46,7 +46,7 @@ compileDeclaration declaration = do
 
 compileDeclarationSyntax :: (Compile es) => Vega.DeclarationSyntax Typed -> Eff es (Seq Core.Declaration)
 compileDeclarationSyntax = \case
-    Vega.DefineFunction{name, typeSignature = _, declaredTypeParameters = _, parameters, body} -> do
+    Vega.DefineFunction{ext, name, typeSignature = _, declaredTypeParameters = _, parameters, body} -> do
         coreParameters <- for parameters \(pattern_) -> do
             local <- newLocal
             pure (local, undefined pattern_)
@@ -56,11 +56,13 @@ compileDeclarationSyntax = \case
         trace Patterns $ "compileDeclarationSyntax(" <> Vega.prettyGlobal Vega.VarKind name <> "):" <+> pretty caseTree
 
         (caseStatements, caseExpr) <- compileCaseTree (\() -> compileExpr body) caseTree (fmap (\(local, _) -> Core.Var (Core.Local local)) coreParameters)
+
+        returnRepresentation <- convertRepresentation ext.returnRepresentation
         pure
             [ Core.DefineFunction
                 { name
                 , parameters = coreParameters
-                , returnRepresentation = undefined
+                , returnRepresentation
                 , statements = caseStatements
                 , result = caseExpr
                 }
@@ -288,6 +290,33 @@ newLocal = do
 booleanConstructorName :: Bool -> Vega.Name
 booleanConstructorName True = Vega.Global (Vega.internalName "True")
 booleanConstructorName False = Vega.Global (Vega.internalName "False")
+
+{- | Convert a representation represented as a vega type (of kind `Rep`) to a core representation.
+This is mostly blind unwrapping and following meta variables, except for the case for unbound meta variables where
+we give them representation `Unit` (which is like defaulting them to `()` but friendlier for error messages)
+-}
+convertRepresentation :: (Compile es) => Vega.Type -> Eff es Core.Representation
+convertRepresentation type_ = do
+    let invalidKind = panic $ "Invalid representation in conversion to Core: " <> pretty type_ <> "\n    This should have been caught in the type checker."
+    case type_ of
+        Vega.MetaVar{} -> pure $ Core.ProductRep []
+        Vega.SumRep representations -> Core.SumRep <$> traverse convertRepresentation representations
+        Vega.ProductRep representations -> Core.ProductRep <$> traverse convertRepresentation representations
+        Vega.ArrayRep inner -> Core.ArrayRep <$> convertRepresentation inner
+        Vega.PrimitiveRep rep -> pure $ Core.PrimitiveRep rep
+        Vega.Skolem{} -> undefined
+        Vega.TypeConstructor{} -> invalidKind
+        Vega.TypeApplication{} -> invalidKind
+        Vega.TypeVar{} -> undefined
+        Vega.Forall{} -> invalidKind
+        Vega.Exists{} -> invalidKind
+        Vega.Function{} -> invalidKind
+        Vega.Tuple{} -> invalidKind
+        Vega.Pure{} -> invalidKind
+        Vega.Rep{} -> invalidKind
+        Vega.Type{} -> invalidKind
+        Vega.Effect{} -> invalidKind
+        Vega.Kind{} -> invalidKind
 
 type Substitution = HashMap Core.LocalCoreName Core.Value
 
