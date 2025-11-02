@@ -29,7 +29,7 @@ import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutput
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.Panic (panic)
-import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>))
+import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>), note, align)
 import Vega.Seq.NonEmpty (NonEmpty (..), toSeq)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.TypeCheck.Zonk (zonk)
@@ -832,7 +832,7 @@ kindOf loc env = \case
 
 -- | Like checkType but on evaluated `Type`s rather than TypeSyntax
 checkEvaluatedType :: (TypeCheck es) => Loc -> Env -> Kind -> Type -> Eff es ()
-checkEvaluatedType loc env expectedKind type_ = do
+checkEvaluatedType loc env expectedKind type_ = withTrace KindCheck ("checkEvaluatedType: " <> pretty type_ <+> keyword "<=" <+> pretty expectedKind) do
     actualKind <- kindOf loc env type_
     subsumes loc env actualKind expectedKind
 
@@ -899,7 +899,7 @@ representationOfType loc env type_ =
     kindOf loc env type_ >>= \case
         Type repr -> pure repr
         kind -> do
-            representationMeta <- MetaVar <$> freshMeta "r" Kind
+            representationMeta <- MetaVar <$> freshMeta "r" Rep
             unify loc env kind (Type representationMeta)
             pure representationMeta
 
@@ -1251,7 +1251,7 @@ unifyExistentialSubtype loc env subtype supertype =
                 type2 -> unify loc env type1 type2
 
 bindMeta :: (TypeCheck es) => Loc -> Env -> MetaVar -> Type -> Eff es ()
-bindMeta loc env meta boundType =
+bindMeta loc env meta boundType = withTrace Unify (pretty meta <+> keyword ":=" <+> pretty boundType) do
     followMetas (MetaVar meta) >>= \case
         MetaVar meta -> do
             followMetas boundType >>= \case
@@ -1333,11 +1333,13 @@ unionAll :: (TypeCheck es) => Seq Effect -> Eff es Effect
 unionAll Empty = pure Pure
 unionAll (eff :<| rest) = pure eff `unionM` unionAll rest
 
-freshMeta :: (TypeCheck es) => Text -> Kind -> Eff es MetaVar
+freshMeta :: (HasCallStack, TypeCheck es) => Text -> Kind -> Eff es MetaVar
 freshMeta name kind = do
     identity <- liftIO newUnique
     underlying <- newIORef Nothing
-    pure $ MkMetaVar{underlying, identity, name, kind}
+    let meta = MkMetaVar{underlying, identity, name, kind}
+    trace MetaVars ("freshMeta" <+> align (keyword "~>" <+> pretty meta <+> keyword ":" <+> pretty kind <> "\n" <> note (toText $ prettyCallStack callStack)))
+    pure meta
 
 -- | Creates a fresh meta variable of kind (Type ?r) where ?r is another fresh meta variable
 freshTypeMeta :: (TypeCheck es) => Text -> Eff es MetaVar
@@ -1349,6 +1351,7 @@ dummyMetaOfUnknownKind :: (TypeCheck es) => Eff es Type
 dummyMetaOfUnknownKind = do
     metaKind <- MetaVar <$> freshMeta "k" Kind
     dummyMeta <- MetaVar <$> freshMeta "err" metaKind
+    trace TypeCheck $ "dummyMetaOfUnknownKind" <+> keyword "~>" <+> pretty dummyMeta <+> keyword ":" <+> pretty metaKind
     pure dummyMeta
 
 freshSkolem :: (TypeCheck es) => LocalName -> Monomorphization -> Kind -> Eff es Skolem

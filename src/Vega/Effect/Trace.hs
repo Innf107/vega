@@ -34,6 +34,7 @@ data Category
     | KindCheck
     | Unify
     | UnifyAll
+    | MetaVars
     | SCC
     | Patterns
     deriving (Generic, Show, Enum, Bounded)
@@ -59,6 +60,7 @@ data Traces = MkTraces
     , kindCheck :: Bool
     , unify :: Bool
     , unifyAll :: Bool
+    , metaVars :: Bool
     , scc :: Bool
     , patterns :: Bool
     }
@@ -74,6 +76,7 @@ defaultTraces =
         , kindCheck = False
         , unify = False
         , unifyAll = False
+        , metaVars = False
         , scc = False
         , patterns = False
         }
@@ -118,6 +121,7 @@ traceEnabledIn category enabledTraces = case category of
     KindCheck -> enabledTraces.kindCheck
     Unify -> enabledTraces.unify
     UnifyAll -> enabledTraces.unifyAll
+    MetaVars -> enabledTraces.metaVars
     SCC -> enabledTraces.scc
     Patterns -> enabledTraces.patterns
 
@@ -140,6 +144,7 @@ getTraces =
         ("kinds" : rest) -> go (traces{kindCheck = True}) rest
         ("unify" : rest) -> go (traces{unify = True}) rest
         ("unify-all" : rest) -> go (traces{unifyAll = True}) rest
+        ("meta-vars" : rest) -> go (traces{metaVars = True}) rest
         ("scc" : rest) -> go (traces{scc = True}) rest
         ("patterns" : rest) -> go (traces{patterns = True}) rest
         (trace_ : rest) -> do
