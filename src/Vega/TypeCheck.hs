@@ -14,6 +14,7 @@ import Vega.Util (compose, for2, mapAccumLM, unzip3Seq, zipWithSeqM)
 import Vega.Effect.GraphPersistence (CachedType (..), GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 
+import Data.Foldable (foldrM)
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
@@ -29,7 +30,7 @@ import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutput
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.Panic (panic)
-import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>), note, align)
+import Vega.Pretty (align, emphasis, errorText, keyword, note, pretty, (<+>))
 import Vega.Seq.NonEmpty (NonEmpty (..), toSeq)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.TypeCheck.Zonk (zonk)
@@ -811,8 +812,12 @@ kindOf loc env = \case
                 subsumes loc env functionKind (Function argumentKinds Pure resultKind)
                 pure resultKind
     TypeVar name -> pure $ typeVariableKind name env
-    Forall _bindings body -> do
-        undefined
+    Forall bindings body -> do
+        -- See NOTE [Kinds of foralls]
+        let applyBinding MkForallBinder{varName, visibility = _, kind, monomorphization} env = do
+                bindTypeVariable varName (TypeVar varName) kind monomorphization env
+        let innerEnv = foldr applyBinding env bindings
+        kindOf loc innerEnv body
     Exists binders body -> do
         let innerEnv = foldr (\(name, kind) env -> bindTypeVariable name (TypeVar name) kind Parametric env) env binders
         kindOf loc innerEnv body
@@ -1391,8 +1396,12 @@ solveMonomorphized onMetaVar loc env type_ =
             TypeApplication constructor arguments -> do
                 go constructor
                 for_ arguments go
-            Forall{} -> undefined -- not entirely sure about this
-            Exists{} -> undefined
+            Forall binders body -> do
+                for_ binders \MkForallBinder{kind} -> go kind
+                go body
+            Exists binders body -> do
+                for_ binders \(_, kind) -> go kind
+                go body
             Function parameters effect result -> do
                 for_ parameters go
                 go effect
@@ -1428,3 +1437,16 @@ solveConstraints = \case
             env
             type_
         solveConstraints rest
+
+{- NOTE [Kinds of foralls]:
+------------------------------
+What should the kind of `forall (a : k). t` be? In any situation where this question actually makes sense to ask,
+the forall will only bind parametric type variables that cannot end up in t's kind, so the kind is just the kind of `t`.
+But in *top level definitions*, we may have monomorphizable bindings that may very well end up in their respective kinds
+(e.g. in the definition of `Nil`).
+In these cases, we still defer to the representation of the kinds body, since we know that there will never be any
+sensible operation performed on the result.
+
+Should this ever cause problems (for example because the skolems in the resulting kind escape their scope), we
+may need to give the result a dummy kind like `MonomorphizableForall` instead.
+-}
