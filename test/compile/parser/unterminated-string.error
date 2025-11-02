@@ -1,0 +1,6 @@
+$FILE:3:8: ERROR:
+Unterminated string literal
+  ┃ 
+3 ┃ f(x) = "
+4 ┃ 
+  ┃ 

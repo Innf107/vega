@@ -32,6 +32,7 @@ import Vega.Parser qualified as Parser
 import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, note, number, plain, vsep, (<+>))
 import Vega.Syntax (GlobalName (..), Kind, LocalName, MetaVar, NameKind (..), Type (Tuple), prettyGlobal, prettyGlobalText, prettyLocal)
 import Vega.Util (viaList)
+import qualified Vega.Util as Util
 
 data CompilationError
     = LexicalError LexicalError
@@ -48,6 +49,8 @@ data LexicalError
     | InvalidStringEscape Loc Char
     | EmptyHexEscape Loc
     | MoreLayoutBlocksClosedThanOpened Loc
+    deriving stock (Generic)
+    deriving anyclass (HasLoc)
 
 data RenameError
     = NameNotFound
@@ -184,10 +187,10 @@ extractRange loc = do
                 then (False, loc.endLine - loc.startLine + 1)
                 else (True, maxDisplayedLineCount)
 
-    let linePadding = Vector.maximum (fmap (length @[] . show) [loc.startLine .. (loc.startLine + lineCount - 1)])
+    let linePadding = Vector.maximum ([0] <> fmap (length @[] . show) [loc.startLine .. (loc.startLine + lineCount - 1)])
 
     -- - 1 because loc lines are 1-based
-    let extractedLines = fromList $ take lineCount $ drop (loc.startLine - 1) lines
+    let extractedLines = fromList $ Util.takeWithPadding lineCount "" $ drop (loc.startLine - 1) lines
 
     let separatorWithLine lineNumber = keyword (Text.justifyRight linePadding ' ' (show lineNumber)) <> " " <> keyword "┃ "
 
@@ -246,7 +249,16 @@ prettyNameKind =
 
 renderCompilationError :: CompilationError -> Seq ErrorMessage
 renderCompilationError = \case
-    LexicalError error -> undefined
+    LexicalError error -> pure $ ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
+        UnexpectedCharacter _ char -> align do
+            emphasis "Unexpected character: '" <> errorText [char] <> emphasis "'"
+        UnterminatedStringLiteral _ -> emphasis "Unterminated string literal"
+        InvalidStringEscape _ escape -> align do
+            emphasis "Invalid escape sequence: '" <> errorText [escape] <> emphasis "'"
+        EmptyHexEscape _ -> align do
+            emphasis "Invalid empty hexadecimal escape sequence"
+        MoreLayoutBlocksClosedThanOpened _ -> align do
+            emphasis "More layout blocks have been closed than opened"
     ParseError error -> fmap ErrorWithLoc $ generateParseErrorMessages error
     RenameError error -> pure $ ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
         NameNotFound{name, nameKind} -> align do

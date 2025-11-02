@@ -1,0 +1,5 @@
+/home/prophet/Code/vega-graph/test/run/./Main.vega:3:8: ERROR:
+More layout blocks have been closed than opened
+  ┃ 
+3 ┃ main = }
+  ┃        ▔

@@ -19,6 +19,7 @@ module Vega.Util (
     These (..),
     zipWithLongest,
     spanMaybe,
+    takeWithPadding
 ) where
 
 import Data.HashMap.Strict qualified as HashMap
@@ -149,3 +150,8 @@ spanMaybe f seq = go [] seq
         (x :<| xs)
             | Just y <- f x -> go (passed :|> y) xs
             | otherwise -> (passed, x :<| xs)
+
+takeWithPadding :: Int -> a -> [a] -> [a]
+takeWithPadding 0 _padding list = []
+takeWithPadding n padding [] = replicate n padding
+takeWithPadding n padding (x : xs) = x : takeWithPadding (n - 1) padding xs

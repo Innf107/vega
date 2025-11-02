@@ -50,8 +50,8 @@ locOfNextCharOnly lexState =
     MkLoc
         { file = lexState.file
         , startLine = lexState.endLine
-        , startColumn = lexState.endColumn
-        , endLine = lexState.endColumn
+        , startColumn = lexState.endColumn - 1
+        , endLine = lexState.endLine
         , endColumn = lexState.endColumn
         }
 
@@ -206,7 +206,7 @@ lexStringLiteral chars state = case state of
         lexStringLiteral (escapedChar : chars) state
     '\\' :! char :! state -> lexicalError (InvalidStringEscape (locOfLastCharOnly state) char)
     char :! state -> lexStringLiteral (char : chars) state
-    IsEOF -> lexicalError (UnterminatedStringLiteral (locOfNextCharOnly state))
+    IsEOF -> lexicalError (UnterminatedStringLiteral (currentLoc state))
 
 hexValue :: (HasCallStack) => Char -> Int
 hexValue char
