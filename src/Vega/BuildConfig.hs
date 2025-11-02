@@ -20,6 +20,7 @@ import Effectful.FileSystem (FileSystem, canonicalizePath, listDirectory)
 import Data.Aeson qualified as Aeson
 import Data.Yaml as Yaml hiding (object)
 
+import Data.Aeson.Types (typeMismatch)
 import Data.Text qualified as Text
 import System.FilePath ((</>))
 import System.FilePath qualified as FilePath
@@ -61,7 +62,8 @@ instance FromJSON Backend where
         String "javascript" -> pure JavaScript
         String "debug" -> pure NativeDebug
         String "release" -> pure NativeRelease
-        _ -> undefined
+        String backend -> fail $ toString $ "Invalid backend: '" <> backend <> "'. Expected one of 'javascript', 'debug', 'release'"
+        other -> typeMismatch "string" other
 
 sourceDirectory :: BuildConfig -> FilePath
 sourceDirectory config = case config.contents.sourceDirectory of
