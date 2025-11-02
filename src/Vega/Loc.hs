@@ -2,7 +2,7 @@ module Vega.Loc (Loc (..), HasLoc (..)) where
 
 import Relude
 
-import GHC.Generics (Generically (..), K1 (..), M1 (..), Rep (..), V1, (:*:) (..), (:+:) (..), from, to)
+import GHC.Generics (K1 (..), M1 (..), Rep, V1, from, (:*:) (..), (:+:) (..))
 import Vega.Pretty (Pretty (pretty), emphasis)
 
 data Loc = MkLoc
@@ -55,4 +55,3 @@ instance (HasLoc c) => HasLocGeneric (K1 i c) where
 
 instance (HasLocGeneric f) => HasLocGeneric (M1 i t f) where
     getLocG (M1 x) = getLocG x
-

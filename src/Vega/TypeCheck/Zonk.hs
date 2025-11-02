@@ -7,7 +7,6 @@ import Vega.Syntax
 
 import Data.Unique (Unique)
 import Effectful (Eff, IOE, (:>))
-import GHC.Generics (Generic)
 import GHC.Generics qualified as Generics
 import Vega.Error (TypeError, TypeErrorSet)
 import Vega.Loc (Loc)

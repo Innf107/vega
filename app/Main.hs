@@ -26,7 +26,6 @@ import Vega.Effect.GraphPersistence.InMemory (runInMemory)
 import Vega.Effect.Trace (Trace, runTrace)
 import Vega.Error (ErrorMessage (..), PlainErrorMessage (..), prettyErrorWithLoc, renderCompilationError)
 import Vega.Pretty (Ann, Doc, PrettyANSIIConfig (MkPrettyANSIIConfig, includeUnique), align, emphasis, eprintANSII, intercalateDoc, keyword, pretty, prettyPlain, (<+>))
-import Vega.Syntax (GlobalName)
 import Vega.Util (constructorNames)
 
 data PersistenceBackend

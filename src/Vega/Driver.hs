@@ -20,15 +20,11 @@ import System.FilePath (takeExtension, (</>))
 import Data.Sequence (Seq (..))
 import Data.Traversable (for)
 import Effectful.Concurrent (Concurrent)
-import Effectful.Error.Static (Error, runErrorNoCallStack, throwError, throwError_)
-import TextBuilder (TextBuilder)
+import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
 import TextBuilder qualified
 
-import Data.Text qualified as Text
 import Effectful.Exception (try)
-import Streaming.Prelude (toList_)
 import Streaming.Prelude qualified as Streaming
-import System.FilePath qualified as FilePath
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
 import Vega.Compilation.Core.Syntax qualified as Core
@@ -42,16 +38,15 @@ import Vega.Diff qualified as Diff
 import Vega.Effect.DebugEmit (DebugEmit, debugEmit)
 import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
-import Vega.Effect.Trace (Category (..), Trace, trace, traceEnabled, whenTraceEnabled)
+import Vega.Effect.Trace (Category (..), Trace, trace, whenTraceEnabled)
 import Vega.Effect.Unique.Static.Local (runNewUnique)
-import Vega.Error (CompilationError (..), RenameErrorSet (..), TypeErrorSet (..))
+import Vega.Error (CompilationError (..), RenameErrorSet (..))
 import Vega.Error qualified as Error
 import Vega.Lexer qualified as Lexer
 import Vega.Panic (panic)
 import Vega.Parser qualified as Parser
-import Vega.Pretty (keyword, pretty)
+import Vega.Pretty (pretty)
 import Vega.Rename qualified as Rename
-import Vega.Seq.NonEmpty (NonEmpty (..))
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)

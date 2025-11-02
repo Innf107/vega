@@ -12,7 +12,6 @@ import Data.Char qualified as Char
 import Data.List.NonEmpty qualified as NonEmptyList
 import Data.Ratio ((%))
 import Data.Text qualified as Text
-import GHC.List (List)
 import Relude.Unsafe (read)
 import Vega.Error (LexicalError (..))
 import Vega.Lexer.Token (Token (..))

@@ -7,11 +7,8 @@ module Vega.Compilation.PatternMatching (
 
 import Data.Map qualified as Map
 import Data.Sequence (Seq (..))
-import Data.Unique (Unique)
-import Effectful
 import Relude hiding (NonEmpty)
 import Vega.Debug (showHeadConstructor)
-import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Panic (panic)
 import Vega.Pretty (Ann, Doc, Pretty, align, indent, keyword, lparen, number, pretty, rparen, vsep, (<+>))
 import Vega.Seq.NonEmpty

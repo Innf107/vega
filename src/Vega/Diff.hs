@@ -11,7 +11,6 @@ import Vega.Syntax (
     DeclarationSyntax,
     Expr,
     GlobalName,
-    KindSyntax,
     LocalName,
     MatchCase,
     ModuleName (..),

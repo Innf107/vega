@@ -8,7 +8,6 @@ import Relude hiding (NonEmpty, many)
 import Vega.Syntax hiding (forall_)
 
 import Data.Sequence (Seq (..))
-import Data.Text qualified as Text
 import GHC.IsList (Item)
 import Text.Megaparsec hiding (Token, many, parse, sepBy, sepBy1, sepEndBy, single)
 import Text.Megaparsec qualified as MegaParsec

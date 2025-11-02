@@ -8,7 +8,7 @@ import Relude hiding (State, Type, evalState, get, modify, put)
 import Vega.Syntax hiding (Effect)
 
 import Effectful
-import Effectful.State.Static.Local (State, evalState, get, modify, put)
+import Effectful.State.Static.Local (State, evalState, get, modify)
 import Effectful.TH (makeEffect)
 
 import Data.HashSet qualified as HashSet

@@ -423,13 +423,6 @@ pluralNumber :: (Text -> Doc Ann) -> Int -> Text -> Doc Ann
 pluralNumber render 1 text = number @Int 1 <+> render text
 pluralNumber render n text = number n <+> render (text <> "s")
 
-differenceDirection :: Int -> Int -> Text
-differenceDirection expected actual
-    | expected < actual = "too many"
-    | expected > actual = "too few"
-    -- Technically this case shouldn't happen unless we have an error, but it's nice to have anyway
-    | otherwise = "the same number of"
-
 generateParseErrorMessages :: ParseErrorBundle [(Token, Loc)] Parser.AdditionalParseError -> Seq ErrorMessageWithLoc
 generateParseErrorMessages (ParseErrorBundle{bundleErrors, bundlePosState = _bundlePosState}) =
     foldMap generateParseErrorMessage (viaList @_ @(Seq _) bundleErrors)

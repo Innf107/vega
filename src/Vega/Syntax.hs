@@ -8,7 +8,6 @@ import Relude hiding (NonEmpty, State, Type, evalState, get, put)
 import Vega.Loc (HasLoc, Loc)
 
 import Data.HashMap.Strict qualified as HashMap
-import Data.Kind qualified as Haskell (Type)
 import Data.Sequence (Seq (..))
 import Data.Text qualified as Text
 import Effectful (Eff, IOE, runEff, (:>))

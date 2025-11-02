@@ -61,7 +61,7 @@ import Prettyprinter.Render.Util.SimpleDocTree qualified as PP
 
 import Control.Monad.ST.Strict (runST)
 import Data.Text.IO qualified as Text
-import Data.Unique (Unique, hashUnique, newUnique)
+import Data.Unique (Unique, hashUnique)
 import Data.Vector ((!))
 import GHC.Generics
 import GHC.TypeLits (KnownSymbol, symbolVal)

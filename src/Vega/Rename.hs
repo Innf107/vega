@@ -7,9 +7,7 @@ import Relude.Extra
 
 import Vega.Syntax
 
-import Data.HashMap.Strict qualified as HashMap
 import Data.HashSet qualified as HashSet
-import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Effectful (Eff, (:>))

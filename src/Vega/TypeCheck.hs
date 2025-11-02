@@ -29,8 +29,8 @@ import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutput
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.Panic (panic)
-import Vega.Pretty (emphasis, errorText, intercalateDoc, keyword, pretty, (<+>))
-import Vega.Seq.NonEmpty (NonEmpty (..), toSeq, pattern NonEmpty)
+import Vega.Pretty (emphasis, errorText, keyword, pretty, (<+>))
+import Vega.Seq.NonEmpty (NonEmpty (..), toSeq)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.TypeCheck.Zonk (zonk)
 import Vega.Util qualified as Util
@@ -235,7 +235,7 @@ computeAndCacheKind declaration = withTrace KindCheck ("computeAndCacheKind: " <
 
 checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
 checkDeclarationSyntax loc = \case
-    DefineFunction{ext, name, typeSignature, declaredTypeParameters, parameters, body} -> do
+    DefineFunction{ext = (), name, typeSignature, declaredTypeParameters, parameters, body} -> do
         let env = emptyEnv
         (functionType, typeSignature) <- checkType env Parametric (Type (PrimitiveRep BoxedRep)) typeSignature
 

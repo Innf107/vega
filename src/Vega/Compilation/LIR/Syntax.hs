@@ -10,10 +10,7 @@ module Vega.Compilation.LIR.Syntax (
     UnboxedLayout (..),
 ) where
 
-import Data.Sequence (Seq (..))
-import GHC.Num (integerLog2)
 import Relude
-import Prelude (log)
 
 -- TODO: move this somewhere else
 
@@ -22,9 +19,8 @@ import Data.Sequence qualified as Seq
 import Data.Unique (hashUnique)
 import GHC.Generics (Generically (..))
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName)
-import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Effect.Unique.Static.Local (Unique)
-import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, localIdentText, lparen, number, pretty, rparen, vsep, (<+>))
+import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, lparen, number, pretty, rparen, vsep, (<+>))
 
 newtype Variable = MkVariable Int
 

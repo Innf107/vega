@@ -1,7 +1,9 @@
+{-# OPTIONS_GHC -Wno-missing-export-lists #-}
+
 module Vega.Compilation.Core.Syntax where
 
 import Data.HashMap.Strict qualified as HashMap
-import Data.Unique (Unique, hashUnique)
+import Data.Unique (Unique)
 import Relude
 import Vega.Pretty
 import Vega.Syntax (GlobalName, NameKind (..), prettyGlobal, prettyLocal)

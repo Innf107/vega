@@ -1,10 +1,8 @@
 module Vega.Panic (panic, Panic (..), prettyCallStack) where
 
-import Control.Exception (throw, addExceptionContext)
-import Control.Exception.Backtrace (collectBacktraces)
+import Control.Exception (throw)
 import Relude hiding (prettyCallStack)
 import Relude qualified
-import System.IO.Unsafe (unsafePerformIO)
 import Vega.Pretty
 
 data Panic = Panic CallStack (Doc Ann)

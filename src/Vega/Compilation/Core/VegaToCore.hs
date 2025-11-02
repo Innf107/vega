@@ -1,9 +1,6 @@
-{-# LANGUAGE PartialTypeSignatures #-}
-
-module Vega.Compilation.Core.VegaToCore where
+module Vega.Compilation.Core.VegaToCore (compileDeclaration) where
 
 import Effectful
-import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import Relude hiding (NonEmpty, State, evalState, get, modify, put, runState, trace)
 import Relude qualified
 
@@ -19,17 +16,14 @@ import Vega.Compilation.PatternMatching (CaseTree)
 import Vega.Compilation.PatternMatching qualified as PatternMatching
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.GraphPersistence (GraphPersistence)
-import Vega.Effect.GraphPersistence qualified as GraphPersistence
 import Vega.Effect.Trace (Category (Patterns), Trace, trace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
 import Vega.Panic (panic)
 import Vega.Pretty (align, indent, intercalateDoc, keyword, pretty, (<+>))
-import Vega.Pretty qualified as Pretty
-import Vega.Seq.NonEmpty (NonEmpty (..), pattern NonEmpty)
+import Vega.Seq.NonEmpty (pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax (Pass (..))
 import Vega.Syntax qualified as Vega
-import Vega.Util (viaList)
 import Vega.Util qualified as Util
 import Witherable (wither)
 

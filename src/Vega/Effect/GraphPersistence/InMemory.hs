@@ -48,7 +48,7 @@ import Vega.Effect.GraphPersistence hiding (
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.Reader.Static
-import Vega.Error (CompilationError (..), RenameError, RenameErrorSet (..), TypeError, TypeErrorSet (..))
+import Vega.Error (CompilationError (..), RenameErrorSet (..), TypeErrorSet (..))
 import Vega.Syntax
 
 import Data.HashMap.Strict qualified as HashMap

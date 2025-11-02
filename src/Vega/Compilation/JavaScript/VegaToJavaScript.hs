@@ -11,29 +11,18 @@ module Vega.Compilation.JavaScript.VegaToJavaScript (compileDeclaration) where
 import Relude hiding (State, evalState, get, intercalate, modify, put, trace)
 
 import Effectful
-import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
-import Vega.Effect.GraphPersistence qualified as GraphPersistence
 
-import Effectful.State.Static.Local (State, evalState, get, modify, put)
-import Effectful.Writer.Static.Local (Writer, runWriter, tell)
-import TextBuilder (TextBuilder)
 import TextBuilder qualified
 
-import Data.HashSet qualified as HashSet
 import Data.Map qualified as Map
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
-import Data.Text qualified as Text
-import Data.Text.Lazy qualified as LText
 import Data.Traversable (for)
 import Data.Unique (hashUnique, newUnique)
-import Effectful.Error.Static (Error)
 import Vega.Compilation.JavaScript.Syntax qualified as JS
 import Vega.Compilation.PatternMatching (CaseTree (..))
 import Vega.Compilation.PatternMatching qualified as PatternMatching
-import Vega.Debug (showHeadConstructor)
-import Vega.Effect.Trace (Category (..), Trace, trace)
-import Vega.Error (DriverError)
+import Vega.Effect.Trace (Trace)
 import Vega.Panic (panic)
 import Vega.Seq.NonEmpty (NonEmpty (..), pattern NonEmpty)
 import Vega.Syntax

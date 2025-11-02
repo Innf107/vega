@@ -1,14 +1,20 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Vega.Effect.DebugEmit where
+module Vega.Effect.DebugEmit (
+    DebugEmit (..),
+    debugEmit,
+    emitAllToFile,
+    emitToStderr,
+    ignoreEmit,
+) where
 
 import Data.ByteString qualified as ByteString
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret_)
-import Effectful.FileSystem.IO (openFile, runFileSystem, withBinaryFile)
+import Effectful.FileSystem.IO (runFileSystem, withBinaryFile)
 import Effectful.TH (makeEffect)
 import Relude
-import Vega.Pretty (Ann, Doc, Pretty, PrettyANSIIConfig, eprintANSII, pretty, prettyPlain)
+import Vega.Pretty (Ann, Doc, PrettyANSIIConfig, eprintANSII)
 
 data DebugEmit a :: Effect where
     DebugEmit :: a -> DebugEmit a m ()

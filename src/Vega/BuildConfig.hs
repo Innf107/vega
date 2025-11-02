@@ -14,7 +14,6 @@ module Vega.BuildConfig (
 
 import Relude
 
-import Control.Exception
 import Effectful
 import Effectful.FileSystem (FileSystem, canonicalizePath, listDirectory)
 
@@ -25,7 +24,7 @@ import Data.Text qualified as Text
 import System.FilePath ((</>))
 import System.FilePath qualified as FilePath
 import Vega.Seq.NonEmpty (NonEmpty (..))
-import Vega.Syntax (DeclarationName (..), GlobalName (..), ModuleName (..), PackageName (..))
+import Vega.Syntax (GlobalName (..), ModuleName (..), PackageName (..))
 
 data BuildConfigContents = MkBuildConfigContents
     { name :: Text

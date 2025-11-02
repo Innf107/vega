@@ -1,4 +1,4 @@
-module Vega.Compilation.LIR.CoreToLIR where
+module Vega.Compilation.LIR.CoreToLIR (compileDeclaration) where
 
 import Effectful
 import Relude hiding (State, get, modify, put, runState)
