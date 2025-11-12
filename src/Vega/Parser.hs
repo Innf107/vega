@@ -499,8 +499,10 @@ expr = label "expression" exprLogical
             , do
                 startLoc <- single Lexer.If
                 condition <- expr
+                _ <- optional semicolon
                 _ <- single Lexer.Then
                 thenBranch <- expr
+                _ <- optional semicolon
                 _ <- single Lexer.Else
                 elseBranch <- expr
                 pure (Syntax.If{loc = startLoc <> getLoc elseBranch, condition, thenBranch, elseBranch})

@@ -135,6 +135,9 @@ compileBuiltinVar = \case
         array <- freshVar "array"
         index <- freshVar "index"
         pure (JS.Lambda [array, index] [JS.Return (JS.Index (JS.Var array) (JS.Var index))])
+    "arrayLength" -> do
+        array <- freshVar "array"
+        pure (JS.Lambda [array] [JS.Return (JS.FieldAccess (JS.Var array) "length")])
     var -> panic $ "Builtin variable not implemented in the javascript backend: " <> localIdentText var
 
 compileStatements :: (Compile es) => Seq (Statement Typed) -> Eff es (Seq JS.Statement)

@@ -45,7 +45,7 @@ import Vega.Error qualified as Error
 import Vega.Lexer qualified as Lexer
 import Vega.Panic (panic)
 import Vega.Parser qualified as Parser
-import Vega.Pretty (pretty)
+import Vega.Pretty (pretty, keyword)
 import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
@@ -85,7 +85,8 @@ findSourceFiles = do
                     | otherwise -> pure []
 
 computeImportScope :: (Driver es) => Seq Import -> Eff es ImportScope
-computeImportScope imports = foldMapM toImportScope imports
+computeImportScope imports = do
+    foldMapM toImportScope imports
   where
     -- TODO: allow importing from other packages without explicitly spelling out their module name
     resolveModuleName MkParsedModuleName{package, subModules} = case package of
@@ -141,6 +142,8 @@ parseAndDiff filePath = do
         Right parsedModule -> pure parsedModule
 
     importScope <- computeImportScope parsedModule.imports
+    trace ImportScope (keyword (toText filePath) <> ": " <> show importScope)
+
     previousDeclarations <- GraphPersistence.lastKnownDeclarations filePath
     GraphPersistence.setKnownDeclarations filePath (viaList (fmap (\decl -> (decl.name, decl)) parsedModule.declarations))
     case previousDeclarations of

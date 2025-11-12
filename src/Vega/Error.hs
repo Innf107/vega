@@ -30,7 +30,7 @@ import Vega.Panic qualified as Panic
 import Vega.Parser (AdditionalParseError (..))
 import Vega.Parser qualified as Parser
 import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, note, number, plain, vsep, (<+>))
-import Vega.Syntax (GlobalName (..), Kind, LocalName, MetaVar, NameKind (..), Type (Tuple), prettyGlobal, prettyGlobalText, prettyLocal)
+import Vega.Syntax (GlobalName (..), Kind, LocalName, MetaVar, NameKind (..), Type (Tuple), prettyGlobal, prettyGlobalText, prettyLocal, Name, prettyName)
 import Vega.Util (viaList)
 import qualified Vega.Util as Util
 
@@ -82,7 +82,7 @@ newtype RenameErrorSet = MkRenameErrorSet (Seq RenameError)
 data TypeError
     = FunctionDefinedWithIncorrectNumberOfArguments
         { loc :: Loc
-        , functionName :: GlobalName
+        , functionName :: Name
         , expectedType :: Type
         , expectedNumberOfArguments :: Int
         , numberOfDefinedParameters :: Int
@@ -290,7 +290,7 @@ renderCompilationError = \case
                         <> "  "
                         <> align
                             ( emphasis "The function "
-                                <> globalIdentText functionName.name
+                                <> prettyName VarKind functionName
                                 <> emphasis " is declared with"
                                     <+> pluralNumber emphasis numberOfDefinedParameters "parameter"
                                 <> emphasis "\n  but its type suggests that it should have "

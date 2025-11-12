@@ -1,0 +1,10 @@
+f : Int -> ()
+f(i) = {
+    if i >= 10 then 
+        ()
+    else
+        f(i + 1)
+}
+
+main : () -> ()
+main() = ()

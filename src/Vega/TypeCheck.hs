@@ -253,7 +253,7 @@ checkDeclarationSyntax loc = \case
                 typeError
                     ( FunctionDefinedWithIncorrectNumberOfArguments
                         { loc
-                        , functionName = name
+                        , functionName = Global name
                         , expectedType = functionType
                         , expectedNumberOfArguments = length actualParameterTypes
                         , numberOfDefinedParameters = length parameters
@@ -600,7 +600,54 @@ checkStatement env ambientEffect statement = withTrace TypeCheck ("checkStatemen
         (pattern_, type_, envTrans) <- inferPattern env pattern_
         body <- check env ambientEffect type_ body
         pure (envTrans env, Let loc pattern_ body)
-    LetFunction{} -> undefined
+    LetFunction{loc, name, typeSignature, parameters, body} -> do
+        (functionType, typeSignature) <- case typeSignature of
+            Just typeSignature -> do
+                (functionType, typeSignature) <- checkType env Parametric (Type (PrimitiveRep BoxedRep)) typeSignature
+                pure (functionType, Just typeSignature)
+            Nothing -> do
+                type_ <- MetaVar <$> freshTypeMeta "r"
+                pure (type_, Nothing)
+
+        env <- pure $ bindVarType name functionType env
+
+        -- TODO: local functions should be able to bind type parameters as well
+        -- (env, remainingType) <- bindTypeParameters loc env declaredTypeParameters functionType
+
+        -- We bound the declared type parameters above and the rest are not accessible in the body
+        -- so we can just skolemize them away here
+        remainingType <- skolemize loc env functionType
+        (parameterTypes, effect, returnType, parameterMismatch) <- splitFunctionType loc env (length parameters) remainingType
+
+        case parameterMismatch of
+            Nothing -> pure ()
+            Just actualParameterTypes ->
+                typeError
+                    ( FunctionDefinedWithIncorrectNumberOfArguments
+                        { loc
+                        , functionName = Local name
+                        , expectedType = functionType
+                        , expectedNumberOfArguments = length actualParameterTypes
+                        , numberOfDefinedParameters = length parameters
+                        }
+                    )
+
+        let checkParameter pattern_ type_ = do
+                checkPattern env type_ pattern_
+
+        (parameters, transformers) <- Seq.unzip <$> zipWithSeqM checkParameter parameters parameterTypes
+        innerEnv <- pure (compose transformers env)
+
+        body <- check innerEnv effect returnType body
+
+        -- TODO: include this in the generated core
+        -- TODO: add metadata for error messages in case this fails (i think it should have thrown earlier in that case though)
+        let typeSignatureLoc = case typeSignature of
+                Nothing -> loc
+                Just typeSignature -> getLoc typeSignature
+        returnRepresentation <- representationOfType typeSignatureLoc innerEnv returnType
+
+        pure (env, LetFunction{loc, name, typeSignature, parameters, body})
     Use{} -> undefined
 
 bindTypeParameters :: (TypeCheck es) => Loc -> Env -> Seq (Loc, LocalName) -> Type -> Eff es (Env, Type)

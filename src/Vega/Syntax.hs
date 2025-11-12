@@ -417,12 +417,13 @@ newtype ImportScope
     { imports :: HashMap ModuleName ImportedItems
     }
     deriving stock (Show, Eq, Generic)
-    deriving newtype (Monoid)
 
--- TODO: if we use a hash map here this is actually quite inefficient
 instance Semigroup ImportScope where
     scope1 <> scope2 = MkImportScope{imports = HashMap.unionWith (<>) scope1.imports scope2.imports}
+instance Monoid ImportScope where
+    mempty = MkImportScope mempty
 
+-- TODO: if we use a hash map here this is actually quite inefficient
 data ImportedItems = MkImportedItems
     { qualifiedAliases :: HashSet Text
     , unqualifiedItems :: HashSet Text
