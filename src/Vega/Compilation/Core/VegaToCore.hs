@@ -62,6 +62,7 @@ compileDeclarationSyntax = \case
                 }
             ]
     Vega.DefineVariantType{} -> pure []
+    Vega.DefineExternalFunction{} -> pure []
 
 compileExpr :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Expr)
 compileExpr expr = do

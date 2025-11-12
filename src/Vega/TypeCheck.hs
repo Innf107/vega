@@ -233,6 +233,7 @@ computeAndCacheKind declaration = withTrace KindCheck ("computeAndCacheKind: " <
 
         GraphPersistence.cacheGlobalKind name computedKind
         pure computedKind
+    DefineExternalFunction{} -> error "trying to compute kind of an (external) function"
 
 checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
 checkDeclarationSyntax loc = \case
@@ -290,6 +291,9 @@ checkDeclarationSyntax loc = \case
             (representations, _, parameters) <- unzip3Seq <$> traverse (inferTypeRep env) parameters
             pure (name, loc, parameters)
         pure (DefineVariantType{name, typeParameters, constructors})
+    DefineExternalFunction{name, type_} -> do
+        (_, type_) <- checkType emptyEnv Parametric (Type (PrimitiveRep BoxedRep)) type_
+        pure (DefineExternalFunction{name, type_})
 
 checkPattern :: (TypeCheck es) => Env -> Type -> Pattern Renamed -> Eff es (Pattern Typed, Env -> Env)
 checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <> showHeadConstructor pattern_) do

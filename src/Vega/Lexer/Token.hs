@@ -52,6 +52,7 @@ data Token
     | Underscore
     | Use
     | Import
+    | External
     deriving (Show, Eq, Ord, Generic)
 
 instance Pretty Token where
@@ -103,3 +104,4 @@ instance Pretty Token where
         Underscore -> Pretty.keyword "_"
         Use -> Pretty.keyword "use"
         Import -> Pretty.keyword "import"
+        External -> Pretty.keyword "external"

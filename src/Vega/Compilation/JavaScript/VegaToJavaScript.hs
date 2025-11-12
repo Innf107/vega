@@ -78,6 +78,7 @@ compileDeclarationSyntax = \case
                                     )
                                 ]
                             )
+    DefineExternalFunction{} -> pure []
 
 compileExpr :: (Compile es) => Expr Typed -> Eff es JS.Expr
 compileExpr = \case

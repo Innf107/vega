@@ -45,7 +45,7 @@ import Vega.Error qualified as Error
 import Vega.Lexer qualified as Lexer
 import Vega.Panic (panic)
 import Vega.Parser qualified as Parser
-import Vega.Pretty (pretty, keyword)
+import Vega.Pretty (keyword, pretty)
 import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
@@ -268,8 +268,13 @@ typeChanged :: Declaration Renamed -> Declaration Renamed -> Bool
 typeChanged old new = case old.syntax of
     DefineFunction{typeSignature = oldTypeSignature} -> case new.syntax of
         DefineFunction{typeSignature = newTypeSignature} -> Diff.diff oldTypeSignature newTypeSignature
-        DefineVariantType{} -> undefined
+        DefineExternalFunction{type_ = newTypeSignature} -> Diff.diff oldTypeSignature newTypeSignature
+        DefineVariantType{} -> True
     DefineVariantType{} -> undefined
+    DefineExternalFunction{type_ = oldTypeSignature} -> case new.syntax of
+        DefineExternalFunction{type_ = newTypeSignature} -> Diff.diff oldTypeSignature newTypeSignature
+        DefineFunction{typeSignature = newTypeSignature} -> Diff.diff oldTypeSignature newTypeSignature
+        DefineVariantType{} -> True
 
 rename :: (Driver es) => DeclarationName -> Eff es ()
 rename name = do

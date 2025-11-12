@@ -123,6 +123,10 @@ data DeclarationSyntax p
         , typeParameters :: Seq (ForallBinderS p)
         , constructors :: Seq (Loc, GlobalName, Seq (TypeSyntax p))
         }
+    | DefineExternalFunction
+        { name :: GlobalName
+        , type_ :: TypeSyntax p
+        }
     deriving stock (Generic)
 
 type family XDefineFunction p where
@@ -508,6 +512,7 @@ definedGlobals = \case
     DefineFunction{name} -> pure (name, VarKind)
     DefineVariantType{name, constructors} ->
         [(name, TypeConstructorKind)] <> fmap (\(_, name, _) -> (name, DataConstructorKind)) constructors
+    DefineExternalFunction{name} -> pure (name, VarKind)
 
 typeOfGlobal :: (HasCallStack) => GlobalName -> DeclarationSyntax Renamed -> TypeSyntax Renamed
 typeOfGlobal global = \case
@@ -526,6 +531,9 @@ typeOfGlobal global = \case
                 case parameterTypes of
                     Empty -> forallS loc typeParameters $ appliedType
                     _ -> forallS loc typeParameters $ PureFunctionS loc parameterTypes appliedType
+    DefineExternalFunction{name, type_}
+        | name == global -> type_
+        | otherwise -> error $ "global (term) variable not found in external function '" <> show name <> "': " <> show global
 
 {- NOTE: Ord instances
 -----------------------------------------------------

@@ -145,6 +145,7 @@ declaration = do
     choice
         [ defineFunction
         , defineVariantType
+        , defineExternalFunction
         ]
 
 defineFunction :: Parser (Declaration Parsed)
@@ -229,6 +230,16 @@ defineVariantType = do
 
         (dataArguments, endLoc) <- option (fromList [], startLoc) (argumentsWithLoc type_)
         pure (globalName, dataArguments, startLoc <> endLoc)
+
+defineExternalFunction :: Parser (Declaration Parsed)
+defineExternalFunction = do
+    startLoc <- single External
+    name <- identifier
+    _ <- single Colon
+    type_ <- type_
+
+    (declarationName, name) <- globalNamesForCurrentModule name
+    pure (MkDeclaration{name = declarationName, loc = startLoc <> getLoc type_, syntax = DefineExternalFunction{name, type_}})
 
 -- TODO: (k1 + ... + kn), (k1 * .. * kn)
 type_ :: Parser (TypeSyntax Parsed)
