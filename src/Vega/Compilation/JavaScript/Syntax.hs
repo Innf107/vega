@@ -9,7 +9,9 @@ module Vega.Compilation.JavaScript.Syntax (
     compileName,
 ) where
 
+import Data.Char qualified as Char
 import Data.Text qualified as Text
+import Numeric (showHex)
 import Relude hiding (Const)
 import TextBuilder (TextBuilder)
 import TextBuilder qualified
@@ -159,4 +161,20 @@ compileName = \case
 
 -- TODO
 escapeString :: Text -> TextBuilder
-escapeString string = TextBuilder.text string
+escapeString string = TextBuilder.text $ Text.concatMap escapeChar string
+  where
+    escapeChar = \case
+        '\0' -> "\\0"
+        '\a' -> "\\a"
+        '\b' -> "\\b"
+        '\ESC' -> "\\e"
+        '\f' -> "\\f"
+        '\n' -> "\\n"
+        '\r' -> "\\r"
+        '\t' -> "\\t"
+        '\v' -> "\\v"
+        '\\' -> "\\\\"
+        '"' -> "\\\""
+        char
+            | Char.isPrint char -> [char]
+            | otherwise -> "\\x" <> toText (showHex (fromEnum char) "")
