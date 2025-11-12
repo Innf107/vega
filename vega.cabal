@@ -1,6 +1,6 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.37.0.
+-- This file has been generated from package.yaml by hpack version 0.38.1.
 --
 -- see: https://github.com/sol/hpack
 
@@ -92,6 +92,7 @@ library
     , containers
     , effectful
     , effectful-th
+    , file-embed
     , filepath
     , hashtables
     , megaparsec
@@ -143,6 +144,7 @@ executable vega
     , containers
     , effectful
     , effectful-th
+    , file-embed
     , filepath
     , hashtables
     , megaparsec
@@ -196,6 +198,7 @@ test-suite vega-test
     , containers
     , effectful
     , effectful-th
+    , file-embed
     , filepath
     , hashtables
     , megaparsec

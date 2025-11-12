@@ -25,6 +25,7 @@ builtinGlobals = fromList [((name, kind), internalName name) | (name, kind) <- g
         , ("Array", TypeConstructorKind)
         , ("replicateArray", VarKind)
         , ("readArray", VarKind)
+        , ("panic", VarKind)
         ]
 
 builtinKinds :: HashMap GlobalName Kind
@@ -40,6 +41,7 @@ builtinTypes :: HashMap GlobalName Type
 builtinTypes =
     [ (internalName "replicateArray", forall_ "a" \a -> [intType, a] --> arrayType @@ [a])
     , (internalName "readArray", forall_ "a" \a -> [arrayType @@ [a], intType] --> a)
+    , (internalName "panic", forall_ "a" \a -> [stringType] --> a)
     ]
 
 defaultImportScope :: ImportScope
@@ -50,7 +52,7 @@ defaultImportScope =
                 ( internalModuleName
                 , MkImportedItems
                     { qualifiedAliases = []
-                    , unqualifiedItems = ["Int", "String", "Double", "Bool", "Array"]
+                    , unqualifiedItems = ["Int", "String", "Double", "Bool", "Array", "panic"]
                     }
                 )
             ]

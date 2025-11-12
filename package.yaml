@@ -33,6 +33,7 @@ dependencies:
 - uuid
 - text-builder
 - streaming
+- file-embed
 
 ghc-options:
 - -Wall

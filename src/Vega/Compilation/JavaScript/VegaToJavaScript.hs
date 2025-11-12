@@ -24,6 +24,7 @@ import Vega.Compilation.PatternMatching (CaseTree (..))
 import Vega.Compilation.PatternMatching qualified as PatternMatching
 import Vega.Effect.Trace (Trace)
 import Vega.Panic (panic)
+import Vega.Pretty (localIdentText)
 import Vega.Seq.NonEmpty (NonEmpty (..), pattern NonEmpty)
 import Vega.Syntax
 
@@ -80,6 +81,8 @@ compileDeclarationSyntax = \case
 
 compileExpr :: (Compile es) => Expr Typed -> Eff es JS.Expr
 compileExpr = \case
+    Var _ (Global builtinName)
+        | isInternalName builtinName -> compileBuiltinVar builtinName.name
     Var _ varName -> pure $ JS.Var (JS.compileName varName)
     DataConstructor _ name -> pure $ JS.Var (JS.compileName name)
     Application _ funExpr argExprs -> do
@@ -117,6 +120,23 @@ compileExpr = \case
         jsStatements <- compilePatternMatch scrutineeName cases
         pure $ JS.IIFE ([JS.Const scrutineeName jsScrutineeExpr] <> jsStatements)
 
+compileBuiltinVar :: (Compile es) => Text -> Eff es JS.Expr
+compileBuiltinVar = \case
+    "panic" -> do
+        var <- freshVar "msg"
+        pure
+            ( JS.Lambda
+                [var]
+                [ JS.Panic (JS.Var var)
+                ]
+            )
+    "replicateArray" -> pure (JS.Var ("internal$replicateArray"))
+    "readArray" -> do
+        array <- freshVar "array"
+        index <- freshVar "index"
+        pure (JS.Lambda [array, index] [JS.Return (JS.Index (JS.Var array) (JS.Var index))])
+    var -> panic $ "Builtin variable not implemented in the javascript backend: " <> localIdentText var
+
 compileStatements :: (Compile es) => Seq (Statement Typed) -> Eff es (Seq JS.Statement)
 compileStatements Empty = pure []
 compileStatements [Run _loc expr] = do
@@ -152,7 +172,7 @@ compileSequentialPatterns scrutineesAndPatterns expr = do
 
 compilePatternMatch :: (Compile es) => JS.Name -> Seq (MatchCase Typed) -> Eff es (Seq JS.Statement)
 compilePatternMatch scrutinee cases = case cases of
-    Empty -> pure [JS.Panic "PANIC: empty match expression evaluated"]
+    Empty -> pure [JS.Panic (JS.StringLiteral "empty match expression evaluated")]
     NonEmpty cases -> do
         let caseTree = PatternMatching.compileMatch (fmap (\MkMatchCase{pattern_, body} -> (pattern_, body)) cases)
         compileCaseTree compileLeaf [scrutinee] caseTree

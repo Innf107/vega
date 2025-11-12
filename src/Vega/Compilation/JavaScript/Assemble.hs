@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 module Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint) where
 
 import Relude hiding (State, evalState, get, intercalate, modify, put, trace)
@@ -11,6 +13,7 @@ import Effectful.Writer.Static.Local (Writer, runWriter, tell)
 import TextBuilder (TextBuilder)
 import TextBuilder qualified
 
+import Data.FileEmbed (embedFileRelative)
 import Data.HashSet qualified as HashSet
 import Vega.Compilation.JavaScript.Syntax (compileGlobalName)
 import Vega.Effect.Trace (Category (..), Trace, trace)
@@ -23,6 +26,8 @@ This assumes that
 -}
 assembleFromEntryPoint :: (HasCallStack, GraphPersistence :> es, Trace :> es) => GlobalName -> Eff es TextBuilder
 assembleFromEntryPoint entryPoint = fmap snd $ runWriter $ evalState @(HashSet DeclarationName) mempty do
+    tell (TextBuilder.text jsPrelude)
+
     entryPointDeclaration <-
         GraphPersistence.getDefiningDeclaration entryPoint >>= \case
             Just declaration -> pure declaration
@@ -58,3 +63,6 @@ includeDeclarationRecursively name = do
 
             for_ dependencies \dependency ->
                 includeDeclarationRecursively dependency
+
+jsPrelude :: Text
+jsPrelude = decodeUtf8 $(embedFileRelative "src/Vega/Compilation/JavaScript/prelude.js")

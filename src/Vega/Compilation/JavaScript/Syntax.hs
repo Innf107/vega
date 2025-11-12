@@ -28,13 +28,14 @@ data Statement
         , default_ :: Maybe (Seq Statement)
         }
     | DestructureArray (Seq Name) Expr
-    | Panic Text
+    | Panic Expr
 
 data Expr
     = IIFE (Seq Statement)
     | Var Name
     | Application Expr (Seq Expr)
     | FieldAccess Expr Text
+    | Index Expr Expr
     | Lambda (Seq Name) (Seq Statement)
     | StringLiteral Text
     | IntLiteral Integer
@@ -95,7 +96,7 @@ renderStatement = \case
             <> renderedDefault
             <> "}\n"
     DestructureArray bindings arrayExpr -> "const [" <> intercalateMap ", " TextBuilder.text bindings <> "] = " <> renderExpr arrayExpr
-    Panic message -> "throw '" <> escapeString message <> "'"
+    Panic message -> "throw new Error('PANIC: ' + (" <> renderExpr message <> "))"
 
 renderStatements :: (Foldable f) => f Statement -> TextBuilder
 renderStatements statements = intercalateMap ";\n" renderStatement statements
@@ -106,6 +107,7 @@ renderExpr = \case
     Var name -> TextBuilder.text name
     Application funExpr argExprs -> "(" <> renderExpr funExpr <> ")(" <> intercalateMap ", " renderExpr argExprs <> ")"
     FieldAccess expr field -> "(" <> renderExpr expr <> ")." <> TextBuilder.text field
+    Index object index -> "(" <> renderExpr object <> ")[" <> renderExpr index <> "]"
     Lambda parameters body -> "((" <> intercalateMap "," TextBuilder.text parameters <> ") => {" <> renderStatements body <> "})"
     StringLiteral string -> "\"" <> escapeString string <> "\""
     IntLiteral int -> show int
