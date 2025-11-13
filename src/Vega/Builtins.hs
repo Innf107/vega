@@ -26,6 +26,7 @@ builtinGlobals = fromList [((name, kind), internalName name) | (name, kind) <- g
         , ("replicateArray", VarKind)
         , ("readArray", VarKind)
         , ("arrayLength", VarKind)
+        , ("codePoints", VarKind)
         , ("panic", VarKind)
         ]
 
@@ -43,6 +44,7 @@ builtinTypes =
     [ (internalName "replicateArray", forall_ "a" \a -> [intType, a] --> arrayType @@ [a])
     , (internalName "readArray", forall_ "a" \a -> [arrayType @@ [a], intType] --> a)
     , (internalName "arrayLength", forall_ "a" \a -> [arrayType @@ [a]] --> intType)
+    , (internalName "codePoints", [stringType] --> arrayType @@ [intType])
     , (internalName "panic", forall_ "a" \a -> [stringType] --> a)
     ]
 
