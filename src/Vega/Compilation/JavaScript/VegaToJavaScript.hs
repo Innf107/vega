@@ -165,7 +165,9 @@ compileStatements (statement :<| rest) = case statement of
 
         body <- compileSequentialPatterns (Seq.zip parameterVariables parameters) body
 
-        pure [JS.Function (JS.compileLocalName name) parameterVariables body]
+        rest <- compileStatements rest
+
+        pure (JS.Function (JS.compileLocalName name) parameterVariables body :<| rest)
     Use{} -> undefined
 
 compileSequentialPatterns :: (Compile es) => Seq (JS.Name, Pattern Typed) -> Expr Typed -> Eff es (Seq JS.Statement)
