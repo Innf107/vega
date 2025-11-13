@@ -150,9 +150,7 @@ getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobal VarKi
                     (_rep, type_, _) <- inferTypeRep emptyEnv syntax
                     GraphPersistence.cacheGlobalType name type_
                     pure type_
-                RenamingFailed -> do
-                    dummyMeta <- MetaVar <$> freshTypeMeta "err"
-                    pure dummyMeta
+                RenamingFailed -> dummyMetaOfUnknownKind
 
 globalConstructorKind :: (TypeCheck es) => GlobalName -> Eff es Kind
 globalConstructorKind name = do
@@ -945,7 +943,7 @@ splitFunctionType loc env expectedParameterCount type_ = do
                 pure (parameters, effect, result, Just parameters)
         type_ -> do
             parameters <- Seq.replicateM expectedParameterCount (MetaVar <$> freshTypeMeta "a")
-            effect <- MetaVar <$> freshTypeMeta "e"
+            effect <- MetaVar <$> freshMeta "e" Effect
             result <- MetaVar <$> freshTypeMeta "b"
             subsumes loc env type_ (Function parameters effect result)
             pure (parameters, effect, result, Nothing)
