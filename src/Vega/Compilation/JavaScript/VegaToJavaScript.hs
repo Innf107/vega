@@ -48,7 +48,7 @@ compileDeclarationSyntax = \case
     DefineFunction{name, typeSignature = _, declaredTypeParameters = _, parameters, body} -> do
         parameterVariables <- for parameters \_ -> freshVar "x"
 
-        body <- compileSequentialPatterns (Seq.zip parameterVariables parameters) body
+        body <- compileSequentialPatterns (Seq.zipWith (\var (pattern_, _) -> (var, pattern_)) parameterVariables parameters) body
 
         pure [JS.Function (JS.compileGlobalName name) parameterVariables body]
     DefineVariantType
@@ -161,7 +161,7 @@ compileStatements (statement :<| rest) = case statement of
     LetFunction{name, typeSignature = _, parameters, body} -> do
         parameterVariables <- for parameters \_ -> freshVar "x"
 
-        body <- compileSequentialPatterns (Seq.zip parameterVariables parameters) body
+        body <- compileSequentialPatterns (Seq.zipWith (\var (pattern_, _) -> (var, pattern_)) parameterVariables parameters) body
 
         rest <- compileStatements rest
 
@@ -222,7 +222,7 @@ compileCaseTree compileGoal scrutinees caseTree = go scrutinees caseTree
             let (scrutinee, rest) = consume scrutinees
             subTreeStatements <- go (variables <> rest) subTree
             pure $ JS.DestructureArray variables (JS.Var scrutinee) :<| subTreeStatements
-        BindVar name subTree -> do
+        BindVar name _representation subTree -> do
             let (scrutinee, _) = consume scrutinees
             subTreeStatements <- go scrutinees subTree
             pure $ JS.Const (JS.compileLocalName name) (JS.Var scrutinee) :<| subTreeStatements

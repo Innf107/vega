@@ -89,6 +89,7 @@ compileBody block statements returnExpr = case statements of
         compileBody joinPointBlock statements returnExpr
         addJoinPoint name joinPointBlock.descriptor
         compileBody block rest returnExpr
+    Core.LetFunction{} :<| rest -> undefined
 
 compileLet :: (Compile es) => BlockBuilder -> LIR.Variable -> Core.Expr -> Eff es BlockBuilder
 compileLet block local = \case

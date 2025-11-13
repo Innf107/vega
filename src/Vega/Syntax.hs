@@ -115,7 +115,7 @@ data DeclarationSyntax p
         , name :: GlobalName
         , typeSignature :: TypeSyntax p
         , declaredTypeParameters :: Seq (Loc, XLocalName p)
-        , parameters :: Seq (Pattern p)
+        , parameters :: Seq (Pattern p, XParameterRepresentation p)
         , body :: Expr p
         }
     | DefineVariantType
@@ -190,14 +190,29 @@ data Statement p
     | Let Loc (Pattern p) (Expr p)
     | LetFunction
         { loc :: Loc
+        , ext :: XLetFunction p
         , name :: XLocalName p
         , typeSignature :: Maybe (TypeSyntax p)
-        , parameters :: Seq (Pattern p)
+        , parameters :: Seq (Pattern p, XParameterRepresentation p)
         , body :: Expr p
         }
     | Use Loc (Pattern p) (Expr p)
     deriving stock (Generic)
     deriving anyclass (HasLoc)
+
+type family XLetFunction p where
+    XLetFunction Parsed = ()
+    XLetFunction Renamed = ()
+    XLetFunction Typed = LetFunctionTypedExt
+
+data LetFunctionTypedExt = MkLetFunctionTypedExt
+    { returnRepresentation :: Kind
+    }
+
+type family XParameterRepresentation p where
+    XParameterRepresentation Parsed = ()
+    XParameterRepresentation Renamed = ()
+    XParameterRepresentation Typed = Type
 
 data MatchCase p = MkMatchCase
     { loc :: Loc
@@ -224,8 +239,8 @@ data BinaryOperator
 
 data Pattern p
     = WildcardPattern Loc
-    | VarPattern Loc (XLocalName p)
-    | AsPattern Loc (Pattern p) (XLocalName p)
+    | VarPattern Loc (XVarPattern p) (XLocalName p)
+    | AsPattern Loc (XAsPattern p) (Pattern p) (XLocalName p)
     | ConstructorPattern
         { loc :: Loc
         , constructor :: XName p
@@ -239,6 +254,16 @@ data Pattern p
     | OrPattern Loc (NonEmpty (Pattern p))
     deriving stock (Generic)
     deriving anyclass (HasLoc)
+
+type family XVarPattern p where
+    XVarPattern Parsed = ()
+    XVarPattern Renamed = ()
+    XVarPattern Typed = Type -- Representation
+
+type family XAsPattern p where
+    XAsPattern Parsed = ()
+    XAsPattern Renamed = ()
+    XAsPattern Typed = Type -- Representation
 
 data ParsedModule = MkParsedModule
     { imports :: Seq Import

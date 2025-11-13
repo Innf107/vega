@@ -7,7 +7,8 @@ module Vega.Compilation.PatternMatching (
 
 import Data.Map qualified as Map
 import Data.Sequence (Seq (..))
-import Relude hiding (NonEmpty)
+import Relude hiding (NonEmpty, Type)
+import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
 import Vega.Pretty (Ann, Doc, Pretty, align, indent, keyword, lparen, number, pretty, rparen, vsep, (<+>))
@@ -24,10 +25,12 @@ data CaseTree goal
         }
     | TupleCase Int (CaseTree goal)
     | -- Bind a scrutinee to a variable without consuming it
-      BindVar LocalName (CaseTree goal)
+      BindVar LocalName Type (CaseTree goal)
     | -- Consume a scrutinee and unconditionally continue
       Ignore (CaseTree goal)
     deriving (Generic, Functor, Foldable)
+
+-- TODO: not super happy about keeping representation as vega types here
 
 merge :: forall goal. CaseTree goal -> CaseTree goal -> CaseTree goal
 merge tree1 tree2 = case (tree1, tree2) of
@@ -50,12 +53,11 @@ merge tree1 tree2 = case (tree1, tree2) of
         TupleCase count (merge (replicateIgnore count ignoreSubTree) tupleSubTree)
     (TupleCase count tupleSubTree, Ignore ignoreSubTree) ->
         TupleCase count (merge tupleSubTree (replicateIgnore count ignoreSubTree))
-    (BindVar name1 subTree1, BindVar name2 subTree2) ->
-        BindVar name1 (BindVar name2 (merge subTree1 subTree2))
-    (tree, BindVar name subTree) ->
-        BindVar name (merge tree subTree)
-    (BindVar name subTree, tree) ->
-        BindVar name (merge subTree tree)
+    (BindVar name1 rep1 subTree1, BindVar name2 rep2 subTree2) -> BindVar name1 rep1 (BindVar name2 rep2 (merge subTree1 subTree2))
+    (tree, BindVar name rep subTree) ->
+        BindVar name rep (merge tree subTree)
+    (BindVar name rep subTree, tree) ->
+        BindVar name rep (merge subTree tree)
     ( ConstructorCase{constructors = constructors1, default_ = default1}
         , ConstructorCase{constructors = constructors2, default_ = default2}
         ) -> do
@@ -98,8 +100,8 @@ compileMatch patterns = mergeAll $ fmap (\(pattern_, goal) -> compileSinglePatte
 compileSinglePattern :: Pattern Typed -> CaseTree goal -> CaseTree goal
 compileSinglePattern pattern_ leaf = case pattern_ of
     WildcardPattern{} -> Ignore leaf
-    VarPattern _ name -> BindVar name (Ignore leaf)
-    AsPattern _ inner name -> BindVar name (compileSinglePattern inner leaf)
+    VarPattern _loc rep name -> BindVar name rep (Ignore leaf)
+    AsPattern _loc rep inner name -> BindVar name rep (compileSinglePattern inner leaf)
     ConstructorPattern{constructor, subPatterns} -> do
         let subTree = serializeSubPatternsWithLeaf subPatterns leaf
         ConstructorCase
@@ -132,14 +134,14 @@ traverseLeavesWithBoundVars tree onLeaf = go [] onLeaf tree
             for_ constructors \(_, subTree) -> do
                 go boundVars onLeaf subTree
         TupleCase _ subTree -> go boundVars onLeaf subTree
-        BindVar name subTree -> do
+        BindVar name rep subTree -> do
             go (boundVars :|> name) onLeaf subTree
         Ignore subTree -> go boundVars onLeaf subTree
 
 instance (Pretty goal) => Pretty (CaseTree goal) where
     pretty = \case
         Leaf goal -> keyword "Leaf" <+> pretty goal
-        BindVar name subTree -> keyword "BindVar" <+> prettyLocal VarKind name <> prettySubTree subTree
+        BindVar name rep subTree -> keyword "BindVar" <+> prettyLocal VarKind name <> pretty rep <> prettySubTree subTree
         ConstructorCase{constructors} -> do
             let prettyCase (name, (count, subTree)) = do
                     prettyName DataConstructorKind name <> lparen "(" <> number count <> rparen ")" <> prettySubTree subTree

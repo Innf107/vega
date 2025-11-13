@@ -191,7 +191,7 @@ defineFunction = do
                     , name
                     , typeSignature
                     , declaredTypeParameters
-                    , parameters
+                    , parameters = fmap (,()) parameters
                     , body
                     }
             , loc = startLoc <> getLoc body
@@ -399,7 +399,7 @@ pattern_ = do
             [ do
                 _ <- single As
                 (name, endLoc) <- identifierWithLoc
-                pure (AsPattern (getLoc inner <> endLoc) inner name)
+                pure (AsPattern (getLoc inner <> endLoc) () inner name)
             , do
                 _ <- single Colon
                 typeSignature <- type_
@@ -410,7 +410,7 @@ pattern_ = do
         choice
             [ do
                 (name, loc) <- identifierWithLoc
-                pure (VarPattern loc name)
+                pure (VarPattern loc () name)
             , do
                 (name, startLoc) <- constructorWithLoc
                 subPatterns <- optional (argumentsWithLoc pattern_)
@@ -564,11 +564,20 @@ let_ = do
             pure (Syntax.Let (startLoc <> getLoc rhs) boundPattern rhs)
         , -- let f(x, y) = e
           do
-            params <- arguments pattern_
+            parameters <- arguments pattern_
             _ <- single Lexer.Equals
-            rhs <- expr
+            body <- expr
             case boundPattern of
-                VarPattern _ varName -> pure $ Syntax.LetFunction (startLoc <> getLoc rhs) varName Nothing params rhs
+                VarPattern _ () varName ->
+                    pure $
+                        Syntax.LetFunction
+                            { ext = ()
+                            , loc = (startLoc <> getLoc body)
+                            , name = varName
+                            , typeSignature = Nothing
+                            , parameters = fmap (,()) parameters
+                            , body
+                            }
                 _ -> customFailure (NonVarInFunctionDefinition (getLoc boundPattern))
         , -- let f : Int -> Int; let f(x) = x
           do
@@ -577,10 +586,19 @@ let_ = do
             _ <- semicolon
             _ <- single Lexer.Let
             name <- identifier
-            params <- arguments pattern_
+            parameters <- arguments pattern_
             _ <- single Lexer.Equals
-            rhs <- expr
-            pure (Syntax.LetFunction (startLoc <> getLoc rhs) name (Just typeSig) params rhs)
+            body <- expr
+            pure
+                ( Syntax.LetFunction
+                    { ext = ()
+                    , loc = (startLoc <> getLoc body)
+                    , name
+                    , typeSignature = (Just typeSig)
+                    , parameters = fmap (,()) parameters
+                    , body
+                    }
+                )
         ]
 
 functionApplication :: Parser (Expr Parsed -> Expr Parsed)

@@ -45,7 +45,7 @@ compileDeclarationSyntax = \case
             local <- newLocal
             pure (local, undefined pattern_)
 
-        let caseTree = PatternMatching.serializeSubPatterns parameters ()
+        let caseTree = PatternMatching.serializeSubPatterns (fmap fst parameters) ()
 
         trace Patterns $ "compileDeclarationSyntax(" <> Vega.prettyGlobal Vega.VarKind name <> "):" <+> pretty caseTree
 
@@ -179,7 +179,36 @@ compileStatements = \case
 
         (statements, finalExpr) <- compileCaseTree (\() -> compileStatements rest) caseTree [scrutineeValue]
         pure (scrutineeStatements <> statements, finalExpr)
-    (Vega.LetFunction{} :<| _) -> undefined
+    (Vega.LetFunction{ext, name, parameters, typeSignature=_, body} :<| rest) -> do
+        coreParameters <- for parameters \(_pattern, vegaRepresentation) -> do
+            local <- newLocal
+            representation <- convertRepresentation vegaRepresentation
+            pure (local, representation)
+
+        let caseTree = PatternMatching.serializeSubPatterns (fmap fst parameters) ()
+
+        trace Patterns $ "LetFunction(" <> Vega.prettyLocal Vega.VarKind name <> "):" <+> pretty caseTree
+
+        (caseStatements, caseExpr) <-
+            compileCaseTree
+                (\() -> compileExpr body)
+                caseTree
+                (fmap (\(local, _) -> Core.Var (Core.Local local)) coreParameters)
+
+        returnRepresentation <- convertRepresentation ext.returnRepresentation
+
+        (remainingStatements, finalExpr) <- compileStatements rest
+        pure
+            ( Core.LetFunction
+                { name = Core.UserProvided name
+                , parameters = coreParameters
+                , returnRepresentation
+                , statements = caseStatements
+                , result = caseExpr
+                }
+                :<| remainingStatements
+            , finalExpr
+            )
     (Vega.Use{} :<| _) -> undefined
 
 unitLiteral :: Core.Value
@@ -255,10 +284,11 @@ compileCaseTree compileGoal caseTree scrutinees = do
 
                 (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local) locals <> rest) boundValues subTree
                 pure (accessStatements <> subTreeStatements, subTreeExpr)
-            PatternMatching.BindVar name subTree -> do
+            PatternMatching.BindVar name vegaRepresentation subTree -> do
                 let (scrutinee, _) = consume scrutinees
                 (subStatements, subExpr) <- go scrutinees (boundValues :|> Core.UserProvided name) subTree
-                pure ([Core.Let (Core.UserProvided name) undefined (Core.Value scrutinee)] <> subStatements, subExpr)
+                representation <- convertRepresentation vegaRepresentation
+                pure ([Core.Let (Core.UserProvided name) representation (Core.Value scrutinee)] <> subStatements, subExpr)
             PatternMatching.Ignore subTree -> do
                 let (_, rest) = consume scrutinees
                 go rest boundValues subTree
@@ -357,6 +387,22 @@ coalesceStatements substitution = \case
                     (fmap (\(name, representation) -> (getFinalName substitution name, representation)) parameters)
                     (makeStatements substitution)
                     (makeExpr substitution)
+                    :<| makeRest substitution
+            )
+    Core.LetFunction{name, parameters, returnRepresentation, statements, result} :<| rest -> do
+        (substitution, makeStatements) <- coalesceStatements substitution statements
+        (substitution, makeResult) <- coalesceExpr substitution result
+        (substitution, makeRest) <- coalesceStatements substitution rest
+        pure
+            ( substitution
+            , \substitution -> do
+                Core.LetFunction
+                    { name
+                    , parameters = fmap (\(name, representation) -> (getFinalName substitution name, representation)) parameters
+                    , returnRepresentation
+                    , statements = makeStatements substitution
+                    , result = makeResult substitution
+                    }
                     :<| makeRest substitution
             )
 

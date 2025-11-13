@@ -41,6 +41,13 @@ data Expr
 
 data Statement
     = Let LocalCoreName Representation Expr
+    | LetFunction
+        { name :: LocalCoreName
+        , parameters :: Seq (LocalCoreName, Representation)
+        , returnRepresentation :: Representation
+        , statements :: Seq Statement
+        , result :: Expr
+        }
     | LetJoin
         { name :: LocalCoreName
         , parameters :: Seq (LocalCoreName, Representation)
@@ -75,7 +82,10 @@ nameToCoreName = \case
     Vega.Global globalName -> Global globalName
 
 instance Pretty Representation where
+    pretty :: Representation -> Doc Ann
+    pretty (ProductRep []) = keyword "Unit"
     pretty (ProductRep representations) = lparen "(" <> intercalateDoc (" " <> keyword "*" <> " ") (fmap pretty representations) <> rparen ")"
+    pretty (SumRep [] ) = keyword "Empty"
     pretty (SumRep representations) = lparen "(" <> intercalateDoc (" " <> keyword "+" <> " ") (fmap pretty representations) <> rparen ")"
     pretty (ArrayRep inner) = keyword "ArrayRep" <> lparen "(" <> pretty inner <> rparen ")"
     pretty (PrimitiveRep rep) = pretty rep
@@ -96,6 +106,8 @@ instance Pretty Statement where
         Let name representation expr -> keyword "let" <+> pretty name <+> pretty representation <+> keyword "=" <+> pretty expr
         LetJoin name parameters bodyStatements bodyExpr ->
             keyword "letjoin" <+> pretty name <> typedParameters parameters <+> keyword "=" <+> prettyBody bodyStatements bodyExpr
+        LetFunction {name, parameters, returnRepresentation, statements, result} ->
+            keyword "letrec" <+> pretty name <> typedParameters parameters <+> keyword ":" <+> pretty returnRepresentation <+> keyword "=" <+> prettyBody statements result
 
 instance Pretty Expr where
     pretty = \case
@@ -148,7 +160,7 @@ arguments :: (Pretty a, Foldable f) => f a -> Doc Ann
 arguments elements = lparen "(" <> intercalateDoc (keyword "," <> " ") (map pretty (toList elements)) <> rparen ")"
 
 typedParameters :: (Pretty a, Foldable f) => f (a, Representation) -> Doc Ann
-typedParameters elements = lparen "(" <> intercalateDoc (keyword "," <> " ") (map (\(elem, rep) -> pretty elem <> " " <> keyword ":" <> " " <> pretty rep) (toList elements))
+typedParameters elements = lparen "(" <> intercalateDoc (keyword "," <> " ") (map (\(elem, rep) -> pretty elem <> " " <> keyword ":" <> " " <> pretty rep) (toList elements)) <> rparen ")"
 
 instance Pretty LocalCoreName where
     pretty = \case

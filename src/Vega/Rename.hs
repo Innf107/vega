@@ -206,7 +206,9 @@ renameDeclarationSyntax = \case
                 pure ((loc, name), envTrans)
         env <- pure (Util.compose envTransformers env)
 
-        (parameters, transformers) <- Seq.unzip <$> traverse (renamePattern env) parameters
+        (parameters, transformers) <- Seq.unzip <$> for parameters \(pattern_, ()) -> do
+            (pattern_, transformer) <- renamePattern env pattern_
+            pure ((pattern_, ()), transformer)
         body <- renameExpr (Util.compose transformers env) body
         pure (DefineFunction{ext, name, typeSignature, declaredTypeParameters, parameters, body})
     DefineVariantType{name, typeParameters, constructors} -> do
@@ -292,13 +294,13 @@ renameForallBinder env = \case
 renamePattern :: (Rename es) => Env -> Pattern Parsed -> Eff es (Pattern Renamed, Env -> Env)
 renamePattern env = \case
     WildcardPattern loc -> pure (WildcardPattern loc, id)
-    VarPattern loc name -> do
+    VarPattern loc () name -> do
         (localName, envTrans) <- bindLocalVar name
-        pure (VarPattern loc localName, envTrans)
-    AsPattern loc innerPattern name -> do
+        pure (VarPattern loc () localName, envTrans)
+    AsPattern loc () innerPattern name -> do
         (innerPattern, innerTrans) <- renamePattern env innerPattern
         (localName, envTrans) <- bindLocalVar name
-        pure (AsPattern loc innerPattern localName, envTrans . innerTrans)
+        pure (AsPattern loc () innerPattern localName, envTrans . innerTrans)
     ConstructorPattern{loc, constructor, subPatterns} -> do
         constructor <- findDataConstructorName env loc constructor
         (subPatterns, envTransformers) <- Seq.unzip <$> for subPatterns (renamePattern env)
@@ -384,14 +386,17 @@ renameStatement env = \case
         -- Regular lets are non-recursive so we don't use the env transformer here just yet
         body <- renameExpr env body
         pure (Let loc pattern_ body, envTrans)
-    LetFunction{loc, name, typeSignature, parameters, body} -> do
+    LetFunction{ext = (), loc, name, typeSignature, parameters, body} -> do
         (name, envTrans) <- bindLocalVar name
         typeSignature <- traverse (renameTypeSyntax env) typeSignature
-        (parameters, innerTransformers) <- Seq.unzip <$> traverse (renamePattern env) parameters
+        (parameters, innerTransformers) <-
+            Seq.unzip <$> for parameters \(pattern_, ()) -> do
+                (pattern_, envTransformer) <- renamePattern env pattern_
+                pure ((pattern_, ()), envTransformer)
         -- Function let bindings are recursive so we apply the functions own transformer first
         -- before binding any parameters
         body <- renameExpr (Util.compose innerTransformers (envTrans env)) body
-        pure (LetFunction{loc, name, typeSignature, parameters, body}, envTrans)
+        pure (LetFunction{ext = (), loc, name, typeSignature, parameters, body}, envTrans)
     Use{} -> undefined
 
 renameMatchCase :: (Rename es) => Env -> MatchCase Parsed -> Eff es (MatchCase Renamed)

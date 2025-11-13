@@ -259,8 +259,10 @@ checkDeclarationSyntax loc = \case
                         }
                     )
 
-        let checkParameter pattern_ type_ = do
-                checkPattern env type_ pattern_
+        let checkParameter (pattern_, ()) type_ = do
+                (pattern_, envTrans) <- checkPattern env type_ pattern_
+                representation <- representationOfType (getLoc pattern_) env type_
+                pure ((pattern_, representation), envTrans)
 
         (parameters, transformers) <- Seq.unzip <$> zipWithSeqM checkParameter parameters parameterTypes
         env <- pure (compose transformers env)
@@ -300,10 +302,13 @@ checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <>
             subsumes (getLoc pattern_) env type_ expectedType
             pure (pattern_, envTrans)
     case pattern_ of
-        VarPattern loc var -> pure (VarPattern loc var, bindVarType var expectedType)
-        AsPattern loc pattern_ name -> do
+        VarPattern loc () var -> do
+            rep <- representationOfType loc env expectedType
+            pure (VarPattern loc rep var, bindVarType var expectedType)
+        AsPattern loc () pattern_ name -> do
             (pattern_, innerTrans) <- checkPattern env expectedType pattern_
-            pure (AsPattern loc pattern_ name, bindVarType name expectedType . innerTrans)
+            rep <- representationOfType loc env expectedType
+            pure (AsPattern loc rep pattern_ name, bindVarType name expectedType . innerTrans)
         ConstructorPattern{} -> deferToInference
         TypePattern loc innerPattern innerTypeSyntax -> do
             (_typeRep, innerType, innerTypeSyntax) <- inferTypeRep env innerTypeSyntax
@@ -341,12 +346,14 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
     WildcardPattern loc -> do
         type_ <- MetaVar <$> freshTypeMeta "w"
         pure (WildcardPattern loc, type_, id)
-    VarPattern loc varName -> do
-        type_ <- MetaVar <$> freshTypeMeta (varName.name)
-        pure (VarPattern loc varName, type_, bindVarType varName type_)
-    AsPattern loc innerPattern name -> do
+    VarPattern loc () varName -> do
+        rep <- MetaVar <$> freshMeta "r" Rep
+        type_ <- MetaVar <$> freshMeta (varName.name) (Type rep)
+        pure (VarPattern loc rep varName, type_, bindVarType varName type_)
+    AsPattern loc () innerPattern name -> do
         (innerPattern, innerType, innerTrans) <- inferPattern env innerPattern
-        pure (AsPattern loc innerPattern name, innerType, bindVarType name innerType . innerTrans)
+        rep <- representationOfType loc env innerType
+        pure (AsPattern loc rep innerPattern name, innerType, bindVarType name innerType . innerTrans)
     ConstructorPattern{loc, constructor, subPatterns} -> do
         constructorType <- instantiate loc env =<< varType env constructor
 
@@ -634,8 +641,10 @@ checkStatement env ambientEffect statement = withTrace TypeCheck ("checkStatemen
                         }
                     )
 
-        let checkParameter pattern_ type_ = do
-                checkPattern env type_ pattern_
+        let checkParameter (pattern_, ()) type_ = do
+                (pattern_, envTrans) <- checkPattern env type_ pattern_
+                representation <- representationOfType (getLoc pattern_) env type_
+                pure ((pattern_, representation), envTrans)
 
         (parameters, transformers) <- Seq.unzip <$> zipWithSeqM checkParameter parameters parameterTypes
         innerEnv <- pure (compose transformers env)
@@ -649,7 +658,7 @@ checkStatement env ambientEffect statement = withTrace TypeCheck ("checkStatemen
                 Just typeSignature -> getLoc typeSignature
         returnRepresentation <- representationOfType typeSignatureLoc innerEnv returnType
 
-        pure (env, LetFunction{loc, name, typeSignature, parameters, body})
+        pure (env, LetFunction{ext = MkLetFunctionTypedExt{returnRepresentation}, loc, name, typeSignature, parameters, body})
     Use{} -> undefined
 
 bindTypeParameters :: (TypeCheck es) => Loc -> Env -> Seq (Loc, LocalName) -> Type -> Eff es (Env, Type)
