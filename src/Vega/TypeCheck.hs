@@ -939,8 +939,8 @@ splitFunctionType loc env expectedParameterCount type_ = do
         Function parameters effect result
             | length parameters == expectedParameterCount -> pure (parameters, effect, result, Nothing)
             | otherwise -> do
-                parameters <- padWithMetas expectedParameterCount parameters
-                pure (parameters, effect, result, Just parameters)
+                paddedParameters <- padWithMetas expectedParameterCount parameters
+                pure (paddedParameters, effect, result, Just parameters)
         type_ -> do
             parameters <- Seq.replicateM expectedParameterCount (MetaVar <$> freshTypeMeta "a")
             effect <- MetaVar <$> freshMeta "e" Effect

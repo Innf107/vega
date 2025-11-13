@@ -30,9 +30,9 @@ import Vega.Panic qualified as Panic
 import Vega.Parser (AdditionalParseError (..))
 import Vega.Parser qualified as Parser
 import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, note, number, plain, vsep, (<+>))
-import Vega.Syntax (GlobalName (..), Kind, LocalName, MetaVar, NameKind (..), Type (Tuple), prettyGlobal, prettyGlobalText, prettyLocal, Name, prettyName)
+import Vega.Syntax (GlobalName (..), Kind, LocalName, MetaVar, Name, NameKind (..), Type (Tuple), prettyGlobal, prettyGlobalText, prettyLocal, prettyName)
 import Vega.Util (viaList)
-import qualified Vega.Util as Util
+import Vega.Util qualified as Util
 
 data CompilationError
     = LexicalError LexicalError
@@ -304,7 +304,18 @@ renderCompilationError = \case
             , expectedType
             , expected
             , actual
-            } -> undefined
+            } ->
+                align $
+                    emphasis "Lambda defined with incorrect number of parameters\n"
+                        <> "  "
+                        <> align
+                            ( emphasis "This lambda is declared with" <+> pluralNumber emphasis actual "parameter"
+                                <> emphasis "\n  but its type suggests that it should have "
+                                <> number expected
+                                <> "\n"
+                                <> "    Expected type: "
+                                <> pretty expectedType
+                            )
         FunctionAppliedToIncorrectNumberOfArgs
             { loc = _
             , functionType

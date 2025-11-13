@@ -1,0 +1,8 @@
+$FILE:7:7: ERROR:
+Lambda defined with incorrect number of parameters
+  This lambda is declared with 2 parameters
+    but its type suggests that it should have 1
+      Expected type: (internal:Internal:Int) -> internal:Internal:Int
+  ┃ 
+7 ┃     f(\x y -> x)
+  ┃       ▔▔▔▔▔▔▔▔▔
