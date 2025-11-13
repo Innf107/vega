@@ -6,12 +6,18 @@ function internal$replicateArray(count, element) {
     return array
 }
 
-// There currently aren't any operations we do on arrays that couldn't
-// also be performed on strings so this is fine. If that changes,
-// we need to change this code.
-// Also, this returns Utf-16 codepoints, not unicode scalars
-// so we'll probably want to adjust it at some point to
-// align with the native implementation anyway
 function internal$codePoints(string) {
-    return string
+    const array = new Array(string.length)
+    for (let i = 0; i < string.length; i++) {
+        // TODO: this doesn't quite work with non-ascii characters
+        array[i] = string.charCodeAt(i)
+    }
+    return array
+}
+
+function internal$readArray(array, index) {
+    if (index < 0 || index >= array.length) {
+        throw new Error("readArray: Index " + index + " out of range for array of size " + array.length)
+    }
+    return array[index]
 }

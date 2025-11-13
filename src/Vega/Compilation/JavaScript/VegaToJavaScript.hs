@@ -132,10 +132,7 @@ compileBuiltinVar = \case
                 ]
             )
     "replicateArray" -> pure (JS.Var ("internal$replicateArray"))
-    "readArray" -> do
-        array <- freshVar "array"
-        index <- freshVar "index"
-        pure (JS.Lambda [array, index] [JS.Return (JS.Index (JS.Var array) (JS.Var index))])
+    "readArray" -> pure (JS.Var "internal$readArray")
     "arrayLength" -> do
         array <- freshVar "array"
         pure (JS.Lambda [array] [JS.Return (JS.FieldAccess (JS.Var array) "length")])
