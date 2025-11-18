@@ -198,18 +198,30 @@ defineFunction = do
             }
         )
 
--- TODO: allow empty definitions
 defineVariantType :: Parser (Declaration Parsed)
 defineVariantType = do
     startLoc <- single Data
-    name <- constructor
-    typeParameters <- option (fromList []) (arguments typeVarBinder)
-    _ <- single Equals
-    _ <- optional (single Pipe)
-    constructors <- constructorDefinition `sepBy1` (single Pipe)
-    let endLoc = case constructors of
-            (_ :||> (_, _, endLoc)) -> endLoc
+    (name, nameLoc) <- constructorWithLoc
+    (typeParameters, typeVarBinderLoc) <-
+        choice
+            [ do
+                (arguments, loc) <- argumentsWithLoc typeVarBinder
+                pure (arguments, Just loc)
+            , pure (fromList [], Nothing)
+            ]
 
+    (constructors, endLoc) <-
+        choice
+            [ do
+                _ <- single Equals
+                _ <- optional (single Pipe)
+                constructors <- constructorDefinition `sepBy1` (single Pipe)
+                let (_ :||> (_, _, loc)) = constructors
+                pure (NonEmpty.toSeq constructors, Just loc)
+            , pure (fromList [], Nothing)
+            ]
+
+    let loc = startLoc <> (fromMaybe nameLoc (typeVarBinderLoc <|> endLoc))
     (declarationName, name) <- globalNamesForCurrentModule name
     pure
         ( MkDeclaration
@@ -218,9 +230,9 @@ defineVariantType = do
                 DefineVariantType
                     { name
                     , typeParameters
-                    , constructors = fmap (\(name, arguments, loc) -> (loc, name, arguments)) (NonEmpty.toSeq constructors)
+                    , constructors = fmap (\(name, arguments, loc) -> (loc, name, arguments)) constructors
                     }
-            , loc = startLoc <> endLoc
+            , loc
             }
         )
   where

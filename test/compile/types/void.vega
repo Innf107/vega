@@ -1,0 +1,7 @@
+data Void
+
+absurd : forall a. Void -> a
+absurd(x) = match x {}
+
+main : () -> ()
+main() = ()
