@@ -227,7 +227,7 @@ computeAndCacheKind declaration = withTrace KindCheck ("computeAndCacheKind: " <
 
         computedKind <- case visibleBinderKinds of
             Empty -> pure (forall_ inferredBinders (Type bodyRepresentation))
-            _ -> pure (forall_ inferredBinders (Function visibleBinderKinds Pure (Type bodyRepresentation)))
+            _ -> pure (forall_ inferredBinders (TypeFunction visibleBinderKinds (Type bodyRepresentation)))
 
         GraphPersistence.cacheGlobalKind name computedKind
         pure computedKind
@@ -743,7 +743,7 @@ inferType env syntax = do
         TypeApplicationS loc typeConstructorSyntax argumentsSyntax -> do
             (constructorKind, typeConstructor, typeConstructorSyntax) <- inferType env typeConstructorSyntax
             followMetas constructorKind >>= \case
-                Function argumentKinds Pure resultKind
+                TypeFunction argumentKinds resultKind
                     | length argumentKinds == length argumentsSyntax -> do
                         (arguments, argumentsSyntax) <- Seq.unzip <$> zipWithSeqM (checkType env Parametric) argumentKinds argumentsSyntax
                         pure
@@ -774,7 +774,7 @@ inferType env syntax = do
                             inferType env argumentSyntax
                     resultKindKind <- MetaVar <$> freshMeta "k" Kind
                     resultKind <- MetaVar <$> freshMeta "r" resultKindKind
-                    subsumes (getLoc typeConstructorSyntax) env constructorKind (Function argumentKinds Pure resultKind)
+                    subsumes (getLoc typeConstructorSyntax) env constructorKind (TypeFunction argumentKinds resultKind)
 
                     pure (resultKind, TypeApplication typeConstructor arguments, TypeApplicationS loc typeConstructorSyntax argumentsSyntax)
         TypeVarS loc localName -> do
@@ -816,6 +816,10 @@ inferType env syntax = do
             (effect, effectSyntax) <- checkType env Parametric Effect effect
             (_resultRep, resultType, resultTypeSyntax) <- inferTypeRep env result
             pure (Type (PrimitiveRep BoxedRep), Function parameterTypes effect resultType, FunctionS loc parameterTypeSyntax effectSyntax resultTypeSyntax)
+        TypeFunctionS loc parameters result -> do
+            (parameterTypes, parameterTypeSyntax) <- Seq.unzip <$> traverse (checkType env Monomorphized Kind) parameters
+            (resultType, resultTypeSyntax) <- checkType env Monomorphized Kind result
+            pure (Kind, TypeFunction parameterTypes resultType, TypeFunctionS loc parameterTypeSyntax resultTypeSyntax)
         TupleS loc elements -> do
             (elementReps, elementTypes, elementTypeSyntax) <- unzip3Seq <$> traverse (inferType env) elements
             pure (Type (ProductRep elementReps), Tuple elementTypes, TupleS loc elementTypeSyntax)
@@ -860,14 +864,14 @@ kindOf loc env = \case
         -- We can assume that the kinds here are correct so we only need to pick out the result
         funType <- followMetas funType
         kindOf loc env funType >>= \case
-            Function _parameters _effect result -> do
+            TypeFunction _parameters result -> do
                 pure result
             -- TODO: this shouldn't really happen but somehow it still does?
             functionKind -> do
                 argumentKinds <- for arguments (kindOf loc env)
                 resultKindKind <- MetaVar <$> freshMeta "k" Kind
                 resultKind <- MetaVar <$> freshMeta "r" resultKindKind
-                subsumes loc env functionKind (Function argumentKinds Pure resultKind)
+                subsumes loc env functionKind (TypeFunction argumentKinds resultKind)
                 pure resultKind
     TypeVar name -> pure $ typeVariableKind name env
     Forall bindings body -> do
@@ -880,6 +884,7 @@ kindOf loc env = \case
         let innerEnv = foldr (\(name, kind) env -> bindTypeVariable name (TypeVar name) kind Parametric env) env binders
         kindOf loc innerEnv body
     Function{} -> pure (Type (PrimitiveRep BoxedRep))
+    TypeFunction{} -> pure Kind
     Tuple elements -> Type . ProductRep <$> traverse (kindOf loc env) elements
     MetaVar meta -> pure meta.kind
     Skolem skolem -> pure skolem.kind
@@ -994,6 +999,10 @@ substituteTypeVariables substitution type_ =
             effect <- substituteTypeVariables substitution effect
             result <- substituteTypeVariables substitution result
             pure (Function parameters effect result)
+        TypeFunction parameters result -> do
+            parameters <- traverse (substituteTypeVariables substitution) parameters
+            result <- substituteTypeVariables substitution result
+            pure (TypeFunction parameters result)
         Tuple elements -> do
             elements <- traverse (substituteTypeVariables substitution) elements
             pure (Tuple elements)
@@ -1252,6 +1261,12 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
                                 go effect1 effect2
                                 go result1 result2
                         _ -> unificationFailure
+                    TypeFunction parameters1 result1 -> case type2 of
+                        TypeFunction parameters2 result2
+                            | length parameters1 == length parameters2 -> do
+                                _ <- zipWithSeqM go parameters1 parameters2
+                                go result1 result2
+                        _ -> unificationFailure
                     Tuple elements1 -> case type2 of
                         Tuple elements2
                             | length elements1 == length elements2 -> do
@@ -1354,6 +1369,9 @@ occursAndAdjust meta type_ = do
             Function parameters effect result -> do
                 for_ parameters go
                 go effect
+                go result
+            TypeFunction parameters result -> do
+                for_ parameters go
                 go result
             Tuple elements -> for_ elements go
             MetaVar foundMeta
@@ -1463,6 +1481,9 @@ solveMonomorphized onMetaVar loc env type_ =
             Function parameters effect result -> do
                 for_ parameters go
                 go effect
+                go result
+            TypeFunction parameters result -> do
+                for_ parameters go
                 go result
             Tuple elements -> do
                 for_ elements go

@@ -128,6 +128,7 @@ lex state = case state of
             (_, Just rest) -> pure (RBrace, state{layout = rest})
     '[' :! state -> pure (LBracket, state)
     ']' :! state -> pure (RBracket, state)
+    ':' :! '-' :! '>' :! state -> pure (TypeArrow, state)
     ':' :! ':' :! state -> pure (DoubleColon, state)
     ':' :! state -> pure (Colon, state)
     ';' :! state -> pure (Semicolon, state)

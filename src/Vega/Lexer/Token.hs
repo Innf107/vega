@@ -23,6 +23,7 @@ data Token
     | Arrow
     | EffArrowStart
     | EffArrowEnd
+    | TypeArrow
     | DoubleColon
     | Colon
     | Semicolon
@@ -73,6 +74,7 @@ instance Pretty Token where
         DoubleEqual -> Pretty.keyword "=="
         Equals -> Pretty.keyword "="
         Arrow -> Pretty.keyword "->"
+        TypeArrow -> Pretty.keyword ":->"
         EffArrowStart -> Pretty.keyword "-{"
         EffArrowEnd -> Pretty.keyword "}>"
         DoubleColon -> Pretty.keyword "::"

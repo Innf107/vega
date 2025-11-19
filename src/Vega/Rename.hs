@@ -206,9 +206,10 @@ renameDeclarationSyntax = \case
                 pure ((loc, name), envTrans)
         env <- pure (Util.compose envTransformers env)
 
-        (parameters, transformers) <- Seq.unzip <$> for parameters \(pattern_, ()) -> do
-            (pattern_, transformer) <- renamePattern env pattern_
-            pure ((pattern_, ()), transformer)
+        (parameters, transformers) <-
+            Seq.unzip <$> for parameters \(pattern_, ()) -> do
+                (pattern_, transformer) <- renamePattern env pattern_
+                pure ((pattern_, ()), transformer)
         body <- renameExpr (Util.compose transformers env) body
         pure (DefineFunction{ext, name, typeSignature, declaredTypeParameters, parameters, body})
     DefineVariantType{name, typeParameters, constructors} -> do
@@ -255,6 +256,10 @@ renameTypeSyntax env = \case
         effect <- renameTypeSyntax env effect
         resultType <- renameTypeSyntax env resultType
         pure (FunctionS loc parameters effect resultType)
+    TypeFunctionS loc parameters result -> do
+        parameters <- traverse (renameTypeSyntax env) parameters
+        result <- renameTypeSyntax env result
+        pure (TypeFunctionS loc parameters result)
     TupleS loc elements -> do
         elements <- traverse (renameTypeSyntax env) elements
         pure (TupleS loc elements)

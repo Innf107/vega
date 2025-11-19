@@ -336,6 +336,7 @@ convertRepresentation type_ = do
         Vega.Forall{} -> invalidKind
         Vega.Exists{} -> invalidKind
         Vega.Function{} -> invalidKind
+        Vega.TypeFunction{} -> invalidKind
         Vega.Tuple{} -> invalidKind
         Vega.Pure{} -> invalidKind
         Vega.Rep{} -> invalidKind

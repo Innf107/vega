@@ -36,7 +36,7 @@ builtinKinds =
     , (internalName "String", Type (PrimitiveRep BoxedRep))
     , (internalName "Double", Type (PrimitiveRep DoubleRep))
     , (internalName "Bool", Type (SumRep [PrimitiveRep UnitRep, PrimitiveRep UnitRep]))
-    , (internalName "Array", forallVisible Monomorphized "r" Rep \r -> [Type r] --> Type (ArrayRep r))
+    , (internalName "Array", forallVisible Monomorphized "r" Rep \r -> [Type r] :-> Type (ArrayRep r))
     ]
 
 builtinTypes :: HashMap GlobalName Type
@@ -83,6 +83,10 @@ arrayType = TypeConstructor (Global (internalName "Array"))
 infixr 0 -->
 (-->) :: Seq Type -> Type -> Type
 parameters --> result = Function parameters Pure result
+
+infixr 0 :->
+pattern (:->) :: Seq Type -> Type -> Type
+pattern parameters :-> result = TypeFunction parameters result
 
 forallVisible :: Monomorphization -> Text -> Kind -> (Type -> Type) -> Type
 forallVisible monomorphization name kind body =

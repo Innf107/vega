@@ -292,6 +292,7 @@ data TypeSyntax p
     | TypeVarS Loc (XLocalName p)
     | ForallS Loc (NonEmpty (ForallBinderS p)) (TypeSyntax p)
     | ExistsS Loc (NonEmpty (XLocalName p, KindSyntax p)) (TypeSyntax p)
+    | TypeFunctionS Loc (Seq (TypeSyntax p)) (TypeSyntax p)
     | PureFunctionS Loc (Seq (TypeSyntax p)) (TypeSyntax p)
     | FunctionS Loc (Seq (TypeSyntax p)) (EffectSyntax p) (TypeSyntax p)
     | TupleS Loc (Seq (TypeSyntax p))
@@ -370,6 +371,7 @@ data Type
     | Forall (NonEmpty ForallBinder) Type
     | Exists (NonEmpty (LocalName, Kind)) Type
     | Function (Seq Type) Effect Type
+    | TypeFunction (Seq Type) Type
     | Tuple (Seq Type)
     | MetaVar MetaVar
     | Skolem Skolem
@@ -471,6 +473,8 @@ instance Pretty Type where
             keyword "exists"
                 <+> intercalateDoc " " (fmap (\(name, kind) -> lparen "(" <> prettyLocal VarKind name <+> keyword ":" <+> pretty kind <> rparen ")") binders)
                 <> keyword "." <+> pretty body
+        TypeFunction arguments result ->
+            prettyArguments arguments <+> keyword ":->" <+> pretty result
         Function arguments Pure result ->
             prettyArguments arguments <+> keyword "->" <+> pretty result
         Function arguments effect result ->
