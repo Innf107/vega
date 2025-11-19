@@ -127,6 +127,20 @@ chainl1 parser between = do
     rest <- many @[_] (liftA2 (,) between parser)
     pure $ foldl' (\left (operator, right) -> left `operator` right) first rest
 
+chainr1 :: (MonadPlus m) => m a -> m (a -> a -> a) -> m a
+chainr1 parser between = do
+    first <- parser
+    go first
+  where
+    go acc =
+        choice
+            [ do
+                operator <- between
+                next <- parser
+                pure (acc `operator` next)
+            , pure acc
+            ]
+
 parse :: ModuleName -> FilePath -> [(Token, Loc)] -> Either (ParseErrorBundle [(Token, Loc)] AdditionalParseError) ParsedModule
 parse moduleName filePath tokens = do
     let parserEnv = MkParserEnv{moduleName}
@@ -256,10 +270,14 @@ defineExternalFunction = do
 -- TODO: (k1 + ... + kn), (k1 * .. * kn)
 type_ :: Parser (TypeSyntax Parsed)
 type_ =
-    choice
-        [ chainl1 typeWithExistential (single Arrow *> pure (\type1 type2 -> PureFunctionS (getLoc type1 <> getLoc type2) (fromList [type1]) type2))
-        , chainl1 typeWithExistential (effectArrow >>= \effect -> pure (\type1 type2 -> FunctionS (getLoc type1 <> getLoc type2) (fromList [type1]) effect type2))
-        ]
+    chainr1
+        typeWithExistential
+        ( choice
+            [ single TypeArrow *> pure (\type1 type2 -> TypeFunctionS (getLoc type1 <> getLoc type2) (fromList [type1]) type2)
+            , single Arrow *> pure (\type1 type2 -> PureFunctionS (getLoc type1 <> getLoc type2) (fromList [type1]) type2)
+            , effectArrow >>= \effect -> pure (\type1 type2 -> FunctionS (getLoc type1 <> getLoc type2) (fromList [type1]) effect type2)
+            ]
+        )
   where
     typeWithExistential =
         choice
@@ -311,6 +329,10 @@ type_ =
                 (parameters, loc) <- argumentsWithLoc type_
                 choice
                     [ do
+                        _ <- single TypeArrow
+                        result <- type_
+                        pure (TypeFunctionS (loc <> getLoc result) parameters result)
+                    , do
                         _ <- single Arrow
                         result <- type_
                         pure (PureFunctionS (loc <> getLoc result) parameters result)
