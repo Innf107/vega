@@ -52,7 +52,7 @@ List.for(compileTests, \testFile -> {
             failures := failures! + 1
         }
         (ExpectFail(expectedMessage), Passed) -> {
-            print("\e[1m\e[31m[${testFile}]: FAILED\e[0m\n\e[31mTest should have failed to compile. Expected error message:\n${expectedMessage}\e[0m")
+            print("\e[1m\e[31m[${testFile}]: FAILED\e[0m\n\e[31m\e[1mTest should have failed to compile. Expected error message:\n\e[0m\e[31m${expectedMessage}\e[0m")
             failures := failures! + 1
         }
         (ExpectFail(expectedMessage), Failed(actualMessage)) -> {
@@ -63,7 +63,7 @@ List.for(compileTests, \testFile -> {
             if (expectedMessage == actualMessage) then {
                 print("\e[32m[${testFile}]: passed\e[0m")
             } else {
-                print("\e[1m\e[31m[${testFile}]: FAILED\e[0m\n\e[31mExpected error message: ${expectedMessage}\nActual error message: ${actualMessage}\e[0m")
+                print("\e[1m\e[31m[${testFile}]: FAILED\e[0m\n\e[31m\e[1mExpected error message:\e[0m\e[31m ${expectedMessage}\n\e[1mActual error message:\e[0m\e[31m ${actualMessage}\e[0m")
                 failures := failures! + 1
             }
         }
