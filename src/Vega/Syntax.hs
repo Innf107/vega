@@ -138,11 +138,17 @@ data DefineFunctionTypedExt = MkDefineFunctionTypedExt
     { returnRepresentation :: Kind
     }
 
+type family XRepresentation p where
+    XRepresentation Parsed = ()
+    XRepresentation Renamed = ()
+    XRepresentation Typed = Type
+
 data Expr p
     = Var Loc (XName p)
     | DataConstructor Loc (XName p)
     | Application
         { loc :: Loc
+        , representation :: XRepresentation p
         , functionExpr :: Expr p
         , arguments :: Seq (Expr p)
         }

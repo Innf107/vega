@@ -644,8 +644,25 @@ functionApplication = do
                 , single Underscore *> pure Nothing
                 ]
     case sequence partialArgs of
-        Nothing -> pure (\inner -> PartialApplication (getLoc inner <> endLoc) inner partialArgs)
-        Just args -> pure (\inner -> Application (getLoc inner <> endLoc) inner args)
+        Nothing ->
+            pure
+                ( \inner ->
+                    PartialApplication
+                        { loc = (getLoc inner <> endLoc)
+                        , functionExpr = inner
+                        , partialArguments = partialArgs
+                        }
+                )
+        Just arguments ->
+            pure
+                ( \inner ->
+                    Application
+                        { loc = getLoc inner <> endLoc
+                        , representation = ()
+                        , functionExpr = inner
+                        , arguments
+                        }
+                )
 
 import_ :: Parser Import
 import_ = do

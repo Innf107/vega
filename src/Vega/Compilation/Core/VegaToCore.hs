@@ -80,8 +80,8 @@ compileExpr expr = do
     case expr of
         Vega.Var{} -> deferToValue
         Vega.DataConstructor{} -> deferToValue
-        Vega.Application _ (Vega.DataConstructor _ _) _ -> deferToValue
-        Vega.Application _ functionExpr argExprs -> do
+        Vega.Application _ _ (Vega.DataConstructor _ _) _ -> deferToValue
+        Vega.Application _ returnRepresentation functionExpr argExprs -> do
             (functionStatements, function) <- compileExprToValue_ functionExpr
             (argumentStatements, arguments) <-
                 Seq.unzip <$> for argExprs \argument -> do
@@ -89,7 +89,9 @@ compileExpr expr = do
             functionVar <- case function of
                 Core.Var name -> pure name
                 value -> panic $ "function compiled to non-variable value: " <> pretty value <> ". this should have been a type error"
-            pure (functionStatements <> fold argumentStatements, Core.Application functionVar arguments, undefined)
+            
+            returnRepresentation <- convertRepresentation returnRepresentation
+            pure (functionStatements <> fold argumentStatements, Core.Application functionVar arguments, returnRepresentation)
         Vega.PartialApplication{loc = _, functionExpr, partialArguments} -> do
             (functionStatements, function, _) <- compileExprToValue functionExpr
             functionName <- case function of
@@ -157,9 +159,10 @@ compileExprToValue expr = do
             -- To do this correctly, we need a GraphPersistence hook to look up the arity of a data constructor
             -- and desugar this to a lambda taking that many parameters
             pure ([], Core.DataConstructorApplication (Core.UserDefinedConstructor name) [], undefined)
-        Vega.Application _ (Vega.DataConstructor _ name) argumentExprs -> do
+        Vega.Application _ returnRepresentation (Vega.DataConstructor _ name) argumentExprs -> do
             (argumentStatements, arguments) <- Seq.unzip <$> for argumentExprs compileExprToValue_
-            pure (fold argumentStatements, Core.DataConstructorApplication (Core.UserDefinedConstructor name) arguments, undefined)
+            returnRepresentation <- convertRepresentation returnRepresentation
+            pure (fold argumentStatements, Core.DataConstructorApplication (Core.UserDefinedConstructor name) arguments, returnRepresentation)
         Vega.Application{} -> deferToLet
         Vega.PartialApplication{} -> deferToLet
         -- We can erase type applications since Core is untyped

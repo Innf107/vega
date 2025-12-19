@@ -523,7 +523,9 @@ infer env ambientEffect expr = do
             let checkArguments argumentExpr argumentType = do
                     check env ambientEffect argumentType argumentExpr
             arguments <- zipWithSeqM checkArguments arguments argumentTypes
-            pure (returnType, Application{loc, functionExpr, arguments})
+
+            returnRepresentation <- representationOfType loc env returnType
+            pure (returnType, Application{loc, functionExpr, arguments, representation=returnRepresentation})
         VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax} -> do
             type_ <- varType env varName
 
