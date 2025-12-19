@@ -237,7 +237,7 @@ checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> 
 checkDeclarationSyntax loc = \case
     DefineFunction{ext = (), name, typeSignature, declaredTypeParameters, parameters, body} -> do
         let env = emptyEnv
-        (functionType, typeSignature) <- checkType env Parametric (Type (PrimitiveRep BoxedRep)) typeSignature
+        (functionType, typeSignature) <- checkType env Parametric (Type functionRepresentation) typeSignature
 
         (env, remainingType) <- bindTypeParameters loc env declaredTypeParameters functionType
 
@@ -292,7 +292,7 @@ checkDeclarationSyntax loc = \case
             pure (name, loc, parameters)
         pure (DefineVariantType{name, typeParameters, constructors})
     DefineExternalFunction{name, type_} -> do
-        (_, type_) <- checkType emptyEnv Parametric (Type (PrimitiveRep BoxedRep)) type_
+        (_, type_) <- checkType emptyEnv Parametric (Type functionRepresentation) type_
         pure (DefineExternalFunction{name, type_})
 
 checkPattern :: (TypeCheck es) => Env -> Type -> Pattern Renamed -> Eff es (Pattern Typed, Env -> Env)
@@ -612,7 +612,7 @@ checkStatement env ambientEffect statement = withTrace TypeCheck ("checkStatemen
     LetFunction{loc, name, typeSignature, parameters, body} -> do
         (functionType, typeSignature) <- case typeSignature of
             Just typeSignature -> do
-                (functionType, typeSignature) <- checkType env Parametric (Type (PrimitiveRep BoxedRep)) typeSignature
+                (functionType, typeSignature) <- checkType env Parametric (Type functionRepresentation) typeSignature
                 pure (functionType, Just typeSignature)
             Nothing -> do
                 type_ <- MetaVar <$> freshTypeMeta "r"
@@ -810,12 +810,12 @@ inferType env syntax = do
         PureFunctionS loc parameters result -> do
             (_parameterReps, parameterTypes, parameterTypeSyntax) <- unzip3Seq <$> traverse (inferTypeRep env) parameters
             (_resultRep, resultType, resultTypeSyntax) <- inferTypeRep env result
-            pure (Type (PrimitiveRep BoxedRep), Function parameterTypes Pure resultType, PureFunctionS loc parameterTypeSyntax resultTypeSyntax)
+            pure (Type functionRepresentation, Function parameterTypes Pure resultType, PureFunctionS loc parameterTypeSyntax resultTypeSyntax)
         FunctionS loc parameters effect result -> do
             (_parameterReps, parameterTypes, parameterTypeSyntax) <- unzip3Seq <$> traverse (inferTypeRep env) parameters
             (effect, effectSyntax) <- checkType env Parametric Effect effect
             (_resultRep, resultType, resultTypeSyntax) <- inferTypeRep env result
-            pure (Type (PrimitiveRep BoxedRep), Function parameterTypes effect resultType, FunctionS loc parameterTypeSyntax effectSyntax resultTypeSyntax)
+            pure (Type functionRepresentation, Function parameterTypes effect resultType, FunctionS loc parameterTypeSyntax effectSyntax resultTypeSyntax)
         TypeFunctionS loc parameters result -> do
             (parameterTypes, parameterTypeSyntax) <- Seq.unzip <$> traverse (checkType env Monomorphized Kind) parameters
             (resultType, resultTypeSyntax) <- checkType env Monomorphized Kind result
@@ -883,7 +883,7 @@ kindOf loc env = \case
     Exists binders body -> do
         let innerEnv = foldr (\(name, kind) env -> bindTypeVariable name (TypeVar name) kind Parametric env) env binders
         kindOf loc innerEnv body
-    Function{} -> pure (Type (PrimitiveRep BoxedRep))
+    Function{} -> pure (Type functionRepresentation)
     TypeFunction{} -> pure Kind
     Tuple elements -> Type . ProductRep <$> traverse (kindOf loc env) elements
     MetaVar meta -> pure meta.kind

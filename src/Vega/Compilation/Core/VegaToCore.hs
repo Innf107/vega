@@ -10,7 +10,7 @@ import Data.Map qualified as Map
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
-import Vega.Compilation.Core.Syntax (nameToCoreName)
+import Vega.Compilation.Core.Syntax (nameToCoreName, stringRepresentation)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.PatternMatching (CaseTree)
 import Vega.Compilation.PatternMatching qualified as PatternMatching
@@ -24,6 +24,7 @@ import Vega.Seq.NonEmpty (pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax (Pass (..))
 import Vega.Syntax qualified as Vega
+import Vega.Util (assert)
 import Vega.Util qualified as Util
 import Witherable (wither)
 
@@ -41,15 +42,16 @@ compileDeclaration declaration = do
 compileDeclarationSyntax :: (Compile es) => Vega.DeclarationSyntax Typed -> Eff es (Seq Core.Declaration)
 compileDeclarationSyntax = \case
     Vega.DefineFunction{ext, name, typeSignature = _, declaredTypeParameters = _, parameters, body} -> do
-        coreParameters <- for parameters \(pattern_) -> do
+        coreParameters <- for parameters \(_pattern, vegaRepresentation) -> do
+            representation <- convertRepresentation vegaRepresentation
             local <- newLocal
-            pure (local, undefined pattern_)
+            pure (local, representation)
 
         let caseTree = PatternMatching.serializeSubPatterns (fmap fst parameters) ()
 
         trace Patterns $ "compileDeclarationSyntax(" <> Vega.prettyGlobal Vega.VarKind name <> "):" <+> pretty caseTree
 
-        (caseStatements, caseExpr) <- compileCaseTree (\() -> compileExpr body) caseTree (fmap (\(local, _) -> Core.Var (Core.Local local)) coreParameters)
+        (caseStatements, caseExpr) <- compileCaseTree (\() -> compileExpr_ body) caseTree (fmap (\(local, _) -> Core.Var (Core.Local local)) coreParameters)
 
         returnRepresentation <- convertRepresentation ext.returnRepresentation
         pure
@@ -64,26 +66,32 @@ compileDeclarationSyntax = \case
     Vega.DefineVariantType{} -> pure []
     Vega.DefineExternalFunction{} -> pure []
 
-compileExpr :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Expr)
+-- | Like 'compileExpr' but discards the representation
+compileExpr_ :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Expr)
+compileExpr_ expr = do
+    (statements, returnExpr, _representation) <- compileExpr expr
+    pure (statements, returnExpr)
+
+compileExpr :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Expr, Core.Representation)
 compileExpr expr = do
     let deferToValue = do
-            (statements, value) <- compileExprToValue expr
-            pure (statements, Core.Value value)
+            (statements, value, representation) <- compileExprToValue expr
+            pure (statements, Core.Value value, representation)
     case expr of
         Vega.Var{} -> deferToValue
         Vega.DataConstructor{} -> deferToValue
         Vega.Application _ (Vega.DataConstructor _ _) _ -> deferToValue
         Vega.Application _ functionExpr argExprs -> do
-            (functionStatements, function) <- compileExprToValue functionExpr
+            (functionStatements, function) <- compileExprToValue_ functionExpr
             (argumentStatements, arguments) <-
                 Seq.unzip <$> for argExprs \argument -> do
-                    compileExprToValue argument
+                    compileExprToValue_ argument
             functionVar <- case function of
                 Core.Var name -> pure name
                 value -> panic $ "function compiled to non-variable value: " <> pretty value <> ". this should have been a type error"
-            pure (functionStatements <> fold argumentStatements, Core.Application functionVar arguments)
+            pure (functionStatements <> fold argumentStatements, Core.Application functionVar arguments, undefined)
         Vega.PartialApplication{loc = _, functionExpr, partialArguments} -> do
-            (functionStatements, function) <- compileExprToValue functionExpr
+            (functionStatements, function, _) <- compileExprToValue functionExpr
             functionName <- case function of
                 Core.Var name -> pure name
                 value -> panic $ "function compiled to non-variable value: " <> pretty value <> ". this should have been a type error"
@@ -94,9 +102,9 @@ compileExpr expr = do
                         representation <- undefined
                         pure ([(local, representation)], [], Core.Var (Core.Local local))
                     Just vegaExpr -> do
-                        (exprStatements, value) <- compileExprToValue vegaExpr
+                        (exprStatements, value) <- compileExprToValue_ vegaExpr
                         pure ([], exprStatements, value)
-            pure (functionStatements <> fold argumentStatements, Core.Lambda (fold locals) [] (Core.Application functionName arguments))
+            pure (functionStatements <> fold argumentStatements, Core.Lambda (fold locals) [] (Core.Application functionName arguments), undefined)
         Vega.VisibleTypeApplication{} -> deferToValue
         Vega.Lambda{parameters, body} -> do
             let caseTree = PatternMatching.serializeSubPatterns parameters ()
@@ -104,17 +112,18 @@ compileExpr expr = do
                 local <- newLocal
                 representation <- undefined
                 pure (local, representation)
-            (bodyStatements, body) <- compileCaseTree (\() -> compileExpr body) caseTree (fmap (\(localName, _) -> Core.Var (Core.Local localName)) variables)
-            pure ([], Core.Lambda variables bodyStatements body)
+            (bodyStatements, body) <- compileCaseTree (\() -> compileExpr_ body) caseTree (fmap (\(localName, _) -> Core.Var (Core.Local localName)) variables)
+            pure ([], Core.Lambda variables bodyStatements body, undefined)
         Vega.StringLiteral{} -> deferToValue
         Vega.IntLiteral{} -> deferToValue
         Vega.DoubleLiteral{} -> deferToValue
         Vega.TupleLiteral{} -> deferToValue
         Vega.BinaryOperator{} -> undefined
         Vega.If{condition, thenBranch, elseBranch} -> do
-            (conditionStatements, conditionValue) <- compileExprToValue condition
-            (thenStatements, thenExpr) <- compileExpr thenBranch
-            (elseStatements, elseExpr) <- compileExpr elseBranch
+            (conditionStatements, conditionValue) <- compileExprToValue_ condition
+            (thenStatements, thenExpr, thenRepresentation) <- compileExpr thenBranch
+            (elseStatements, elseExpr, elseRepresentation) <- compileExpr elseBranch
+            assert (thenRepresentation == elseRepresentation)
             pure
                 ( conditionStatements
                 , Core.ConstructorCase
@@ -122,64 +131,80 @@ compileExpr expr = do
                     [ (booleanConstructorName True, ([], thenStatements, thenExpr))
                     , (booleanConstructorName False, ([], elseStatements, elseExpr))
                     ]
+                , thenRepresentation
                 )
         Vega.SequenceBlock{statements} -> compileStatements statements
-        Vega.Match{scrutinee, cases} -> compilePatternMatch scrutinee (fmap (\Vega.MkMatchCase{pattern_, body} -> (pattern_, body)) cases)
+        Vega.Match{scrutinee, cases} -> do
+                (statements, returnExpr) <- compilePatternMatch scrutinee (fmap (\Vega.MkMatchCase{pattern_, body} -> (pattern_, body)) cases)
+                pure (statements, returnExpr, undefined)
 
-compileExprToValue :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Value)
+-- | Like 'compileExprToValue' but discards the representation
+compileExprToValue_ :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Value)
+compileExprToValue_ expr = do
+    (statements, value, _representation) <- compileExprToValue expr
+    pure (statements, value)
+
+compileExprToValue :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Value, Core.Representation)
 compileExprToValue expr = do
     let deferToLet = do
-            (statements, expr) <- compileExpr expr
-            representation <- undefined
+            (statements, expr, representation) <- compileExpr expr
             name <- newLocal
-            pure (statements <> [Core.Let name representation expr], Core.Var (Core.Local name))
+            pure (statements <> [Core.Let name representation expr], Core.Var (Core.Local name), representation)
     case expr of
-        Vega.Var _ name -> pure ([], Core.Var (nameToCoreName name))
+        Vega.Var _ name -> pure ([], Core.Var (nameToCoreName name), undefined)
         Vega.DataConstructor _ name -> do
             -- TODO: THIS IS WRONG. It's just a temporary fix to get Nil working.
             -- To do this correctly, we need a GraphPersistence hook to look up the arity of a data constructor
             -- and desugar this to a lambda taking that many parameters
-            pure ([], Core.DataConstructorApplication (Core.UserDefinedConstructor name) [])
+            pure ([], Core.DataConstructorApplication (Core.UserDefinedConstructor name) [], undefined)
         Vega.Application _ (Vega.DataConstructor _ name) argumentExprs -> do
-            (argumentStatements, arguments) <- Seq.unzip <$> for argumentExprs compileExprToValue
-            pure (fold argumentStatements, Core.DataConstructorApplication (Core.UserDefinedConstructor name) arguments)
+            (argumentStatements, arguments) <- Seq.unzip <$> for argumentExprs compileExprToValue_
+            pure (fold argumentStatements, Core.DataConstructorApplication (Core.UserDefinedConstructor name) arguments, undefined)
         Vega.Application{} -> deferToLet
         Vega.PartialApplication{} -> deferToLet
         -- We can erase type applications since Core is untyped
-        Vega.VisibleTypeApplication{varName} -> pure ([], Core.Var (nameToCoreName varName))
+        Vega.VisibleTypeApplication{varName} -> pure ([], Core.Var (nameToCoreName varName), undefined)
         Vega.Lambda{} -> deferToLet
-        Vega.StringLiteral _loc literal -> pure ([], Core.Literal (Core.StringLiteral literal))
-        Vega.IntLiteral _loc literal -> pure ([], Core.Literal (Core.IntLiteral literal))
-        Vega.DoubleLiteral _loc literal -> pure ([], Core.Literal (Core.DoubleLiteral literal))
+        Vega.StringLiteral _loc literal -> pure ([], Core.Literal (Core.StringLiteral literal), stringRepresentation)
+        Vega.IntLiteral _loc literal -> pure ([], Core.Literal (Core.IntLiteral literal), Core.PrimitiveRep Vega.IntRep)
+        Vega.DoubleLiteral _loc literal -> pure ([], Core.Literal (Core.DoubleLiteral literal), Core.PrimitiveRep Vega.DoubleRep)
         Vega.TupleLiteral _loc elements -> do
-            (statements, elementValues) <- Seq.unzip <$> for elements compileExprToValue
-            pure (fold statements, Core.DataConstructorApplication (Core.TupleConstructor (length elementValues)) elementValues)
+            (statements, elementValues) <- Seq.unzip <$> for elements compileExprToValue_
+            pure (fold statements, Core.DataConstructorApplication (Core.TupleConstructor (length elementValues)) elementValues, undefined)
         Vega.BinaryOperator{} -> undefined
         Vega.If{} -> deferToLet
         Vega.SequenceBlock{} -> deferToLet
         Vega.Match{} -> deferToLet
 
-compileStatements ::
+-- | Like 'compileStatements' but discards the representation
+compileStatements_ ::
     (Compile es) =>
     Seq (Vega.Statement Typed) ->
     Eff es (Seq Core.Statement, Core.Expr)
+compileStatements_ statements = do
+    (statements, expr, _representation) <- compileStatements statements
+    pure (statements, expr)
+
+compileStatements ::
+    (Compile es) =>
+    Seq (Vega.Statement Typed) ->
+    Eff es (Seq Core.Statement, Core.Expr, Core.Representation)
 compileStatements = \case
-    Empty -> pure ([], Core.Value unitLiteral)
+    Empty -> pure ([], Core.Value unitLiteral, Core.PrimitiveRep Vega.UnitRep)
     [Vega.Run _ expr] -> compileExpr expr
     (Vega.Run _ expr :<| rest) -> do
         local <- newLocal
-        representation <- undefined expr
-        (statements, coreExpr) <- compileExpr expr
-        (restStatements, result) <- compileStatements rest
-        pure (statements <> [Core.Let local representation coreExpr] <> restStatements, result)
+        (statements, coreExpr, exprRepresentation) <- compileExpr expr
+        (restStatements, result, finalRepresentation) <- compileStatements rest
+        pure (statements <> [Core.Let local exprRepresentation coreExpr] <> restStatements, result, finalRepresentation)
     (Vega.Let _ pattern_ expr :<| rest) -> do
-        (scrutineeStatements, scrutineeValue) <- compileExprToValue expr
+        (scrutineeStatements, scrutineeValue, varRepresentation) <- compileExprToValue expr
 
         let caseTree = PatternMatching.serializeSubPatterns [pattern_] ()
 
-        (statements, finalExpr) <- compileCaseTree (\() -> compileStatements rest) caseTree [scrutineeValue]
-        pure (scrutineeStatements <> statements, finalExpr)
-    (Vega.LetFunction{ext, name, parameters, typeSignature=_, body} :<| rest) -> do
+        (statements, finalExpr) <- compileCaseTree (\() -> compileStatements_ rest) caseTree [scrutineeValue]
+        pure (scrutineeStatements <> statements, finalExpr, undefined)
+    (Vega.LetFunction{ext, name, parameters, typeSignature = _, body} :<| rest) -> do
         coreParameters <- for parameters \(_pattern, vegaRepresentation) -> do
             local <- newLocal
             representation <- convertRepresentation vegaRepresentation
@@ -191,13 +216,13 @@ compileStatements = \case
 
         (caseStatements, caseExpr) <-
             compileCaseTree
-                (\() -> compileExpr body)
+                (\() -> compileExpr_ body)
                 caseTree
                 (fmap (\(local, _) -> Core.Var (Core.Local local)) coreParameters)
 
         returnRepresentation <- convertRepresentation ext.returnRepresentation
 
-        (remainingStatements, finalExpr) <- compileStatements rest
+        (remainingStatements, finalExpr, finalRepresentation) <- compileStatements rest
         pure
             ( Core.LetFunction
                 { name = Core.UserProvided name
@@ -208,6 +233,7 @@ compileStatements = \case
                 }
                 :<| remainingStatements
             , finalExpr
+            , finalRepresentation
             )
     (Vega.Use{} :<| _) -> undefined
 
@@ -218,12 +244,12 @@ compilePatternMatch :: (Compile es) => Vega.Expr Typed -> Seq (Vega.Pattern Type
 compilePatternMatch scrutinee = \case
     Empty -> undefined
     NonEmpty cases -> do
-        (scrutineeStatements, scrutineeValue) <- compileExprToValue scrutinee
+        (scrutineeStatements, scrutineeValue, _) <- compileExprToValue scrutinee
 
         let compileGoal goal =
                 case (NonEmpty.toSeq) cases Seq.!? goal of
                     Nothing -> error "tried to access a match RHS that doesn't exist"
-                    Just (_, body) -> compileExpr body
+                    Just (_, body) -> compileExpr_ body
         let caseTree = PatternMatching.compileMatch (NonEmpty.mapWithIndex (\i (pattern_, _) -> (pattern_, i)) cases)
         trace Patterns $
             "compilePatternMatch: ["

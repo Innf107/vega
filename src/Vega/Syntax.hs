@@ -388,6 +388,7 @@ data Type
     | PrimitiveRep PrimitiveRep
     deriving (Generic)
 
+-- TODO: Why do we have UnitRep and EmptyRep here? Shouldn't they just be `ProductRep []` and `SumRep []`?
 data PrimitiveRep
     = UnitRep
     | EmptyRep
@@ -563,6 +564,15 @@ typeOfGlobal global = \case
     DefineExternalFunction{name, type_}
         | name == global -> type_
         | otherwise -> error $ "global (term) variable not found in external function '" <> show name <> "': " <> show global
+
+-- | The representation of strings (and in particular string literals)
+stringRepresentation :: Type
+stringRepresentation = PrimitiveRep BoxedRep
+
+-- The representation of functions. This *will* probably change in the future so code
+-- should treat it abstractly instead of depending on its concrete value
+functionRepresentation :: Type
+functionRepresentation = PrimitiveRep BoxedRep
 
 {- NOTE: Ord instances
 -----------------------------------------------------

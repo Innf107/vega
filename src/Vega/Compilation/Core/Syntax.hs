@@ -75,6 +75,7 @@ data Representation
     | SumRep (Seq Representation)
     | ArrayRep Representation
     | PrimitiveRep Vega.PrimitiveRep
+    deriving (Eq)
 
 nameToCoreName :: Vega.Name -> CoreName
 nameToCoreName = \case
@@ -85,7 +86,7 @@ instance Pretty Representation where
     pretty :: Representation -> Doc Ann
     pretty (ProductRep []) = keyword "Unit"
     pretty (ProductRep representations) = lparen "(" <> intercalateDoc (" " <> keyword "*" <> " ") (fmap pretty representations) <> rparen ")"
-    pretty (SumRep [] ) = keyword "Empty"
+    pretty (SumRep []) = keyword "Empty"
     pretty (SumRep representations) = lparen "(" <> intercalateDoc (" " <> keyword "+" <> " ") (fmap pretty representations) <> rparen ")"
     pretty (ArrayRep inner) = keyword "ArrayRep" <> lparen "(" <> pretty inner <> rparen ")"
     pretty (PrimitiveRep rep) = pretty rep
@@ -106,7 +107,7 @@ instance Pretty Statement where
         Let name representation expr -> keyword "let" <+> pretty name <+> pretty representation <+> keyword "=" <+> pretty expr
         LetJoin name parameters bodyStatements bodyExpr ->
             keyword "letjoin" <+> pretty name <> typedParameters parameters <+> keyword "=" <+> prettyBody bodyStatements bodyExpr
-        LetFunction {name, parameters, returnRepresentation, statements, result} ->
+        LetFunction{name, parameters, returnRepresentation, statements, result} ->
             keyword "letrec" <+> pretty name <> typedParameters parameters <+> keyword ":" <+> pretty returnRepresentation <+> keyword "=" <+> prettyBody statements result
 
 instance Pretty Expr where
@@ -171,3 +172,12 @@ instance Pretty CoreName where
     pretty = \case
         Global global -> prettyGlobal VarKind global
         Local local -> pretty local
+
+-- | The representation of string literals (and in particular string literals)
+stringRepresentation :: Representation
+stringRepresentation = PrimitiveRep Vega.BoxedRep
+
+-- The representation of functions. This *will* probably change in the future so code
+-- should treat it abstractly instead of depending on its concrete value
+functionRepresentation :: Representation
+functionRepresentation = PrimitiveRep Vega.BoxedRep
