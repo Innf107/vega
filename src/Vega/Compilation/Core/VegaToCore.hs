@@ -115,7 +115,7 @@ compileExpr expr = do
                 representation <- undefined
                 pure (local, representation)
             (bodyStatements, body) <- compileCaseTree (\() -> compileExpr_ body) caseTree (fmap (\(localName, _) -> Core.Var (Core.Local localName)) variables)
-            pure ([], Core.Lambda variables bodyStatements body, undefined)
+            pure ([], Core.Lambda variables bodyStatements body, Core.functionRepresentation)
         Vega.StringLiteral{} -> deferToValue
         Vega.IntLiteral{} -> deferToValue
         Vega.DoubleLiteral{} -> deferToValue
