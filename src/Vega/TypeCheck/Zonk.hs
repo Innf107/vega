@@ -11,14 +11,15 @@ import GHC.Generics qualified as Generics
 import Vega.Error (TypeError, TypeErrorSet)
 import Vega.Loc (Loc)
 import Vega.Seq.NonEmpty (NonEmpty)
+import Vega.Effect.Meta.Static (ReadMeta, readMeta, followMetasWithoutPathCompression)
 
 class Zonkable a where
-    default zonk :: (IOE :> es) => (Generic a, ZonkableGeneric (Generics.Rep a)) => a -> Eff es a
-    zonk :: (IOE :> es) => a -> Eff es a
+    default zonk :: (ReadMeta :> es) => (Generic a, ZonkableGeneric (Generics.Rep a)) => a -> Eff es a
+    zonk :: (ReadMeta :> es) => a -> Eff es a
     zonk x = Generics.to <$> zonkGeneric (Generics.from x)
 
 class ZonkableGeneric f where
-    zonkGeneric :: (IOE :> es) => f x -> Eff es (f x)
+    zonkGeneric :: (ReadMeta :> es) => f x -> Eff es (f x)
 
 instance ZonkableGeneric Generics.V1 where
     zonkGeneric = \case {}
@@ -46,7 +47,7 @@ instance Zonkable (ZonkIgnored a) where
 
 instance Zonkable Type where
     zonk type_ = do
-        firstLevel <- followMetas type_
+        firstLevel <- followMetasWithoutPathCompression type_
         coerce <$> zonk (Generics.Generically firstLevel)
 
 instance (Generic a, ZonkableGeneric (Generics.Rep a)) => Zonkable (Generics.Generically a) where

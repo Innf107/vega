@@ -1,7 +1,20 @@
 module Vega.Compilation.Core.VegaToCore (compileDeclaration) where
 
-import Effectful
-import Relude hiding (NonEmpty, State, evalState, get, modify, put, runState, trace)
+import Effectful (Eff, IOE, (:>))
+import Relude hiding (
+    NonEmpty,
+    Reader,
+    State,
+    ask,
+    evalState,
+    get,
+    local,
+    modify,
+    put,
+    runReader,
+    runState,
+    trace,
+ )
 import Relude qualified
 
 import Data.HashMap.Strict (alter)
@@ -10,12 +23,16 @@ import Data.Map qualified as Map
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
+import Effectful.Reader.Static (Reader, ask, runReader)
 import Vega.Compilation.Core.Syntax (nameToCoreName, stringRepresentation)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.PatternMatching (CaseTree)
 import Vega.Compilation.PatternMatching qualified as PatternMatching
+import Vega.Debruijn qualified as Debruijn
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.GraphPersistence (GraphPersistence)
+import Vega.Effect.Meta.Static (BindMeta, ReadMeta, runMeta)
+import Vega.Effect.Meta.Static qualified as Meta
 import Vega.Effect.Trace (Category (Patterns), Trace, trace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
 import Vega.Panic (panic)
@@ -32,37 +49,67 @@ type Compile es =
     ( GraphPersistence :> es
     , NewUnique :> es
     , Trace :> es
+    , Reader Env :> es
     )
 
-compileDeclaration :: (GraphPersistence :> es, IOE :> es, Trace :> es) => Vega.Declaration Typed -> Eff es (Seq Core.Declaration)
+data Env = MkEnv
+    { typeVariableRepresentations :: Undefined
+    , monomorphizableRepresentationVariables :: HashMap Vega.LocalName Debruijn.Index
+    }
+
+envAndLimitFromRepresentationVariables :: Seq Vega.LocalName -> (Env, Debruijn.Limit)
+envAndLimitFromRepresentationVariables variables = go Debruijn.initial HashMap.empty variables
+  where
+    go limit mapping Empty =
+        ( MkEnv
+            { typeVariableRepresentations = Undefined
+            , monomorphizableRepresentationVariables = mapping
+            }
+        , limit
+        )
+    go oldLimit mapping (var :<| rest) = do
+        let (newLimit, index) = Debruijn.new oldLimit
+        go newLimit (HashMap.insert var index mapping) rest
+
+compileDeclaration ::
+    (GraphPersistence :> es, IOE :> es, Trace :> es) =>
+    Vega.Declaration Typed ->
+    Eff es (Seq Core.Declaration)
 compileDeclaration declaration = do
-    declarations <- runNewUnique $ compileDeclarationSyntax declaration.syntax
+    declarations <- runNewUnique $ runMeta $ compileDeclarationSyntax declaration.syntax
     traverse coalesceVariables declarations
 
-compileDeclarationSyntax :: (Compile es) => Vega.DeclarationSyntax Typed -> Eff es (Seq Core.Declaration)
+compileDeclarationSyntax ::
+    (GraphPersistence :> es, Trace :> es, NewUnique :> es, ReadMeta :> es) =>
+    Vega.DeclarationSyntax Typed ->
+    Eff es (Seq Core.Declaration)
 compileDeclarationSyntax = \case
     Vega.DefineFunction{ext, name, typeSignature = _, declaredTypeParameters = _, parameters, body} -> do
-        coreParameters <- for parameters \(_pattern, vegaRepresentation) -> do
-            representation <- convertRepresentation vegaRepresentation
-            local <- newLocal
-            pure (local, representation)
+        monomorphizableRepresentationVariables <- extractMonomorphizableRepresentationVariables ext.forallBinders
+        let (env, representationParameters) = envAndLimitFromRepresentationVariables monomorphizableRepresentationVariables
+        runReader env do
+            coreParameters <- for parameters \(_pattern, vegaRepresentation) -> do
+                representation <- convertRepresentation vegaRepresentation
+                local <- newLocal
+                pure (local, representation)
 
-        let caseTree = PatternMatching.serializeSubPatterns (fmap fst parameters) ()
+            let caseTree = PatternMatching.serializeSubPatterns (fmap fst parameters) ()
 
-        trace Patterns $ "compileDeclarationSyntax(" <> Vega.prettyGlobal Vega.VarKind name <> "):" <+> pretty caseTree
+            trace Patterns $ "compileDeclarationSyntax(" <> Vega.prettyGlobal Vega.VarKind name <> "):" <+> pretty caseTree
 
-        (caseStatements, caseExpr) <- compileCaseTree (\() -> compileExpr_ body) caseTree (fmap (\(local, _) -> Core.Var (Core.Local local)) coreParameters)
+            (caseStatements, caseExpr) <- compileCaseTree (\() -> compileExpr_ body) caseTree (fmap (\(local, _) -> Core.Var (Core.Local local)) coreParameters)
 
-        returnRepresentation <- convertRepresentation ext.returnRepresentation
-        pure
-            [ Core.DefineFunction
-                { name
-                , parameters = coreParameters
-                , returnRepresentation
-                , statements = caseStatements
-                , result = caseExpr
-                }
-            ]
+            returnRepresentation <- convertRepresentation ext.returnRepresentation
+            pure
+                [ Core.DefineFunction
+                    { name
+                    , parameters = coreParameters
+                    , returnRepresentation
+                    , statements = caseStatements
+                    , result = caseExpr
+                    , representationParameters = representationParameters
+                    }
+                ]
     Vega.DefineVariantType{} -> pure []
     Vega.DefineExternalFunction{} -> pure []
 
@@ -89,7 +136,7 @@ compileExpr expr = do
             functionVar <- case function of
                 Core.Var name -> pure name
                 value -> panic $ "function compiled to non-variable value: " <> pretty value <> ". this should have been a type error"
-            
+
             returnRepresentation <- convertRepresentation returnRepresentation
             pure (functionStatements <> fold argumentStatements, Core.Application functionVar arguments, returnRepresentation)
         Vega.PartialApplication{loc = _, functionExpr, partialArguments} -> do
@@ -137,8 +184,8 @@ compileExpr expr = do
                 )
         Vega.SequenceBlock{statements} -> compileStatements statements
         Vega.Match{scrutinee, cases} -> do
-                (statements, returnExpr) <- compilePatternMatch scrutinee (fmap (\Vega.MkMatchCase{pattern_, body} -> (pattern_, body)) cases)
-                pure (statements, returnExpr, undefined)
+            (statements, returnExpr) <- compilePatternMatch scrutinee (fmap (\Vega.MkMatchCase{pattern_, body} -> (pattern_, body)) cases)
+            pure (statements, returnExpr, undefined)
 
 -- | Like 'compileExprToValue' but discards the representation
 compileExprToValue_ :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Value)
@@ -373,21 +420,33 @@ convertRepresentation type_ = do
         Vega.Effect{} -> invalidKind
         Vega.Kind{} -> invalidKind
 
+extractMonomorphizableRepresentationVariables :: (ReadMeta :> es) => Seq Vega.ForallBinder -> Eff es (Seq Vega.LocalName)
+extractMonomorphizableRepresentationVariables binders = wither go binders
+  where
+    go Vega.MkForallBinder{varName, kind, visibility = _, monomorphization} = case monomorphization of
+        Vega.Parametric -> pure Nothing
+        Vega.Monomorphized -> do
+            Meta.followMetasWithoutPathCompression kind >>= \case
+                Vega.Rep -> pure (Just varName)
+                _ -> panic "monomorphizable type variables are not implemented yet (we will need to do specialization during core generation here)"
+
 type Substitution = HashMap Core.LocalCoreName Core.Value
 
 coalesceVariables :: Core.Declaration -> Eff es Core.Declaration
 coalesceVariables = \case
-    Core.DefineFunction name parameters returnRepresentation statements returnExpr -> do
+    Core.DefineFunction{name, parameters, returnRepresentation, statements, result, representationParameters} -> do
         let substitution :: Substitution = mempty
         (substitution, makeStatements) <- coalesceStatements substitution statements
-        (substitution, makeReturnExpr) <- coalesceExpr substitution returnExpr
+        (substitution, makeResult) <- coalesceExpr substitution result
         pure
             ( Core.DefineFunction
-                name
-                (fmap (first (getFinalName substitution)) parameters)
-                returnRepresentation
-                (makeStatements substitution)
-                (makeReturnExpr substitution)
+                { name
+                , parameters = (fmap (first (getFinalName substitution)) parameters)
+                , returnRepresentation
+                , statements = (makeStatements substitution)
+                , result = (makeResult substitution)
+                , representationParameters
+                }
             )
 
 coalesceStatements :: Substitution -> Seq Core.Statement -> Eff es (Substitution, Substitution -> Seq Core.Statement)

@@ -5,7 +5,7 @@ module Vega.TypeCheck (checkDeclaration) where
 import Vega.Syntax
 
 import Effectful hiding (Effect)
-import Relude hiding (NonEmpty, State, Type, evalState, get, put, runState, trace)
+import Relude hiding (NonEmpty, State, Type, evalState, get, mapMaybe, put, runState, trace)
 import Relude.Extra
 
 import Vega.Error (TypeError (..), TypeErrorSet (MkTypeErrorSet))
@@ -18,7 +18,6 @@ import Data.Foldable (foldrM)
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
-import Data.Unique (newUnique)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
 import Effectful.State.Static.Local (evalState, get, put, runState)
 import GHC.Exts (isTrue#, reallyUnsafePtrEquality)
@@ -26,8 +25,10 @@ import GHC.List (List)
 import Vega.Builtins (boolType, intType)
 import Vega.Builtins qualified as Builtins
 import Vega.Debug (showHeadConstructor)
+import Vega.Effect.Meta.Static (BindMeta, ReadMeta, bindMetaUnchecked, followMetas, freshMeta, readMeta, runMeta)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
+import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
 import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.Panic (panic)
 import Vega.Pretty (align, emphasis, errorText, keyword, note, pretty, (<+>))
@@ -35,6 +36,7 @@ import Vega.Seq.NonEmpty (NonEmpty (..), toSeq)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.TypeCheck.Zonk (zonk)
 import Vega.Util qualified as Util
+import Witherable (mapMaybe)
 
 data Env = MkEnv
     { localTypes :: HashMap LocalName Type
@@ -78,9 +80,10 @@ typeVariableMonomorphization name env =
 
 type TypeCheckCore es =
     ( Trace :> es
-    , IOE :> es
     , Output TypeError :> es
     , Error TypeError :> es
+    , ReadMeta :> es
+    , BindMeta :> es
     )
 
 -- TODO: factor out the reference/unique bits so you don't need full IOE
@@ -90,7 +93,9 @@ type TypeCheck es =
     , Output TypeError :> es
     , Error TypeError :> es
     , Trace :> es
-    , IOE :> es
+    , ReadMeta :> es
+    , BindMeta :> es
+    , NewUnique :> es
     )
 
 -- TODO: does it make sense to return the declaration anyway even if we have errors?
@@ -100,12 +105,18 @@ type TypeCheck es =
 checkDeclaration :: (GraphPersistence :> es, Trace :> es, IOE :> es) => Declaration Renamed -> Eff es (Either TypeErrorSet (Declaration Typed))
 checkDeclaration (MkDeclaration{loc, name, syntax}) = withTrace TypeCheck ("Declaration: " <> pretty name) do
     ((syntaxOrFatalError, deferredConstraints), nonFatalDirectErrors) <-
-        runOutputSeq @TypeError $
-            runOutputList @DeferredConstraint $
-                runErrorNoCallStack @TypeError $
-                    checkDeclarationSyntax loc syntax
+        checkDeclarationSyntax loc syntax
+            & runNewUnique
+            & runMeta
+            & runErrorNoCallStack @TypeError
+            & runOutputList @DeferredConstraint
+            & runOutputSeq @TypeError
 
-    (fatalSolverError, nonFatalSolverErrors) <- runOutputSeq @TypeError $ runErrorNoCallStack @TypeError $ solveConstraints deferredConstraints
+    (fatalSolverError, nonFatalSolverErrors) <-
+        solveConstraints deferredConstraints
+            & runMeta
+            & runErrorNoCallStack @TypeError
+            & runOutputSeq @TypeError
 
     let nonFatalErrors = nonFatalDirectErrors <> nonFatalSolverErrors
     let fatalErrorsOrSyntax = case (syntaxOrFatalError, fatalSolverError) of
@@ -114,7 +125,7 @@ checkDeclaration (MkDeclaration{loc, name, syntax}) = withTrace TypeCheck ("Decl
             (Right _, Left error2) -> Left [error2]
             (Right syntax, Right ()) -> Right syntax
 
-    case fatalErrorsOrSyntax of
+    runMeta $ case fatalErrorsOrSyntax of
         Left fatalErrors -> do
             errors <- zonk (MkTypeErrorSet (nonFatalErrors <> fatalErrors))
             pure (Left errors)
@@ -271,10 +282,14 @@ checkDeclarationSyntax loc = \case
 
         -- TODO: add metadata for error messages in case this fails (i think it should have thrown earlier in that case though)
         returnRepresentation <- representationOfType (getLoc typeSignature) env returnType
-
+        let (forallAndExistentialBinders, _) = collectPrenexBinders functionType
+        let forallBinders =
+                forallAndExistentialBinders & mapMaybe \case
+                    Left forallBinder -> Just forallBinder
+                    Right _existentialBinder -> Nothing
         pure
             DefineFunction
-                { ext = MkDefineFunctionTypedExt{returnRepresentation = returnRepresentation}
+                { ext = MkDefineFunctionTypedExt{returnRepresentation = returnRepresentation, forallBinders}
                 , name
                 , typeSignature
                 , declaredTypeParameters
@@ -525,7 +540,7 @@ infer env ambientEffect expr = do
             arguments <- zipWithSeqM checkArguments arguments argumentTypes
 
             returnRepresentation <- representationOfType loc env returnType
-            pure (returnType, Application{loc, functionExpr, arguments, representation=returnRepresentation})
+            pure (returnType, Application{loc, functionExpr, arguments, representation = returnRepresentation})
         VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax} -> do
             type_ <- varType env varName
 
@@ -1347,7 +1362,7 @@ bindMeta loc env meta boundType = withTrace Unify (pretty meta <+> keyword ":=" 
                             -- This will make more sense once we have more context to the unification
                             -- TODO: until then, the order doesn't really make sense here
                             typeError OccursCheckViolation{loc, actualType = boundType, expectedType = MetaVar meta, meta}
-                        False -> writeIORef meta.underlying (Just boundType)
+                        False -> bindMetaUnchecked meta boundType
         _ -> error $ "Trying to bind unbound meta variable"
 
 occursAndAdjust :: (TypeCheck es) => MetaVar -> Type -> Eff es Bool
@@ -1416,14 +1431,6 @@ unionAll :: (TypeCheck es) => Seq Effect -> Eff es Effect
 unionAll Empty = pure Pure
 unionAll (eff :<| rest) = pure eff `unionM` unionAll rest
 
-freshMeta :: (HasCallStack, TypeCheck es) => Text -> Kind -> Eff es MetaVar
-freshMeta name kind = do
-    identity <- liftIO newUnique
-    underlying <- newIORef Nothing
-    let meta = MkMetaVar{underlying, identity, name, kind}
-    trace MetaVars ("freshMeta" <+> align (keyword "~>" <+> pretty meta <+> keyword ":" <+> pretty kind <> "\n" <> note (toText $ prettyCallStack callStack)))
-    pure meta
-
 -- | Creates a fresh meta variable of kind (Type ?r) where ?r is another fresh meta variable
 freshTypeMeta :: (TypeCheck es) => Text -> Eff es MetaVar
 freshTypeMeta name = do
@@ -1439,7 +1446,7 @@ dummyMetaOfUnknownKind = do
 
 freshSkolem :: (TypeCheck es) => LocalName -> Monomorphization -> Kind -> Eff es Skolem
 freshSkolem originalName monomorphization kind = do
-    identity <- liftIO newUnique
+    identity <- newUnique
     pure $ MkSkolem{identity, originalName, monomorphization, kind}
 
 assertMonomorphizability :: (TypeCheck es) => Loc -> Env -> Type -> Monomorphization -> Eff es ()
@@ -1499,7 +1506,7 @@ solveMonomorphized onMetaVar loc env type_ =
             PrimitiveRep{} -> pure ()
             Kind -> pure ()
 
-type SolveConstraints es = (Error TypeError :> es, Output TypeError :> es, Trace :> es, IOE :> es)
+type SolveConstraints es = (Error TypeError :> es, Output TypeError :> es, Trace :> es, ReadMeta :> es, BindMeta :> es)
 
 solveConstraints :: (SolveConstraints es) => List DeferredConstraint -> Eff es ()
 solveConstraints = \case

@@ -46,8 +46,8 @@ registerAdditionalDeclarations declarations = modify (\state -> state{additional
 
 compileDeclaration :: (Trace :> es, NewUnique :> es) => Core.Declaration -> Eff es (Seq LIR.Declaration)
 compileDeclaration = \case
-    Core.DefineFunction functionName parameters returnRepresentation statements finalExpr -> do
-        compileFunction (Core.Global functionName) parameters returnRepresentation statements finalExpr
+    Core.DefineFunction {name, representationParameters, parameters, returnRepresentation, statements, result} -> do
+        compileFunction (Core.Global name) parameters returnRepresentation statements result
 
 compileFunction ::
     (Trace :> es, NewUnique :> es) =>

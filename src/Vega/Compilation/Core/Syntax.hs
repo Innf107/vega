@@ -5,6 +5,7 @@ module Vega.Compilation.Core.Syntax where
 import Data.HashMap.Strict qualified as HashMap
 import Data.Unique (Unique)
 import Relude
+import Vega.Debruijn qualified as Debruijn
 import Vega.Pretty
 import Vega.Syntax (GlobalName, NameKind (..), prettyGlobal, prettyLocal)
 import Vega.Syntax qualified as Vega
@@ -19,11 +20,11 @@ data LocalCoreName
     | Generated Unique
     deriving (Generic, Eq, Hashable)
 
--- TODO: representations?
 -- TODO: do we really want to use a seq of declarations over a hash map or something?
 data Declaration
     = DefineFunction
     { name :: GlobalName
+    , representationParameters :: Debruijn.Limit
     , parameters :: Seq (LocalCoreName, Representation)
     , returnRepresentation :: Representation
     , statements :: Seq Statement
@@ -99,8 +100,15 @@ instance Pretty Declaration where
             , returnRepresentation
             , statements
             , result
+            , representationParameters
             } ->
-                prettyGlobal VarKind name <> arguments (fmap (\(param, rep) -> PrettyId (pretty param <+> keyword ":" <+> pretty rep)) parameters) <+> ":" <+> pretty returnRepresentation <+> keyword "=" <+> prettyBody statements result
+                prettyGlobal VarKind name
+                    <> "[" <> number (Debruijn.size representationParameters) <> "]"
+                    <> arguments (fmap (\(param, rep) -> PrettyId (pretty param <+> keyword ":" <+> pretty rep)) parameters)
+                        <+> ":"
+                        <+> pretty returnRepresentation
+                        <+> keyword "="
+                        <+> prettyBody statements result
 
 instance Pretty Statement where
     pretty = \case

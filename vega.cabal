@@ -1,6 +1,6 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.38.1.
+-- This file has been generated from package.yaml by hpack version 0.37.0.
 --
 -- see: https://github.com/sol/hpack
 
@@ -36,6 +36,7 @@ library
       Vega.Compilation.LIR.CoreToLIR
       Vega.Compilation.LIR.Syntax
       Vega.Compilation.PatternMatching
+      Vega.Debruijn
       Vega.Debug
       Vega.Diff
       Vega.Disambiguate
@@ -43,6 +44,7 @@ library
       Vega.Effect.DebugEmit
       Vega.Effect.GraphPersistence
       Vega.Effect.GraphPersistence.InMemory
+      Vega.Effect.Meta.Static
       Vega.Effect.Output.Static.Local
       Vega.Effect.Trace
       Vega.Effect.Unique.Static.Local
@@ -85,6 +87,7 @@ library
       ViewPatterns
       ApplicativeDo
       ImplicitParams
+      RoleAnnotations
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields
   build-depends:
       aeson
@@ -137,6 +140,7 @@ executable vega
       ViewPatterns
       ApplicativeDo
       ImplicitParams
+      RoleAnnotations
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
@@ -191,6 +195,7 @@ test-suite vega-test
       ViewPatterns
       ApplicativeDo
       ImplicitParams
+      RoleAnnotations
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
