@@ -1,10 +1,13 @@
-module Vega.Debruijn (Index, Limit, initial, new, size) where
+module Vega.Debruijn (Index, toInt, Limit, initial, new, size) where
 
 import Relude
 
 newtype Index = MkIndex Int
     deriving stock (Show, Eq, Ord)
     deriving newtype (Hashable)
+
+toInt :: Index -> Int
+toInt (MkIndex index) = index
 
 newtype Limit = MkLimit {nextIndex :: Int}
 

@@ -76,6 +76,7 @@ data Representation
     | SumRep (Seq Representation)
     | ArrayRep Representation
     | PrimitiveRep Vega.PrimitiveRep
+    | ParameterRep Debruijn.Index
     deriving (Eq)
 
 nameToCoreName :: Vega.Name -> CoreName
@@ -91,6 +92,7 @@ instance Pretty Representation where
     pretty (SumRep representations) = lparen "(" <> intercalateDoc (" " <> keyword "+" <> " ") (fmap pretty representations) <> rparen ")"
     pretty (ArrayRep inner) = keyword "ArrayRep" <> lparen "(" <> pretty inner <> rparen ")"
     pretty (PrimitiveRep rep) = pretty rep
+    pretty (ParameterRep index) = localIdentText ("$" <> show (Debruijn.toInt index))
 
 instance Pretty Declaration where
     pretty = \case
@@ -103,7 +105,9 @@ instance Pretty Declaration where
             , representationParameters
             } ->
                 prettyGlobal VarKind name
-                    <> "[" <> number (Debruijn.size representationParameters) <> "]"
+                    <> "["
+                    <> number (Debruijn.size representationParameters)
+                    <> "]"
                     <> arguments (fmap (\(param, rep) -> PrettyId (pretty param <+> keyword ":" <+> pretty rep)) parameters)
                         <+> ":"
                         <+> pretty returnRepresentation

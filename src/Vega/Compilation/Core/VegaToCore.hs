@@ -52,18 +52,14 @@ type Compile es =
     , Reader Env :> es
     )
 
-data Env = MkEnv
-    { typeVariableRepresentations :: Undefined
-    , monomorphizableRepresentationVariables :: HashMap Vega.LocalName Debruijn.Index
-    }
+newtype Env = MkEnv {monomorphizableRepresentationVariables :: HashMap Vega.LocalName Debruijn.Index}
 
 envAndLimitFromRepresentationVariables :: Seq Vega.LocalName -> (Env, Debruijn.Limit)
 envAndLimitFromRepresentationVariables variables = go Debruijn.initial HashMap.empty variables
   where
     go limit mapping Empty =
         ( MkEnv
-            { typeVariableRepresentations = Undefined
-            , monomorphizableRepresentationVariables = mapping
+            { monomorphizableRepresentationVariables = mapping
             }
         , limit
         )
@@ -405,10 +401,18 @@ convertRepresentation type_ = do
         Vega.ProductRep representations -> Core.ProductRep <$> traverse convertRepresentation representations
         Vega.ArrayRep inner -> Core.ArrayRep <$> convertRepresentation inner
         Vega.PrimitiveRep rep -> pure $ Core.PrimitiveRep rep
-        Vega.Skolem{} -> undefined
+        Vega.Skolem skolem -> do
+            env <- ask @Env
+            case HashMap.lookup skolem.originalName env.monomorphizableRepresentationVariables of
+                Nothing ->
+                    panic $
+                        "Skolem corresponding to a non-parameter representation type variable found while trying to convert representations to core. This should not have happened!\n"
+                            <> "Skolem: "
+                            <> pretty skolem
+                Just index -> pure $ Core.ParameterRep index
         Vega.TypeConstructor{} -> invalidKind
         Vega.TypeApplication{} -> invalidKind
-        Vega.TypeVar{} -> undefined
+        Vega.TypeVar{} -> panic $ "Uninstantiated type variable found while trying to convert representations to core: " <> pretty type_
         Vega.Forall{} -> invalidKind
         Vega.Exists{} -> invalidKind
         Vega.Function{} -> invalidKind
