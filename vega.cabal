@@ -36,6 +36,8 @@ library
       Vega.Compilation.LIR.CoreToLIR
       Vega.Compilation.LIR.Syntax
       Vega.Compilation.PatternMatching
+      Vega.Compilation.X86_64.LIRToX86_64
+      Vega.Compilation.X86_64.Syntax
       Vega.Debruijn
       Vega.Debug
       Vega.Diff

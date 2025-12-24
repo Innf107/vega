@@ -13,6 +13,7 @@ import Data.Yaml (prettyPrintParseException)
 import Effectful (Eff, IOE, runEff, (:>))
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.FileSystem (FileSystem, runFileSystem)
+import Effectful.Process (Process, runProcess)
 import Effectful.Reader.Static (runReader)
 import GHC.Read (readsPrec)
 import System.IO (hIsTerminalDevice)
@@ -55,10 +56,10 @@ instance Read DebugEmitOption where
         "stderr" -> [(ToStderr, "")]
         "none" -> [(None, "")]
         _ -> []
-data DebugEmitConfig = MkDebugEmitConfig {
-    debugCore :: DebugEmitOption,
-    debugLIR :: DebugEmitOption
-}
+data DebugEmitConfig = MkDebugEmitConfig
+    { debugCore :: DebugEmitOption
+    , debugLIR :: DebugEmitOption
+    }
 
 buildOptions :: Parser Options
 buildOptions = do
@@ -96,7 +97,7 @@ buildOptions = do
                 <> value None
                 <> help ("LIR output for debugging. Can be one of: file, stderr, none")
             )
-    pure Build{persistence, includeUnique, debugEmitConfig=MkDebugEmitConfig{ debugCore, debugLIR}}
+    pure Build{persistence, includeUnique, debugEmitConfig = MkDebugEmitConfig{debugCore, debugLIR}}
 
 runCoreEmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Seq Core.Declaration) : es) a -> Eff es a
 runCoreEmit config cont = case config.debugCore of
@@ -115,7 +116,6 @@ runLIREmit config cont = case config.debugCore of
                 prettyPlain (intercalateDoc "\n\n" (fmap pretty declarations))
         emitAllToFile render "lir.vegalir" cont
     ToStderr -> emitToStderr (\declarations -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
-
 
 execOptions :: Parser Options
 execOptions = do
@@ -140,6 +140,7 @@ run ::
         '[ DebugEmit (Seq Core.Declaration)
          , DebugEmit (Seq LIR.Declaration)
          , Concurrent
+         , Process
          , GraphPersistence
          , FileSystem
          , Trace
@@ -148,7 +149,16 @@ run ::
         a ->
     IO a
 run debugConfig persistence action = case persistence of
-    InMemory -> runEff $ runTrace $ runFileSystem $ runInMemory $ runConcurrent $ runLIREmit debugConfig $ runCoreEmit debugConfig action
+    InMemory ->
+        action
+            & runCoreEmit debugConfig
+            & runLIREmit debugConfig
+            & runConcurrent
+            & runProcess
+            & runInMemory
+            & runFileSystem
+            & runTrace
+            & runEff
 
 main :: IO ()
 main = do
@@ -192,5 +202,5 @@ main = do
                                         PlainError plainError -> pure $ pretty plainError
                                     eprint doc
                             exitFailure
-        Exec{file, mainFunction} -> run MkDebugEmitConfig{debugCore=None, debugLIR=None} InMemory do
+        Exec{file, mainFunction} -> run MkDebugEmitConfig{debugCore = None, debugLIR = None} InMemory do
             Driver.execute file mainFunction

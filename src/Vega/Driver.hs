@@ -13,9 +13,9 @@ module Vega.Driver (
 import Relude hiding (Reader, ask, trace)
 
 import Effectful
-import Effectful.FileSystem (FileSystem, doesDirectoryExist, listDirectory)
+import Effectful.FileSystem (FileSystem, doesDirectoryExist, listDirectory, createDirectoryIfMissing)
 import Effectful.Reader.Static
-import System.FilePath (takeExtension, (</>))
+import System.FilePath (takeExtension, (</>), takeDirectory)
 
 import Data.Sequence (Seq (..))
 import Data.Traversable (for)
@@ -50,6 +50,9 @@ import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
+import qualified Vega.Compilation.X86_64.LIRToX86_64 as LIRToX86_64
+import qualified Vega.Compilation.X86_64.Syntax as X86
+import Effectful.Process (callProcess, Process)
 
 data CompilationResult
     = CompilationSuccessful
@@ -64,6 +67,7 @@ type Driver es =
     , IOE :> es
     , FileSystem :> es
     , Concurrent :> es
+    , Process :> es
     , Trace :> es
     , DebugEmit (Seq Core.Declaration) :> es
     , DebugEmit (Seq LIR.Declaration) :> es
@@ -251,7 +255,10 @@ compileBackend = do
 
             lir <- mconcat <$> Streaming.toList_ (Streaming.mapM compileToLIR (GraphPersistence.reachableFrom entryPointDeclaration))
 
-            undefined
+            program <- LIRToX86_64.compile lir
+            writeBuildFile "out.s" (X86.renderASM program)
+            asmPath <- buildFilePath "out.s"
+            callProcess "gcc" [asmPath]
         _ -> undefined
 
 execute :: FilePath -> Text -> Eff es ()
@@ -332,3 +339,20 @@ compileToCore name =
             compiled <- VegaToCore.compileDeclaration typedDeclaration
             debugEmit compiled
             GraphPersistence.setCompiledCore name compiled
+
+buildFilePath :: Driver es => FilePath -> Eff es FilePath
+buildFilePath localPath = do
+    MkBuildConfig{projectRoot} <- ask
+    pure $ projectRoot </> ".vega" </> localPath
+
+
+writeBuildFile :: Driver es => FilePath -> Text -> Eff es ()
+writeBuildFile localPath contents = do
+    MkBuildConfig{projectRoot} <- ask
+    createDirectoryIfMissing False (projectRoot </> ".vega")
+
+    filePath <- buildFilePath localPath
+
+    createDirectoryIfMissing True (takeDirectory filePath)
+    writeFileText filePath contents
+

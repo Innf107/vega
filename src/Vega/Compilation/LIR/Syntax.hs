@@ -7,7 +7,6 @@ module Vega.Compilation.LIR.Syntax (
     Instruction (..),
     Terminator (..),
     Layout (..),
-    UnboxedLayout (..),
 ) where
 
 import Relude
@@ -68,14 +67,10 @@ data Terminator
     | TailCallIndirect Variable (Seq Variable)
     deriving (Generic)
 
-data Layout
-    = BoxedLayout
-    | UnboxedLayout UnboxedLayout
-    deriving (Generic)
-
-data UnboxedLayout
-    = IntLayout Int
-    | FloatLayout Int
+data Layout = MkLayout
+    { size :: Int
+    , alignment :: Int
+    }
     deriving (Generic)
 
 instance Pretty Declaration where
@@ -91,7 +86,7 @@ instance Pretty Declaration where
                         <+> align (vsep (Seq.mapWithIndex (\index layout -> number index <+> keyword ":" <+> pretty layout) layouts))
                         <> "\n"
                         <> keyword "init:"
-                        <+> pretty init
+                            <+> pretty init
                         <> "\n"
                         <> keyword "blocks:"
                         <> "\n  "
@@ -102,23 +97,21 @@ instance Pretty Declaration where
 
 prettyBlock :: BlockDescriptor -> Block -> Doc Ann
 prettyBlock descriptor MkBlock{arguments = blockArguments, instructions, terminator} =
-    align
-        $ pretty descriptor
-        <> arguments blockArguments
-        <> "\n  "
-        <> align
-            ( intercalateDoc "\n" (fmap pretty instructions)
-                <> "\n"
-                <> pretty terminator
-            )
+    align $
+        pretty descriptor
+            <> arguments blockArguments
+            <> "\n  "
+            <> align
+                ( intercalateDoc "\n" (fmap pretty instructions)
+                    <> "\n"
+                    <> pretty terminator
+                )
 
 deriving via Generically Instruction instance Pretty Instruction
 
 deriving via Generically Terminator instance Pretty Terminator
 
 deriving via Generically Layout instance Pretty Layout
-
-deriving via Generically UnboxedLayout instance Pretty UnboxedLayout
 
 instance Pretty BlockDescriptor where
     pretty (MkBlockDescriptor unique) = number (hashUnique unique)
