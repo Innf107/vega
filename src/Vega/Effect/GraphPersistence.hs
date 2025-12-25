@@ -93,10 +93,10 @@ reachableFrom name = hoist (evalState (mempty :: HashSet DeclarationName)) $ go 
   where
     go :: (GraphPersistence :> es, State (HashSet DeclarationName) :> es) => DeclarationName -> Stream (Of DeclarationName) (Eff es) ()
     go name = do
+        yield name
         dependencies <- lift $ getDependencies name
         for_ dependencies \dependency -> do
             seenSoFar <- lift get
             when (not (HashSet.member dependency seenSoFar)) do
-                yield name
                 lift $ modify (HashSet.insert dependency)
                 go dependency
