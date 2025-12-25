@@ -256,7 +256,7 @@ compileBackend = do
             lir <- mconcat <$> Streaming.toList_ (Streaming.mapM compileToLIR (GraphPersistence.reachableFrom entryPointDeclaration))
 
             program <- LIRToX86_64.compile lir
-            writeBuildFile "out.s" (X86.renderASM program)
+            writeBuildFile "out.s" (X86.renderASM entryPoint program)
             asmPath <- buildFilePath "out.s"
             callProcess "gcc" [asmPath]
         _ -> undefined
