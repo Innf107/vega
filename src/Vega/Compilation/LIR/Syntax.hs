@@ -6,7 +6,6 @@ module Vega.Compilation.LIR.Syntax (
     BlockDescriptor (..),
     Instruction (..),
     Terminator (..),
-    Layout (..),
 ) where
 
 import Relude
@@ -18,6 +17,7 @@ import Data.Sequence qualified as Seq
 import Data.Unique (hashUnique)
 import GHC.Generics (Generically (..))
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName)
+import Vega.Compilation.LIR.Layout (Layout)
 import Vega.Effect.Unique.Static.Local (Unique)
 import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, lparen, number, pretty, rparen, vsep, (<+>))
 
@@ -52,6 +52,15 @@ data Block = MkBlock
 
 data Instruction
     = Add Variable Variable Variable
+    | GetElementPointer
+        { result :: Variable
+        , pointer :: Variable
+        , resultLayout :: Layout
+        , arrayOffset :: Int
+        , internalOffset :: Int
+        }
+    | AllocA Variable Layout
+    | Memcpy Variable Variable Layout
     | Allocate Variable Layout
     | AllocateClosure Variable CoreName Layout
     | IntConstant Variable Int
@@ -65,12 +74,6 @@ data Terminator
     | CallIndirect Variable Variable (Seq Variable) BlockDescriptor
     | TailCallDirect CoreName (Seq Variable)
     | TailCallIndirect Variable (Seq Variable)
-    deriving (Generic)
-
-data Layout = MkLayout
-    { size :: Int
-    , alignment :: Int
-    }
     deriving (Generic)
 
 instance Pretty Declaration where
@@ -110,8 +113,6 @@ prettyBlock descriptor MkBlock{arguments = blockArguments, instructions, termina
 deriving via Generically Instruction instance Pretty Instruction
 
 deriving via Generically Terminator instance Pretty Terminator
-
-deriving via Generically Layout instance Pretty Layout
 
 instance Pretty BlockDescriptor where
     pretty (MkBlockDescriptor unique) = number (hashUnique unique)

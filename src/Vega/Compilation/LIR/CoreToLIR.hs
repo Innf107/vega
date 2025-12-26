@@ -8,13 +8,18 @@ import Effectful.State.Static.Local (State, get, modify, put, runState)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import Data.Traversable (for)
+import Data.Vector.Generic qualified as Vector
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName)
 import Vega.Compilation.Core.Syntax qualified as Core
+import Vega.Compilation.LIR.Layout (Layout)
+import Vega.Compilation.LIR.Layout qualified as Layout
 import Vega.Compilation.LIR.Syntax qualified as LIR
 import Vega.Effect.Trace (Trace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique)
 import Vega.Panic (panic)
 import Vega.Pretty (pretty)
+import Vega.Util (mapAccumLM, forIndexed_, forFoldLM, indexed)
+import Data.Foldable (foldrM)
 
 type Compile es = (Trace :> es, NewUnique :> es, State CurrentDeclarationState :> es)
 
@@ -24,7 +29,7 @@ data CurrentDeclarationState = MkDeclarationState
     , additionalDeclarations :: Seq LIR.Declaration
     , -- TOOD: preserve the order or something?
       locals :: HashMap LocalCoreName LIR.Variable
-    , layouts :: Seq LIR.Layout
+    , layouts :: Seq Layout
     }
 
 initialDeclarationState :: CurrentDeclarationState
@@ -46,7 +51,7 @@ registerAdditionalDeclarations declarations = modify (\state -> state{additional
 
 compileDeclaration :: (Trace :> es, NewUnique :> es) => Core.Declaration -> Eff es (Seq LIR.Declaration)
 compileDeclaration = \case
-    Core.DefineFunction {name, representationParameters, parameters, returnRepresentation, statements, result} -> do
+    Core.DefineFunction{name, representationParameters = _, parameters, returnRepresentation, statements, result} -> do
         compileFunction (Core.Global name) parameters returnRepresentation statements result
 
 compileFunction ::
@@ -137,8 +142,7 @@ compileReturn block = \case
         finish block (LIR.Return value)
 
 compileValues :: (Compile es) => BlockBuilder -> Seq Core.Value -> Eff es (BlockBuilder, Seq LIR.Variable)
-compileValues = do
-    undefined
+compileValues block values = mapAccumLM compileValue block values
 
 compileValue :: (Compile es) => BlockBuilder -> Core.Value -> Eff es (BlockBuilder, LIR.Variable)
 compileValue block = \case
@@ -149,9 +153,20 @@ compileValue block = \case
         layout <- undefined literal
         variable <- newVar layout
         undefined
-    Core.DataConstructorApplication name arguments -> do
+    Core.DataConstructorApplication _name arguments -> do
         (block, arguments) <- compileValues block arguments
-        undefined
+
+        -- TODO: add the tag for sum constructors
+
+        layout <- undefined
+        result <- newVar layout
+        block <- addInstruction block $ LIR.AllocA result layout
+        
+        block <- forFoldLM (indexed arguments) block \block (index, argument) -> do
+            (block, target) <- pointerToPath undefined undefined undefined undefined
+            addInstruction block $ LIR.Memcpy target argument undefined
+            
+        pure (block, result)
 
 compileLambda :: (Compile es) => BlockBuilder -> LIR.Variable -> Seq (LocalCoreName, Core.Representation) -> Core.Representation -> Seq Core.Statement -> Core.Expr -> Eff es BlockBuilder
 compileLambda block local parameters returnRepresentation statements returnExpr = do
@@ -175,7 +190,24 @@ joinPointBlockFor name = do
         Nothing -> panic $ "JumpJoin to join point without a block descriptor: " <> pretty name
         Just descriptor -> pure descriptor
 
-newVar :: (Compile es) => LIR.Layout -> Eff es LIR.Variable
+pointerToPath :: (HasCallStack, Compile es) => LIR.Variable -> Layout -> Layout.Path -> BlockBuilder -> Eff es (BlockBuilder, LIR.Variable)
+pointerToPath pointer layout path block = go block 0 path
+  where
+    go block offset = \case
+        Empty -> do
+            result <- newVar layout
+            block <- addInstruction block (LIR.GetElementPointer{result, pointer, arrayOffset = 0, internalOffset = 0, resultLayout = layout})
+            pure (block, result)
+        (Layout.ProductField index :<| rest) -> case layout.contents of
+            Layout.ProductLayout{offsets} -> do
+                go block (offset + (offsets Vector.! index)) rest
+            _ -> panic $ "product field accessed on non-product layout"
+        (Layout.SumConstructor index :<| rest) -> case layout.contents of
+            Layout.SumLayout{constructors} -> do
+                undefined
+            _ -> panic $ "sum constructor accessed on non-sum layout"
+
+newVar :: (Compile es) => Layout -> Eff es LIR.Variable
 newVar layout = do
     state <- get
     let variable = LIR.MkVariable (length state.layouts)

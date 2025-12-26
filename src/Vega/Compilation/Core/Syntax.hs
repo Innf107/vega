@@ -105,9 +105,10 @@ instance Pretty Declaration where
             , representationParameters
             } ->
                 prettyGlobal VarKind name
-                    <> "["
-                    <> number (Debruijn.size representationParameters)
-                    <> "]"
+                    <> ( case Debruijn.size representationParameters of
+                            0 -> ""
+                            parameterCount -> "[" <> number parameterCount <> "]"
+                       )
                     <> arguments (fmap (\(param, rep) -> PrettyId (pretty param <+> keyword ":" <+> pretty rep)) parameters)
                         <+> ":"
                         <+> pretty returnRepresentation

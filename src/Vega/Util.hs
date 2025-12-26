@@ -16,6 +16,9 @@ module Vega.Util (
     partitionWithSeq,
     frequencies,
     forIndexed,
+    forIndexed_,
+    indexed,
+    forFoldLM,
     These (..),
     zipWithLongest,
     spanMaybe,
@@ -132,6 +135,20 @@ forIndexed traversable f =
             for @t @(Compose (State Int) f) traversable \x -> Compose $ do
                 i <- state (\i -> (i, i + 1))
                 pure (f x i)
+
+forIndexed_ :: forall t f a. (Traversable t, Applicative f) => t a -> (a -> Int -> f ()) -> f ()
+forIndexed_ traversable f =
+    flip evalState 0 $
+        getCompose $
+            for_ @t @(Compose (State Int) f) traversable \x -> Compose $ do
+                i <- state (\i -> (i, i + 1))
+                pure (f x i)
+
+indexed :: Traversable t => t a -> t (Int, a)
+indexed traversable = runIdentity $ forIndexed traversable \x i -> pure (i, x)
+
+forFoldLM :: forall s m f a. (Foldable f, Monad m) => f a -> s -> (s -> a -> m s) -> m s
+forFoldLM foldable initial f = foldlM f initial foldable
 
 data These a b = This a | That b | Both a b
 

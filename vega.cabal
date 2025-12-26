@@ -32,8 +32,8 @@ library
       Vega.Compilation.JavaScript.Assemble
       Vega.Compilation.JavaScript.Syntax
       Vega.Compilation.JavaScript.VegaToJavaScript
-      Vega.Compilation.LayoutGeneration
       Vega.Compilation.LIR.CoreToLIR
+      Vega.Compilation.LIR.Layout
       Vega.Compilation.LIR.Syntax
       Vega.Compilation.PatternMatching
       Vega.Compilation.X86_64.LIRToX86_64
