@@ -1,9 +1,9 @@
-module Vega.Compilation.LIR.Layout (Layout (..), LayoutContents(..), Path, PathSegment (..)) where
+module Vega.Compilation.LIR.Layout (Layout (..), LayoutContents (..), Path, PathSegment (..), generateLayout) where
 
+import Data.Vector.Unboxed (Vector)
 import Relude
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Pretty (Pretty, pretty)
-import Data.Vector.Unboxed (Vector)
 
 data Layout = MkLayoutUnchecked
     { size :: Int
@@ -12,7 +12,7 @@ data Layout = MkLayoutUnchecked
     }
 
 data LayoutContents
-    = SumLayout { constructors :: Seq LayoutContents }
+    = SumLayout {constructors :: Seq LayoutContents}
     | ProductLayout {offsets :: Vector Int}
 
 instance Pretty Layout where

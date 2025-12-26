@@ -11,7 +11,7 @@ import Data.Traversable (for)
 import Data.Vector.Generic qualified as Vector
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName)
 import Vega.Compilation.Core.Syntax qualified as Core
-import Vega.Compilation.LIR.Layout (Layout)
+import Vega.Compilation.LIR.Layout (Layout, generateLayout)
 import Vega.Compilation.LIR.Layout qualified as Layout
 import Vega.Compilation.LIR.Syntax qualified as LIR
 import Vega.Effect.Trace (Trace)
@@ -20,8 +20,11 @@ import Vega.Panic (panic)
 import Vega.Pretty (pretty)
 import Vega.Util (mapAccumLM, forIndexed_, forFoldLM, indexed)
 import Data.Foldable (foldrM)
+import qualified Vega.Syntax as Vega
+import Vega.Effect.GraphPersistence
+import qualified Vega.Effect.GraphPersistence as GraphPersistence
 
-type Compile es = (Trace :> es, NewUnique :> es, State CurrentDeclarationState :> es)
+type Compile es = (GraphPersistence :> es, Trace :> es, NewUnique :> es, State CurrentDeclarationState :> es)
 
 data CurrentDeclarationState = MkDeclarationState
     { blocks :: HashMap LIR.BlockDescriptor LIR.Block
@@ -49,13 +52,13 @@ registerVariable local variable = do
 registerAdditionalDeclarations :: (Compile es) => Seq LIR.Declaration -> Eff es ()
 registerAdditionalDeclarations declarations = modify (\state -> state{additionalDeclarations = state.additionalDeclarations <> declarations})
 
-compileDeclaration :: (Trace :> es, NewUnique :> es) => Core.Declaration -> Eff es (Seq LIR.Declaration)
+compileDeclaration :: (GraphPersistence :> es, Trace :> es, NewUnique :> es) => Core.Declaration -> Eff es (Seq LIR.Declaration)
 compileDeclaration = \case
     Core.DefineFunction{name, representationParameters = _, parameters, returnRepresentation, statements, result} -> do
         compileFunction (Core.Global name) parameters returnRepresentation statements result
 
 compileFunction ::
-    (Trace :> es, NewUnique :> es) =>
+    (GraphPersistence :> es, Trace :> es, NewUnique :> es) =>
     CoreName ->
     Seq (LocalCoreName, Core.Representation) ->
     Core.Representation ->
@@ -81,7 +84,7 @@ compileBody :: (Compile es) => BlockBuilder -> Seq Core.Statement -> Core.Expr -
 compileBody block statements returnExpr = case statements of
     Empty -> compileReturn block returnExpr
     Core.Let name representation expr :<| rest -> do
-        var <- newVar undefined
+        var <- newVar (generateLayout representation)
         registerVariable name var
         block <- compileLet block var expr
         compileBody block rest returnExpr
@@ -153,12 +156,13 @@ compileValue block = \case
         layout <- undefined literal
         variable <- newVar layout
         undefined
-    Core.DataConstructorApplication _name arguments -> do
+    Core.DataConstructorApplication constructor arguments -> do
         (block, arguments) <- compileValues block arguments
 
         -- TODO: add the tag for sum constructors
 
-        layout <- undefined
+        layout <- dataConstructorLayout constructor
+
         result <- newVar layout
         block <- addInstruction block $ LIR.AllocA result layout
         
@@ -189,6 +193,15 @@ joinPointBlockFor name = do
     case HashMap.lookup name joinPoints of
         Nothing -> panic $ "JumpJoin to join point without a block descriptor: " <> pretty name
         Just descriptor -> pure descriptor
+
+dataConstructorLayout :: Compile es => Core.DataConstructor -> Eff es Layout
+dataConstructorLayout = \case
+    Core.TupleConstructor count ->
+        -- TODO: we actually need the representations as well here, not just the count
+        undefined
+    Core.UserDefinedConstructor name -> do
+        representation <- GraphPersistence.getConstructorRepresentation name
+        pure (generateLayout representation)
 
 pointerToPath :: (HasCallStack, Compile es) => LIR.Variable -> Layout -> Layout.Path -> BlockBuilder -> Eff es (BlockBuilder, LIR.Variable)
 pointerToPath pointer layout path block = go block 0 path

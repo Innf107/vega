@@ -31,7 +31,7 @@ import Vega.Compilation.PatternMatching qualified as PatternMatching
 import Vega.Debruijn qualified as Debruijn
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.GraphPersistence (GraphPersistence)
-import Vega.Effect.Meta.Static (BindMeta, ReadMeta, runMeta)
+import Vega.Effect.Meta.Static (BindMeta, ReadMeta, runMeta, followMetasWithoutPathCompression)
 import Vega.Effect.Meta.Static qualified as Meta
 import Vega.Effect.Trace (Category (Patterns), Trace, trace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
@@ -44,12 +44,14 @@ import Vega.Syntax qualified as Vega
 import Vega.Util (assert)
 import Vega.Util qualified as Util
 import Witherable (wither)
+import qualified Vega.Effect.GraphPersistence as GraphPersistence
 
 type Compile es =
     ( GraphPersistence :> es
     , NewUnique :> es
     , Trace :> es
     , Reader Env :> es
+    , ReadMeta :> es
     )
 
 newtype Env = MkEnv {monomorphizableRepresentationVariables :: HashMap Vega.LocalName Debruijn.Index}
@@ -72,14 +74,15 @@ compileDeclaration ::
     Vega.Declaration Typed ->
     Eff es (Seq Core.Declaration)
 compileDeclaration declaration = do
-    declarations <- runNewUnique $ runMeta $ compileDeclarationSyntax declaration.syntax
+    declarations <- runNewUnique $ runMeta $ compileDeclarationSyntax declaration.name declaration.syntax
     traverse coalesceVariables declarations
 
 compileDeclarationSyntax ::
     (GraphPersistence :> es, Trace :> es, NewUnique :> es, ReadMeta :> es) =>
+    Vega.DeclarationName ->
     Vega.DeclarationSyntax Typed ->
     Eff es (Seq Core.Declaration)
-compileDeclarationSyntax = \case
+compileDeclarationSyntax declarationName = \case
     Vega.DefineFunction{ext, name, typeSignature = _, declaredTypeParameters = _, parameters, body} -> do
         monomorphizableRepresentationVariables <- extractMonomorphizableRepresentationVariables ext.forallBinders
         let (env, representationParameters) = envAndLimitFromRepresentationVariables monomorphizableRepresentationVariables
@@ -106,7 +109,13 @@ compileDeclarationSyntax = \case
                     , representationParameters = representationParameters
                     }
                 ]
-    Vega.DefineVariantType{} -> pure []
+    Vega.DefineVariantType{constructors} -> do
+        -- We don't need to compile constructors into anything, but we do need to remember their representations for later
+        for_ constructors \(_loc, constructorName, arguments) -> do
+            constructorType_ <- GraphPersistence.getGlobalType constructorName
+
+            undefined
+        pure []
     Vega.DefineExternalFunction{} -> pure []
 
 -- | Like 'compileExpr' but discards the representation
@@ -395,7 +404,7 @@ we give them representation `Unit` (which is like defaulting them to `()` but fr
 convertRepresentation :: (Compile es) => Vega.Type -> Eff es Core.Representation
 convertRepresentation type_ = do
     let invalidKind = panic $ "Invalid representation in conversion to Core: " <> pretty type_ <> "\n    This should have been caught in the type checker."
-    case type_ of
+    followMetasWithoutPathCompression type_ >>= \case
         Vega.MetaVar{} -> pure $ Core.ProductRep []
         Vega.SumRep representations -> Core.SumRep <$> traverse convertRepresentation representations
         Vega.ProductRep representations -> Core.ProductRep <$> traverse convertRepresentation representations

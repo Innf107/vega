@@ -413,6 +413,7 @@ instance Pretty PrimitiveRep where
         DoubleRep -> keyword "DoubleRep"
 
 type Kind = Type
+type Representation = Type
 
 -- TODO: levels
 data MetaVar = MkMetaVar

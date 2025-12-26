@@ -19,6 +19,7 @@ import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Error (CompilationError, RenameErrorSet, TypeErrorSet)
 import Vega.Pretty (Pretty, keyword, pretty, (<+>))
 import Vega.SCC (SCCId)
+import Vega.Syntax qualified as Vega
 
 data GraphData error a
     = Ok a
@@ -85,6 +86,9 @@ data GraphPersistence :: Effect where
     GetRemainingWork :: Backend -> GraphPersistence m (Seq WorkItem)
     --
     GetDefiningDeclaration :: GlobalName -> GraphPersistence m (Maybe DeclarationName)
+    -- Core
+    GetConstructorRepresentation :: Name -> GraphPersistence m Core.Representation
+    SetConstructorRepresentation :: Name -> Core.Representation -> GraphPersistence m ()
 
 makeEffect ''GraphPersistence
 

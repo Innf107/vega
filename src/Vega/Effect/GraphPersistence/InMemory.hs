@@ -19,6 +19,7 @@ import Vega.Effect.GraphPersistence hiding (
     getCachedGlobalKind,
     getCompiledCore,
     getCompiledJS,
+    getConstructorRepresentation,
     getCurrentErrors,
     getDefiningDeclaration,
     getDependencies,
@@ -38,6 +39,7 @@ import Vega.Effect.GraphPersistence hiding (
     removeDeclaration,
     setCompiledCore,
     setCompiledJS,
+    setConstructorRepresentation,
     setKnownDeclarations,
     setModuleImportScope,
     setParsed,
@@ -50,6 +52,7 @@ import Effectful.Dispatch.Dynamic
 import Effectful.Reader.Static
 import Vega.Error (CompilationError (..), RenameErrorSet (..), TypeErrorSet (..))
 import Vega.Syntax
+import Vega.Syntax qualified as Vega
 
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashTable.IO (CuckooHashTable)
@@ -60,6 +63,7 @@ import Effectful.Concurrent.Async (forConcurrently, runConcurrent)
 import Vega.BuildConfig (Backend (..))
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Effect.Trace (Category (SCC), Trace, trace, withTrace)
+import Vega.Panic (panic)
 import Vega.Pretty (Pretty (pretty))
 import Vega.SCC (SCCId, computeSCC)
 
@@ -75,6 +79,7 @@ data DeclarationData = MkDeclarationData
       dependencies :: IORef (HashSet DeclarationName)
     , dependents :: IORef (HashSet DeclarationName)
     , scc :: IORef (Maybe SCCId)
+    , dataConstructorRepresentations :: IORef (HashMap Name Core.Representation)
     }
 
 type CachedTypes = CuckooHashTable GlobalName Type
@@ -167,7 +172,8 @@ addDeclaration declaration = do
     dependencies <- newIORef mempty
     dependents <- newIORef mempty
     scc <- newIORef Nothing
-    let data_ = MkDeclarationData{parsed, renamed, typed, compiledJS, compiledCore, dependencies, dependents, scc}
+    dataConstructorRepresentations <- newIORef mempty
+    let data_ = MkDeclarationData{parsed, renamed, typed, compiledJS, compiledCore, dependencies, dependents, scc, dataConstructorRepresentations}
     liftIO $ HashTable.mutate declarations declaration.name \case
         Nothing -> (Just data_, ())
         Just _ -> error $ "Trying to add declaration as new that already exists: '" <> show declaration.name <> "'"
@@ -314,6 +320,7 @@ invalidateTyped maybeError name = do
     modifyIORef' data_.typed invalidateWithError
     modifyIORef' data_.compiledJS invalidateGraphData
     modifyIORef' data_.compiledCore invalidateGraphData
+    writeIORef data_.dataConstructorRepresentations mempty
 
     cachedTypes <- ask @CachedTypes
     globals <- getDefinedGlobals name
@@ -495,6 +502,30 @@ setDefiningDeclaration global declaration = do
     definingDeclarations <- ask @DefiningDeclarations
     liftIO $ HashTable.insert definingDeclarations global declaration
 
+declarationContainingConstructorRepresentations :: (HasCallStack, InMemory es) => Name -> Eff es DeclarationName
+declarationContainingConstructorRepresentations = \case
+    Global globalName ->
+        getDefiningDeclaration globalName >>= \case
+            Nothing -> panic $ "GlobalName without an associated declaration: " <> prettyGlobal DataConstructorKind globalName <> " This might be an unimplemented builtin"
+            Just declarationName -> pure declarationName
+    Local (MkLocalName{parent}) -> pure parent
+
+getConstructorRepresentation :: (HasCallStack, InMemory es) => Name -> Eff es Core.Representation
+getConstructorRepresentation name = do
+    declaration <- declarationContainingConstructorRepresentations name
+    data_ <- declarationData declaration
+    representations <- readIORef data_.dataConstructorRepresentations
+    case lookup name representations of
+        Just representation -> pure representation
+        Nothing -> panic $ "data constructor without a saved representation: " <> prettyName DataConstructorKind name
+
+setConstructorRepresentation :: (HasCallStack, InMemory es) => Name -> Core.Representation -> Eff es ()
+setConstructorRepresentation name representation = do
+    declaration <- declarationContainingConstructorRepresentations name
+    data_ <- declarationData declaration
+    modifyIORef' data_.dataConstructorRepresentations $ (insert name representation)
+
+
 runInMemory :: forall a es. (Trace :> es, IOE :> es) => Eff (GraphPersistence : es) a -> Eff es a
 runInMemory action = do
     lastKnownDeclarationsPerFile :: LastKnownDeclarations <- liftIO $ newIORef mempty
@@ -558,3 +589,6 @@ runInMemory action = do
                 GetRemainingWork backend -> getRemainingWork backend
                 --
                 GetDefiningDeclaration name -> getDefiningDeclaration name
+                -- Core
+                GetConstructorRepresentation name -> getConstructorRepresentation name
+                SetConstructorRepresentation name representation -> setConstructorRepresentation name representation
