@@ -59,7 +59,11 @@ data Statement
 data Value
     = Var CoreName
     | Literal Literal
-    | DataConstructorApplication DataConstructor (Seq Value)
+    | DataConstructorApplication
+        { constructor :: DataConstructor
+        , arguments :: Seq Value
+        , resultRepresentation :: Representation
+        }
 
 data DataConstructor
     = UserDefinedConstructor Vega.Name
@@ -145,8 +149,8 @@ instance Pretty Value where
     pretty = \case
         Var name -> pretty name
         Literal literal -> pretty literal
-        DataConstructorApplication constructor constructorArguments ->
-            prettyConstructorApplication constructor constructorArguments
+        DataConstructorApplication{constructor, arguments, resultRepresentation} ->
+            lparen "(" <> prettyConstructorApplication constructor arguments <> keyword " : " <> pretty resultRepresentation <> rparen ")"
 
 prettyConstructorApplication :: (Pretty a) => DataConstructor -> Seq a -> Doc Ann
 prettyConstructorApplication constructor constructorArguments = case constructor of

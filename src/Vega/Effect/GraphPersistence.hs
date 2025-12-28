@@ -86,9 +86,6 @@ data GraphPersistence :: Effect where
     GetRemainingWork :: Backend -> GraphPersistence m (Seq WorkItem)
     --
     GetDefiningDeclaration :: GlobalName -> GraphPersistence m (Maybe DeclarationName)
-    -- Core
-    GetConstructorRepresentation :: Name -> GraphPersistence m Core.Representation
-    SetConstructorRepresentation :: Name -> Core.Representation -> GraphPersistence m ()
 
 makeEffect ''GraphPersistence
 

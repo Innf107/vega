@@ -156,12 +156,12 @@ compileValue block = \case
         layout <- undefined literal
         variable <- newVar layout
         undefined
-    Core.DataConstructorApplication constructor arguments -> do
+    Core.DataConstructorApplication constructor arguments representation -> do
         (block, arguments) <- compileValues block arguments
 
         -- TODO: add the tag for sum constructors
 
-        layout <- dataConstructorLayout constructor
+        let layout = generateLayout representation
 
         result <- newVar layout
         block <- addInstruction block $ LIR.AllocA result layout
@@ -193,15 +193,6 @@ joinPointBlockFor name = do
     case HashMap.lookup name joinPoints of
         Nothing -> panic $ "JumpJoin to join point without a block descriptor: " <> pretty name
         Just descriptor -> pure descriptor
-
-dataConstructorLayout :: Compile es => Core.DataConstructor -> Eff es Layout
-dataConstructorLayout = \case
-    Core.TupleConstructor count ->
-        -- TODO: we actually need the representations as well here, not just the count
-        undefined
-    Core.UserDefinedConstructor name -> do
-        representation <- GraphPersistence.getConstructorRepresentation name
-        pure (generateLayout representation)
 
 pointerToPath :: (HasCallStack, Compile es) => LIR.Variable -> Layout -> Layout.Path -> BlockBuilder -> Eff es (BlockBuilder, LIR.Variable)
 pointerToPath pointer layout path block = go block 0 path

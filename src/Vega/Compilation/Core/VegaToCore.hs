@@ -31,7 +31,8 @@ import Vega.Compilation.PatternMatching qualified as PatternMatching
 import Vega.Debruijn qualified as Debruijn
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.GraphPersistence (GraphPersistence)
-import Vega.Effect.Meta.Static (BindMeta, ReadMeta, runMeta, followMetasWithoutPathCompression)
+import Vega.Effect.GraphPersistence qualified as GraphPersistence
+import Vega.Effect.Meta.Static (BindMeta, ReadMeta, followMetasWithoutPathCompression, runMeta)
 import Vega.Effect.Meta.Static qualified as Meta
 import Vega.Effect.Trace (Category (Patterns), Trace, trace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
@@ -44,7 +45,6 @@ import Vega.Syntax qualified as Vega
 import Vega.Util (assert)
 import Vega.Util qualified as Util
 import Witherable (wither)
-import qualified Vega.Effect.GraphPersistence as GraphPersistence
 
 type Compile es =
     ( GraphPersistence :> es
@@ -109,13 +109,7 @@ compileDeclarationSyntax declarationName = \case
                     , representationParameters = representationParameters
                     }
                 ]
-    Vega.DefineVariantType{constructors} -> do
-        -- We don't need to compile constructors into anything, but we do need to remember their representations for later
-        for_ constructors \(_loc, constructorName, arguments) -> do
-            constructorType_ <- GraphPersistence.getGlobalType constructorName
-
-            undefined
-        pure []
+    Vega.DefineVariantType{constructors} -> pure []
     Vega.DefineExternalFunction{} -> pure []
 
 -- | Like 'compileExpr' but discards the representation
@@ -206,15 +200,23 @@ compileExprToValue expr = do
             pure (statements <> [Core.Let name representation expr], Core.Var (Core.Local name), representation)
     case expr of
         Vega.Var _ name -> pure ([], Core.Var (nameToCoreName name), undefined)
-        Vega.DataConstructor _ name -> do
-            -- TODO: THIS IS WRONG. It's just a temporary fix to get Nil working.
-            -- To do this correctly, we need a GraphPersistence hook to look up the arity of a data constructor
-            -- and desugar this to a lambda taking that many parameters
-            pure ([], Core.DataConstructorApplication (Core.UserDefinedConstructor name) [], undefined)
+        Vega.DataConstructor _ name -> arityOfDataConstructor name >>= \case
+            Nothing -> do
+                undefined
+            Just arity -> do
+                undefined
+        -- TODO: THIS IS WRONG. It's just a temporary fix to get Nil working.
+        -- To do this correctly, we need a GraphPersistence hook to look up the arity of a data constructor
+        -- and desugar this to a lambda taking that many parameters
+        -- pure ([], Core.DataConstructorApplication (Core.UserDefinedConstructor name) [], undefined)
         Vega.Application _ returnRepresentation (Vega.DataConstructor _ name) argumentExprs -> do
             (argumentStatements, arguments) <- Seq.unzip <$> for argumentExprs compileExprToValue_
             returnRepresentation <- convertRepresentation returnRepresentation
-            pure (fold argumentStatements, Core.DataConstructorApplication (Core.UserDefinedConstructor name) arguments, returnRepresentation)
+            pure
+                ( fold argumentStatements
+                , Core.DataConstructorApplication (Core.UserDefinedConstructor name) arguments returnRepresentation
+                , returnRepresentation
+                )
         Vega.Application{} -> deferToLet
         Vega.PartialApplication{} -> deferToLet
         -- We can erase type applications since Core is untyped
@@ -224,8 +226,13 @@ compileExprToValue expr = do
         Vega.IntLiteral _loc literal -> pure ([], Core.Literal (Core.IntLiteral literal), Core.PrimitiveRep Vega.IntRep)
         Vega.DoubleLiteral _loc literal -> pure ([], Core.Literal (Core.DoubleLiteral literal), Core.PrimitiveRep Vega.DoubleRep)
         Vega.TupleLiteral _loc elements -> do
-            (statements, elementValues) <- Seq.unzip <$> for elements compileExprToValue_
-            pure (fold statements, Core.DataConstructorApplication (Core.TupleConstructor (length elementValues)) elementValues, undefined)
+            (statements, elementValues, elementRepresentations) <- Util.unzip3Seq <$> for elements compileExprToValue
+            let representation = Core.ProductRep elementRepresentations
+            pure
+                ( fold statements
+                , Core.DataConstructorApplication (Core.TupleConstructor (length elementValues)) elementValues representation
+                , representation
+                )
         Vega.BinaryOperator{} -> undefined
         Vega.If{} -> deferToLet
         Vega.SequenceBlock{} -> deferToLet
@@ -293,7 +300,7 @@ compileStatements = \case
     (Vega.Use{} :<| _) -> undefined
 
 unitLiteral :: Core.Value
-unitLiteral = Core.DataConstructorApplication (Core.TupleConstructor 0) []
+unitLiteral = Core.DataConstructorApplication (Core.TupleConstructor 0) [] (Core.ProductRep [])
 
 compilePatternMatch :: (Compile es) => Vega.Expr Typed -> Seq (Vega.Pattern Typed, Vega.Expr Typed) -> Eff es (Seq Core.Statement, Core.Expr)
 compilePatternMatch scrutinee = \case
@@ -392,6 +399,27 @@ newLocal :: (Compile es) => Eff es Core.LocalCoreName
 newLocal = do
     unique <- newUnique
     pure (Core.Generated unique)
+
+arityOfDataConstructor :: (HasCallStack, Compile es) => Vega.Name -> Eff es (Maybe Int)
+arityOfDataConstructor = \case
+    Vega.Local _localName -> undefined
+    Vega.Global globalName -> do
+        cachedVegaType <- GraphPersistence.getGlobalType globalName
+        case cachedVegaType of
+            GraphPersistence.CachedTypeSyntax syntax -> arityOfTypeSyntax syntax
+            GraphPersistence.CachedType type_ -> arityOfType type_
+            GraphPersistence.RenamingFailed ->
+                panic $ "Trying to look up arity of a data constructor where renaming failed: " <> Vega.prettyGlobal Vega.DataConstructorKind globalName
+  where
+    arityOfType type_ = followMetasWithoutPathCompression type_ >>= \case
+        Vega.Forall _ rest -> arityOfType rest
+        Vega.Function arguments _ _ -> pure (Just (length arguments))
+        _ -> pure Nothing
+    arityOfTypeSyntax syntax = case syntax of
+        Vega.ForallS _ _ rest -> arityOfTypeSyntax rest
+        Vega.FunctionS _ arguments _ _ -> pure (Just (length arguments)) 
+        Vega.PureFunctionS _ arguments _ -> pure (Just (length arguments)) 
+        _ -> pure Nothing
 
 booleanConstructorName :: Bool -> Vega.Name
 booleanConstructorName True = Vega.Global (Vega.internalName "True")
@@ -559,8 +587,12 @@ applySubst substitution = \case
     Core.Var (Core.Global globalName) -> Core.Var (Core.Global globalName)
     Core.Var (Core.Local localName) -> getFinalValue substitution localName
     Core.Literal literal -> Core.Literal literal
-    Core.DataConstructorApplication constructor arguments ->
-        Core.DataConstructorApplication constructor (fmap (applySubst substitution) arguments)
+    Core.DataConstructorApplication{constructor, arguments, resultRepresentation} ->
+        Core.DataConstructorApplication
+            { arguments = (fmap (applySubst substitution) arguments)
+            , constructor
+            , resultRepresentation
+            }
 
 coalesceBinding :: (HasCallStack) => Core.LocalCoreName -> Core.Value -> Substitution -> Eff es Substitution
 coalesceBinding name newValue substitution = case newValue of
