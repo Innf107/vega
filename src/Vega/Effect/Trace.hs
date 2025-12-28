@@ -38,6 +38,7 @@ data Category
     | SCC
     | Patterns
     | ImportScope
+    | Reachable
     deriving (Generic, Show, Enum, Bounded)
 
 data Trace :: Effect where
@@ -65,6 +66,7 @@ data Traces = MkTraces
     , scc :: Bool
     , patterns :: Bool
     , importScope :: Bool
+    , reachable :: Bool
     }
 
 defaultTraces :: Traces
@@ -82,6 +84,7 @@ defaultTraces =
         , scc = False
         , patterns = False
         , importScope = False
+        , reachable = False
         }
 
 categoryWidth :: Traces -> Int
@@ -128,6 +131,7 @@ traceEnabledIn category enabledTraces = case category of
     SCC -> enabledTraces.scc
     Patterns -> enabledTraces.patterns
     ImportScope -> enabledTraces.importScope
+    Reachable -> enabledTraces.reachable
 
 getTraces :: (MonadIO io) => io Traces
 getTraces =
@@ -152,6 +156,7 @@ getTraces =
         ("scc" : rest) -> go (traces{scc = True}) rest
         ("patterns" : rest) -> go (traces{patterns = True}) rest
         ("import-scope" : rest) -> go (traces{importScope = True}) rest
+        ("reachable" : rest) -> go (traces{reachable = True}) rest
         (trace_ : rest) -> do
             -- TODO: make the warning prettier
             putTextLn $ "WARNING: unrecognized trace category: " <> trace_

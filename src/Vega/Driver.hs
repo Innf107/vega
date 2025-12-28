@@ -38,7 +38,7 @@ import Vega.Diff qualified as Diff
 import Vega.Effect.DebugEmit (DebugEmit, debugEmit)
 import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
-import Vega.Effect.Trace (Category (..), Trace, trace, whenTraceEnabled)
+import Vega.Effect.Trace (Category (..), Trace, trace, whenTraceEnabled, traceEnabled)
 import Vega.Effect.Unique.Static.Local (runNewUnique)
 import Vega.Error (CompilationError (..), RenameErrorSet (..))
 import Vega.Error qualified as Error
@@ -253,7 +253,13 @@ compileBackend = do
                         debugEmit lir
                         pure lir
 
-            lir <- mconcat <$> Streaming.toList_ (Streaming.mapM compileToLIR (GraphPersistence.reachableFrom entryPointDeclaration))
+            let reachableStream = GraphPersistence.reachableFrom entryPointDeclaration
+
+            traceEnabled Reachable >>= \case
+                False -> pure ()
+                True -> Streaming.mapM_ (\declarationName -> trace Reachable (pretty declarationName)) reachableStream
+
+            lir <- mconcat <$> Streaming.toList_ (Streaming.mapM compileToLIR reachableStream)
 
             program <- LIRToX86_64.compile lir
             writeBuildFile "out.s" (X86.renderASM entryPoint program)
