@@ -19,7 +19,7 @@ import GHC.Generics (Generically (..))
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName)
 import Vega.Compilation.LIR.Layout (Layout)
 import Vega.Effect.Unique.Static.Local (Unique)
-import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, lparen, number, pretty, rparen, vsep, (<+>))
+import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, lparen, number, pretty, rparen, vsep, (<+>), localIdentText)
 
 newtype Variable = MkVariable Int
 
@@ -118,7 +118,7 @@ instance Pretty BlockDescriptor where
     pretty (MkBlockDescriptor unique) = number (hashUnique unique)
 
 instance Pretty Variable where
-    pretty = undefined
+    pretty (MkVariable name) = localIdentText ("x" <> show name)
 instance Pretty FunctionName where
     pretty = \case {}
 

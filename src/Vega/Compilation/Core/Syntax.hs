@@ -96,7 +96,7 @@ instance Pretty Representation where
     pretty (SumRep representations) = lparen "(" <> intercalateDoc (" " <> keyword "+" <> " ") (fmap pretty representations) <> rparen ")"
     pretty (ArrayRep inner) = keyword "ArrayRep" <> lparen "(" <> pretty inner <> rparen ")"
     pretty (PrimitiveRep rep) = pretty rep
-    pretty (ParameterRep index) = localIdentText ("$" <> show (Debruijn.toInt index))
+    pretty (ParameterRep index) = pretty index
 
 instance Pretty Declaration where
     pretty = \case

@@ -1,13 +1,15 @@
-module Vega.Debruijn (Index, toInt, Limit, initial, new, size) where
+module Vega.Debruijn (Index, Limit, initial, new, size) where
 
 import Relude
+import Vega.Pretty (Pretty)
+import Vega.Pretty qualified as Pretty
 
 newtype Index = MkIndex Int
     deriving stock (Show, Eq, Ord)
     deriving newtype (Hashable)
 
-toInt :: Index -> Int
-toInt (MkIndex index) = index
+instance Pretty Index where
+    pretty (MkIndex i) = Pretty.localIdentText ("$" <> show i)
 
 newtype Limit = MkLimit {nextIndex :: Int}
 

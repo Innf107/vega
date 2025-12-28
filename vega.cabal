@@ -25,6 +25,7 @@ source-repository head
 
 library
   exposed-modules:
+      Vega.Alignment
       Vega.BuildConfig
       Vega.Builtins
       Vega.Compilation.Core.Syntax
@@ -90,6 +91,7 @@ library
       ApplicativeDo
       ImplicitParams
       RoleAnnotations
+      LexicalNegation
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields
   build-depends:
       aeson
@@ -143,6 +145,7 @@ executable vega
       ApplicativeDo
       ImplicitParams
       RoleAnnotations
+      LexicalNegation
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
@@ -198,6 +201,7 @@ test-suite vega-test
       ApplicativeDo
       ImplicitParams
       RoleAnnotations
+      LexicalNegation
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson

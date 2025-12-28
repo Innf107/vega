@@ -73,7 +73,7 @@ compileFunction functionName parameters returnRepresentation statements returnEx
     let declaration =
             LIR.DefineFunction
                 { name = functionName
-                , parameters = undefined
+                , parameters = fmap fst parameters
                 , layouts = finalDeclarationState.layouts
                 , blocks = finalDeclarationState.blocks
                 , init = initDescriptor
