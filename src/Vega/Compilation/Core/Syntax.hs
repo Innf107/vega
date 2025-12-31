@@ -121,7 +121,7 @@ instance Pretty Declaration where
 
 instance Pretty Statement where
     pretty = \case
-        Let name representation expr -> keyword "let" <+> pretty name <+> pretty representation <+> keyword "=" <+> pretty expr
+        Let name representation expr -> keyword "let" <+> pretty name <+> keyword ":" <+> pretty representation <+> keyword "=" <+> pretty expr
         LetJoin name parameters bodyStatements bodyExpr ->
             keyword "letjoin" <+> pretty name <> typedParameters parameters <+> keyword "=" <+> prettyBody bodyStatements bodyExpr
         LetFunction{name, parameters, returnRepresentation, statements, result} ->

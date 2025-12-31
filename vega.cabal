@@ -49,6 +49,7 @@ library
       Vega.Effect.GraphPersistence.InMemory
       Vega.Effect.Meta.Static
       Vega.Effect.Output.Static.Local
+      Vega.Effect.Output.Static.Local.HashSet
       Vega.Effect.Trace
       Vega.Effect.Unique.Static.Local
       Vega.Error

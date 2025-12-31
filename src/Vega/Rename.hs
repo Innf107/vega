@@ -16,7 +16,8 @@ import Effectful.State.Static.Local
 import GHC.List (List)
 import Vega.Builtins (builtinGlobals, defaultImportScope)
 import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getDefiningDeclaration, getModuleImportScope)
-import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
+import Vega.Effect.Output.Static.Local.HashSet qualified as Output.HashSet
+import Vega.Effect.Output.Static.Local qualified as Output
 import Vega.Error (RenameError (..), RenameErrorSet (..))
 import Vega.Loc (Loc)
 import Vega.Util (mapAccumLM)
@@ -25,8 +26,8 @@ import Vega.Util qualified as Util
 type Rename es =
     ( GraphPersistence :> es
     , Reader DeclarationName :> es
-    , Output DeclarationName :> es
-    , Output RenameError :> es
+    , Output.HashSet.Output DeclarationName :> es
+    , Output.Output RenameError :> es
     , State LocalNameCounts :> es
     )
 type LocalNameCounts = HashMap Text Int
@@ -38,7 +39,7 @@ registerDependency dependency = do
         then
             pure ()
         else
-            output dependency
+            Output.HashSet.output dependency
 
 data Env = MkEnv
     { localVariables :: HashMap Text LocalName
@@ -127,17 +128,17 @@ findGlobalOrDummy loc nameKind name =
     findGlobal nameKind name >>= \case
         Found globalName -> pure (Global globalName)
         NotFound -> do
-            output (NameNotFound{loc, name, nameKind})
+            Output.output (NameNotFound{loc, name, nameKind})
 
             parent <- ask @DeclarationName
             pure (Local (dummyLocalName parent name))
         Ambiguous candidates -> do
-            output (AmbiguousGlobal{loc, name = name, nameKind, candidates})
+            Output.output (AmbiguousGlobal{loc, name = name, nameKind, candidates})
 
             parent <- ask @DeclarationName
             pure (Local (dummyLocalName parent name))
         Inaccessible candidates -> do
-            output (InaccessibleGlobal{loc, name, nameKind, candidates})
+            Output.output (InaccessibleGlobal{loc, name, nameKind, candidates})
 
             parent <- ask @DeclarationName
             pure (Local (dummyLocalName parent name))
@@ -150,11 +151,11 @@ isInScope name scope =
             -- TODO: qualified
             HashSet.member name.name importedItems.unqualifiedItems
 
-rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, RenameErrorSet, List DeclarationName)
+rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, RenameErrorSet, HashSet DeclarationName)
 rename (MkDeclaration loc name syntax) = runReader name do
     ((syntax, errors), dependencies) <-
-        runOutputList $
-            runOutputSeq @RenameError $
+        Output.HashSet.runOutputHashSet $
+            Output.runOutputSeq @RenameError $
                 evalState @LocalNameCounts mempty $
                     renameDeclarationSyntax syntax
     pure (MkDeclaration loc name syntax, (MkRenameErrorSet errors), dependencies)
@@ -189,7 +190,7 @@ findTypeVariable :: (Rename es) => Env -> Loc -> Text -> Eff es LocalName
 findTypeVariable env loc name = case lookup name env.localTypeVariables of
     Just localName -> pure localName
     Nothing -> do
-        output (TypeVariableNotFound{loc, name})
+        Output.output (TypeVariableNotFound{loc, name})
 
         parent <- ask
         pure (dummyLocalName parent name)

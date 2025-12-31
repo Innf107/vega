@@ -13,9 +13,9 @@ module Vega.Driver (
 import Relude hiding (Reader, ask, trace)
 
 import Effectful
-import Effectful.FileSystem (FileSystem, doesDirectoryExist, listDirectory, createDirectoryIfMissing)
+import Effectful.FileSystem (FileSystem, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
 import Effectful.Reader.Static
-import System.FilePath (takeExtension, (</>), takeDirectory)
+import System.FilePath (takeDirectory, takeExtension, (</>))
 
 import Data.Sequence (Seq (..))
 import Data.Traversable (for)
@@ -24,6 +24,7 @@ import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
 import TextBuilder qualified
 
 import Effectful.Exception (try)
+import Effectful.Process (Process, callProcess)
 import Streaming.Prelude qualified as Streaming
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
@@ -33,12 +34,14 @@ import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
 import Vega.Compilation.JavaScript.VegaToJavaScript qualified as JavaScript
 import Vega.Compilation.LIR.CoreToLIR qualified as LIR
 import Vega.Compilation.LIR.Syntax qualified as LIR
+import Vega.Compilation.X86_64.LIRToX86_64 qualified as LIRToX86_64
+import Vega.Compilation.X86_64.Syntax qualified as X86
 import Vega.Diff (DiffChange (..))
 import Vega.Diff qualified as Diff
 import Vega.Effect.DebugEmit (DebugEmit, debugEmit)
 import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
-import Vega.Effect.Trace (Category (..), Trace, trace, whenTraceEnabled, traceEnabled)
+import Vega.Effect.Trace (Category (..), Trace, trace, traceEnabled, whenTraceEnabled)
 import Vega.Effect.Unique.Static.Local (runNewUnique)
 import Vega.Error (CompilationError (..), RenameErrorSet (..))
 import Vega.Error qualified as Error
@@ -46,13 +49,11 @@ import Vega.Lexer qualified as Lexer
 import Vega.Panic (panic)
 import Vega.Parser qualified as Parser
 import Vega.Pretty (keyword, pretty)
+import Vega.Pretty qualified as Pretty
 import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
-import qualified Vega.Compilation.X86_64.LIRToX86_64 as LIRToX86_64
-import qualified Vega.Compilation.X86_64.Syntax as X86
-import Effectful.Process (callProcess, Process)
 
 data CompilationResult
     = CompilationSuccessful
@@ -295,7 +296,7 @@ rename name = do
 
     parsed <- GraphPersistence.getParsed name
     (renamed, errors, dependencies) <- Rename.rename parsed
-    trace Dependencies (show name <> " --> " <> show dependencies)
+    trace Dependencies (pretty name <> keyword " —> " <> Pretty.lparen "[" <> Pretty.intercalateDoc (keyword ", ") (map pretty (toList dependencies)) <> Pretty.rparen "]")
 
     for_ dependencies \dependency -> do
         GraphPersistence.addDependency name dependency
@@ -346,13 +347,12 @@ compileToCore name =
             debugEmit compiled
             GraphPersistence.setCompiledCore name compiled
 
-buildFilePath :: Driver es => FilePath -> Eff es FilePath
+buildFilePath :: (Driver es) => FilePath -> Eff es FilePath
 buildFilePath localPath = do
     MkBuildConfig{projectRoot} <- ask
     pure $ projectRoot </> ".vega" </> localPath
 
-
-writeBuildFile :: Driver es => FilePath -> Text -> Eff es ()
+writeBuildFile :: (Driver es) => FilePath -> Text -> Eff es ()
 writeBuildFile localPath contents = do
     MkBuildConfig{projectRoot} <- ask
     createDirectoryIfMissing False (projectRoot </> ".vega")
@@ -361,4 +361,3 @@ writeBuildFile localPath contents = do
 
     createDirectoryIfMissing True (takeDirectory filePath)
     writeFileText filePath contents
-
