@@ -85,7 +85,7 @@ compileExpr = \case
     Var _ (Global builtinName)
         | isInternalName builtinName -> compileBuiltinVar builtinName.name
     Var _ varName -> pure $ JS.Var (JS.compileName varName)
-    DataConstructor _ name -> pure $ JS.Var (JS.compileName name)
+    DataConstructor{valueRepresentation = _, name} -> pure $ JS.Var (JS.compileName name)
     Application _ _representation funExpr argExprs -> do
         jsFunExpr <- compileExpr funExpr
         jsArgExprs <- for argExprs compileExpr

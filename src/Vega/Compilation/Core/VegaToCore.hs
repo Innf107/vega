@@ -125,8 +125,14 @@ compileExpr expr = do
             pure (statements, Core.Value value, representation)
     case expr of
         Vega.Var{} -> deferToValue
-        Vega.DataConstructor{} -> deferToValue
-        Vega.Application _ _ (Vega.DataConstructor _ _) _ -> deferToValue
+        Vega.DataConstructor { valueRepresentation, name } -> arityOfDataConstructor name >>= \case
+            Nothing -> deferToValue
+            Just arity -> do
+                -- TODO: We need more than the arity here. We actually need the *representations* of the arguments.
+                -- This is particularly annoying because we do have the *types* of the arguments but we don't have a
+                -- way of accessing their kinds from here
+                undefined
+        Vega.Application _ _ (Vega.DataConstructor{}) _ -> deferToValue
         Vega.Application _ returnRepresentation functionExpr argExprs -> do
             (functionStatements, function) <- compileExprToValue_ functionExpr
             (argumentStatements, arguments) <-
@@ -200,16 +206,18 @@ compileExprToValue expr = do
             pure (statements <> [Core.Let name representation expr], Core.Var (Core.Local name), representation)
     case expr of
         Vega.Var _ name -> pure ([], Core.Var (nameToCoreName name), undefined)
-        Vega.DataConstructor _ name -> arityOfDataConstructor name >>= \case
-            Nothing -> do
-                undefined
-            Just arity -> do
-                undefined
-        -- TODO: THIS IS WRONG. It's just a temporary fix to get Nil working.
-        -- To do this correctly, we need a GraphPersistence hook to look up the arity of a data constructor
-        -- and desugar this to a lambda taking that many parameters
-        -- pure ([], Core.DataConstructorApplication (Core.UserDefinedConstructor name) [], undefined)
-        Vega.Application _ returnRepresentation (Vega.DataConstructor _ name) argumentExprs -> do
+        Vega.DataConstructor _ vegaRepresentation name -> do
+            representation <- convertRepresentation vegaRepresentation
+            arityOfDataConstructor name >>= \case
+                Nothing -> do
+                    pure
+                        ( []
+                        , Core.DataConstructorApplication (Core.UserDefinedConstructor name) [] representation
+                        , representation
+                        )
+                Just _ -> do
+                    deferToLet
+        Vega.Application _ returnRepresentation (Vega.DataConstructor _ _representation name) argumentExprs -> do
             (argumentStatements, arguments) <- Seq.unzip <$> for argumentExprs compileExprToValue_
             returnRepresentation <- convertRepresentation returnRepresentation
             pure
@@ -411,14 +419,15 @@ arityOfDataConstructor = \case
             GraphPersistence.RenamingFailed ->
                 panic $ "Trying to look up arity of a data constructor where renaming failed: " <> Vega.prettyGlobal Vega.DataConstructorKind globalName
   where
-    arityOfType type_ = followMetasWithoutPathCompression type_ >>= \case
-        Vega.Forall _ rest -> arityOfType rest
-        Vega.Function arguments _ _ -> pure (Just (length arguments))
-        _ -> pure Nothing
+    arityOfType type_ =
+        followMetasWithoutPathCompression type_ >>= \case
+            Vega.Forall _ rest -> arityOfType rest
+            Vega.Function arguments _ _ -> pure (Just (length arguments))
+            _ -> pure Nothing
     arityOfTypeSyntax syntax = case syntax of
         Vega.ForallS _ _ rest -> arityOfTypeSyntax rest
-        Vega.FunctionS _ arguments _ _ -> pure (Just (length arguments)) 
-        Vega.PureFunctionS _ arguments _ -> pure (Just (length arguments)) 
+        Vega.FunctionS _ arguments _ _ -> pure (Just (length arguments))
+        Vega.PureFunctionS _ arguments _ -> pure (Just (length arguments))
         _ -> pure Nothing
 
 booleanConstructorName :: Bool -> Vega.Name

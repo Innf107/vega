@@ -515,7 +515,7 @@ expr = label "expression" exprLogical
                     ]
             , do
                 (name, loc) <- constructorWithLoc
-                pure (DataConstructor loc name)
+                pure (DataConstructor loc () name)
             , do
                 startLoc <- single Lexer.Lambda
                 typeParameters <- option Empty do

@@ -516,9 +516,10 @@ infer env ambientEffect expr = do
         Var loc name -> do
             type_ <- instantiate loc env =<< varType env name
             pure (type_, Var loc name)
-        DataConstructor loc name -> do
+        DataConstructor loc () name -> do
             type_ <- instantiate loc env =<< varType env name
-            pure (type_, DataConstructor loc name)
+            representation <- representationOfType loc env type_
+            pure (type_, DataConstructor loc representation name)
         Application{loc, functionExpr, arguments} -> do
             (functionType, functionExpr) <- infer env ambientEffect functionExpr
             (argumentTypes, functionEffect, returnType, parameterMismatch) <- splitFunctionType loc env (length arguments) functionType

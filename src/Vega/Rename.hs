@@ -324,9 +324,9 @@ renameExpr env = \case
     Var loc name -> do
         name <- findVarName env loc name
         pure (Var loc name)
-    DataConstructor loc name -> do
+    DataConstructor loc () name -> do
         name <- findDataConstructorName env loc name
-        pure (DataConstructor loc name)
+        pure (DataConstructor loc () name)
     Application{loc, representation, functionExpr, arguments} -> do
         functionExpr <- renameExpr env functionExpr
         arguments <- traverse (renameExpr env) arguments

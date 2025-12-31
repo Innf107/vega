@@ -146,7 +146,16 @@ type family XRepresentation p where
 
 data Expr p
     = Var Loc (XName p)
-    | DataConstructor Loc (XName p)
+    | DataConstructor
+        { loc :: Loc
+        , valueRepresentation :: XRepresentation p
+        {- ^ This is the representation of the *fully constructed value* at this instantiation.
+
+        For example, @Just@ has a value representation of @Unit + ?r@, even though it has *type* @?a -> Maybe(?a)@, which
+        would itself have representation 'functionRepresentation'
+        -}
+        , name :: XName p
+        }
     | Application
         { loc :: Loc
         , representation :: XRepresentation p
@@ -488,7 +497,6 @@ instance Pretty Type where
             case followMetasManual meta of
                 MetaVar meta -> pretty meta
                 type_ -> pretty type_
-                
         Skolem skolem -> pretty skolem
         Pure -> keyword "Pure"
         Rep -> keyword "Rep"

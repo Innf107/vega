@@ -23,7 +23,7 @@ data Layout = MkLayoutUnchecked
     }
 
 data LayoutContents
-    = SumLayout {constructors :: Seq LayoutContents}
+    = SumLayout {constructors :: Seq LayoutContents, tagOffset :: Int, tagSizeInBytes :: Int}
     | ProductLayout {offsets :: Vector Int}
     | NumberLayout
     | ManagedPointerLayout
@@ -35,7 +35,7 @@ instance Pretty Layout where
 
 instance Pretty LayoutContents where
     pretty = \case
-        SumLayout constructors -> Pretty.lparen "<" <> Pretty.intercalateDoc (Pretty.keyword " + ") (fmap pretty constructors) <> Pretty.rparen ">"
+        SumLayout {constructors, tagOffset, tagSizeInBytes} -> Pretty.lparen "<" <> Pretty.intercalateDoc (Pretty.keyword " + ") (fmap pretty constructors) <> Pretty.rparen ">"
         ProductLayout offsets -> Pretty.lparen "(" <> Pretty.intercalateDoc (Pretty.keyword ", ") (fmap Pretty.number (GHC.Exts.toList offsets)) <> Pretty.rparen ")"
         NumberLayout -> Pretty.keyword "Int"
         ManagedPointerLayout -> Pretty.keyword "Pointer"
