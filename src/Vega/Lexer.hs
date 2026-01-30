@@ -259,6 +259,7 @@ lexIdentifier chars state = case state of
             "let" -> pure (Let, state)
             "_" -> pure (Underscore, state)
             "external" -> pure (External, state)
+            "shadow" -> pure (Shadow, state)
             ident -> pure (Ident ident, state)
 
 isIdentifierStart :: Char -> Bool
