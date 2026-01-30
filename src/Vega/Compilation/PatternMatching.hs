@@ -100,7 +100,7 @@ compileMatch patterns = mergeAll $ fmap (\(pattern_, goal) -> compileSinglePatte
 compileSinglePattern :: Pattern Typed -> CaseTree goal -> CaseTree goal
 compileSinglePattern pattern_ leaf = case pattern_ of
     WildcardPattern{} -> Ignore leaf
-    VarPattern _loc rep name -> BindVar name rep (Ignore leaf)
+    VarPattern{loc = _, ext = rep, name, isShadowed = _} -> BindVar name rep (Ignore leaf)
     AsPattern _loc rep inner name -> BindVar name rep (compileSinglePattern inner leaf)
     ConstructorPattern{constructor, subPatterns} -> do
         let subTree = serializeSubPatternsWithLeaf subPatterns leaf

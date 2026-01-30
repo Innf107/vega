@@ -16,8 +16,8 @@ import Effectful.State.Static.Local
 import GHC.List (List)
 import Vega.Builtins (builtinGlobals, defaultImportScope)
 import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getDefiningDeclaration, getModuleImportScope)
-import Vega.Effect.Output.Static.Local.HashSet qualified as Output.HashSet
 import Vega.Effect.Output.Static.Local qualified as Output
+import Vega.Effect.Output.Static.Local.HashSet qualified as Output.HashSet
 import Vega.Error (RenameError (..), RenameErrorSet (..))
 import Vega.Loc (Loc)
 import Vega.Util (mapAccumLM)
@@ -300,9 +300,9 @@ renameForallBinder env = \case
 renamePattern :: (Rename es) => Env -> Pattern Parsed -> Eff es (Pattern Renamed, Env -> Env)
 renamePattern env = \case
     WildcardPattern loc -> pure (WildcardPattern loc, id)
-    VarPattern loc () name -> do
+    VarPattern{loc, ext = (), name, isShadowed} -> do
         (localName, envTrans) <- bindLocalVar name
-        pure (VarPattern loc () localName, envTrans)
+        pure (VarPattern{loc, ext = (), name = localName, isShadowed}, envTrans)
     AsPattern loc () innerPattern name -> do
         (innerPattern, innerTrans) <- renamePattern env innerPattern
         (localName, envTrans) <- bindLocalVar name

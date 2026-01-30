@@ -19,7 +19,6 @@ import Vega.Effect.GraphPersistence hiding (
     getCachedGlobalKind,
     getCompiledCore,
     getCompiledJS,
-    getConstructorRepresentation,
     getCurrentErrors,
     getDefiningDeclaration,
     getDependencies,

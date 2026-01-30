@@ -255,7 +255,7 @@ data BinaryOperator
 
 data Pattern p
     = WildcardPattern Loc
-    | VarPattern Loc (XVarPattern p) (XLocalName p)
+    | VarPattern {loc :: Loc, ext :: (XVarPattern p), name :: (XLocalName p), isShadowed :: Bool}
     | AsPattern Loc (XAsPattern p) (Pattern p) (XLocalName p)
     | ConstructorPattern
         { loc :: Loc

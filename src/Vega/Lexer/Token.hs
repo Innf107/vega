@@ -54,6 +54,7 @@ data Token
     | Use
     | Import
     | External
+    | Shadow
     deriving (Show, Eq, Ord, Generic)
 
 instance Pretty Token where
@@ -107,3 +108,4 @@ instance Pretty Token where
         Use -> Pretty.keyword "use"
         Import -> Pretty.keyword "import"
         External -> Pretty.keyword "external"
+        Shadow -> Pretty.keyword "shadow"

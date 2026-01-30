@@ -47,6 +47,8 @@ ghc-options:
 - -Wno-name-shadowing
 - -Werror=incomplete-patterns
 - -Wno-ambiguous-fields
+- -fno-show-error-context
+- -fmax-relevant-binds=0
 
 library:
   source-dirs: src

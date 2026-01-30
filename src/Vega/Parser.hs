@@ -444,7 +444,11 @@ pattern_ = do
         choice
             [ do
                 (name, loc) <- identifierWithLoc
-                pure (VarPattern loc () name)
+                pure (VarPattern{loc = loc, ext = (), name = name, isShadowed = False})
+            , do
+                startLoc <- single Lexer.Shadow
+                (name, endLoc) <- identifierWithLoc
+                pure (VarPattern {loc = startLoc <> endLoc, ext = (), name = name, isShadowed = True})
             , do
                 (name, startLoc) <- constructorWithLoc
                 subPatterns <- optional (argumentsWithLoc pattern_)
@@ -602,12 +606,12 @@ let_ = do
             _ <- single Lexer.Equals
             body <- expr
             case boundPattern of
-                VarPattern _ () varName ->
+                VarPattern{name, isShadowed = False} ->
                     pure $
                         Syntax.LetFunction
                             { ext = ()
                             , loc = (startLoc <> getLoc body)
-                            , name = varName
+                            , name
                             , typeSignature = Nothing
                             , parameters = fmap (,()) parameters
                             , body

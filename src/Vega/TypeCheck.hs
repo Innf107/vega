@@ -317,9 +317,9 @@ checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <>
             subsumes (getLoc pattern_) env type_ expectedType
             pure (pattern_, envTrans)
     case pattern_ of
-        VarPattern loc () var -> do
+        VarPattern loc () var isShadowed -> do
             rep <- representationOfType loc env expectedType
-            pure (VarPattern loc rep var, bindVarType var expectedType)
+            pure (VarPattern { loc = loc, ext = rep, name = var, isShadowed = isShadowed }, bindVarType var expectedType)
         AsPattern loc () pattern_ name -> do
             (pattern_, innerTrans) <- checkPattern env expectedType pattern_
             rep <- representationOfType loc env expectedType
@@ -361,10 +361,10 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
     WildcardPattern loc -> do
         type_ <- MetaVar <$> freshTypeMeta "w"
         pure (WildcardPattern loc, type_, id)
-    VarPattern loc () varName -> do
+    VarPattern loc () varName isShadowed -> do
         rep <- MetaVar <$> freshMeta "r" Rep
         type_ <- MetaVar <$> freshMeta (varName.name) (Type rep)
-        pure (VarPattern loc rep varName, type_, bindVarType varName type_)
+        pure (VarPattern { loc = loc, ext = rep, name = varName, isShadowed = isShadowed }, type_, bindVarType varName type_)
     AsPattern loc () innerPattern name -> do
         (innerPattern, innerType, innerTrans) <- inferPattern env innerPattern
         rep <- representationOfType loc env innerType
