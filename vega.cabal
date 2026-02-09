@@ -1,6 +1,6 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.38.1.
+-- This file has been generated from package.yaml by hpack version 0.37.0.
 --
 -- see: https://github.com/sol/hpack
 
@@ -30,6 +30,7 @@ library
       Vega.Builtins
       Vega.Compilation.Core.Syntax
       Vega.Compilation.Core.VegaToCore
+      Vega.Compilation.CoreToLLVM
       Vega.Compilation.JavaScript.Assemble
       Vega.Compilation.JavaScript.Syntax
       Vega.Compilation.JavaScript.VegaToJavaScript
@@ -103,6 +104,7 @@ library
     , file-embed
     , filepath
     , hashtables
+    , llvm-ng
     , megaparsec
     , optparse-applicative
     , prettyprinter
@@ -116,7 +118,7 @@ library
     , vector
     , witherable
     , yaml
-  default-language: GHC2021
+  default-language: GHC2024
 
 executable vega
   main-is: Main.hs
@@ -157,6 +159,7 @@ executable vega
     , file-embed
     , filepath
     , hashtables
+    , llvm-ng
     , megaparsec
     , optparse-applicative
     , prettyprinter
@@ -171,7 +174,7 @@ executable vega
     , vega
     , witherable
     , yaml
-  default-language: GHC2021
+  default-language: GHC2024
 
 test-suite vega-test
   type: exitcode-stdio-1.0
@@ -213,6 +216,7 @@ test-suite vega-test
     , file-embed
     , filepath
     , hashtables
+    , llvm-ng
     , megaparsec
     , optparse-applicative
     , prettyprinter
@@ -227,4 +231,4 @@ test-suite vega-test
     , vega
     , witherable
     , yaml
-  default-language: GHC2021
+  default-language: GHC2024

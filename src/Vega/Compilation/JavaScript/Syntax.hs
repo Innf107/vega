@@ -159,6 +159,8 @@ compileName = \case
     Vega.Local localName -> compileLocalName localName
     Vega.Global globalName -> compileGlobalName globalName
 
+
+
 -- TODO
 escapeString :: Text -> TextBuilder
 escapeString string = TextBuilder.text $ Text.concatMap escapeChar string

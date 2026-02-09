@@ -34,6 +34,7 @@ dependencies:
 - text-builder
 - streaming
 - file-embed
+- llvm-ng
 
 ghc-options:
 - -Wall
@@ -75,7 +76,7 @@ tests:
     dependencies:
     - vega
 
-language: GHC2021
+language: GHC2024
 
 default-extensions:
 - NoImplicitPrelude
