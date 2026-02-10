@@ -1,9 +1,9 @@
 module Vega.Compilation.MIR.CoreToMIR (compileDeclaration) where
 
 import Effectful
-import Relude hiding (State, get, modify, put, runState)
+import Relude hiding (State, execState, get, modify, put, runState)
 
-import Effectful.State.Static.Local (State, get, modify, put, runState)
+import Effectful.State.Static.Local (State, execState, get, modify, put, runState)
 
 import Data.Foldable (foldrM)
 import Data.HashMap.Strict qualified as HashMap
@@ -12,7 +12,7 @@ import Data.Traversable (for)
 import Data.Vector.Generic qualified as Vector
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
-import Vega.Compilation.MIR.Syntax (Phis (..))
+import Vega.Compilation.MIR.Syntax (Phis (..), Terminator (..))
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Effect.GraphPersistence
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
@@ -33,6 +33,13 @@ data CurrentDeclarationState = MkDeclarationState
       locals :: HashMap LocalCoreName (MIR.Variable, Representation)
     , varCount :: Int
     }
+
+getLocal :: (HasCallStack, Compile es) => LocalCoreName -> Eff es (MIR.Variable, Representation)
+getLocal localName = do
+    MkDeclarationState{locals} <- get
+    case HashMap.lookup localName locals of
+        Just (var, representation) -> pure (var, representation)
+        Nothing -> panic $ "Core local not found during MIR generation: " <> pretty localName
 
 initialDeclarationState :: CurrentDeclarationState
 initialDeclarationState =
@@ -65,14 +72,20 @@ compileFunction ::
     Core.Expr ->
     Eff es (Seq MIR.Declaration)
 compileFunction functionName parameters returnRepresentation statements returnExpr = do
-    (initDescriptor, finalDeclarationState) <- runState initialDeclarationState $ do
-        initialBlock <- newBlock (MkPhys mempty)
+    ((initDescriptor, mirParameters), finalDeclarationState) <- runState initialDeclarationState $ do
+        mirParameters <- for parameters \(parameterName, representation) -> do
+            var <- newVar
+            registerVariable parameterName var representation
+            pure (var, representation)
+
+        initialBlock <- newBlock (MkPhis mempty)
         compileBody initialBlock statements returnExpr
-        pure (initialBlock.descriptor)
+        pure (initialBlock.descriptor, mirParameters)
     let declaration =
             MIR.DefineFunction
                 { name = functionName
-                , parameters
+                , parameters = mirParameters
+                , returnRepresentation
                 , blocks = finalDeclarationState.blocks
                 , init = initDescriptor
                 }
@@ -104,11 +117,12 @@ compileLet :: (Compile es) => BlockBuilder -> MIR.Variable -> Core.Expr -> Eff e
 compileLet block local = \case
     Core.Value value -> undefined
     Core.Application function arguments -> do
+        -- TODO: If 'function' refers to a top-level function, we can immediately emit a direct call here rather
+        -- than relying on (future) optimizations to remove the unnecessary closure
+        (block, closure) <- compileValue block (Core.Var function)
         (block, arguments) <- compileValues block arguments
-        continuation <- newBlock (MkPhys mempty)
-        -- TODO: distinguish between direct and indirect calls
-        finish block (MIR.CallDirect local function arguments continuation.descriptor)
-        pure continuation
+        block <- addInstruction block (MIR.CallClosure{var = local, closure, arguments})
+        pure block
     Core.JumpJoin joinPoint _arguments -> do
         panic $ "JumpJoin for join point " <> pretty joinPoint <> " in non-tail position"
     Core.Lambda parameters statements returnExpr -> do
@@ -125,18 +139,49 @@ compileReturn block = \case
         (block, value) <- compileValue block value
         finish block (MIR.Return value)
     Core.Application function arguments -> do
+        -- TODO: We can also directly emit a direct tail call here if 'function' refers to a global function
+        (block, closure) <- compileValue block (Core.Var function)
         (block, arguments) <- compileValues block arguments
-        -- TODO: this may not actually be a direct call?
-        finish block (MIR.TailCallDirect function arguments)
+        finish block (TailCallClosure{closure, arguments})
     Core.JumpJoin joinPoint arguments -> do
         (block, arguments) <- compileValues block arguments
 
         joinPointBlock <- joinPointBlockFor joinPoint
-        finish block (MIR.Jump joinPointBlock arguments)
+        undefined
+    -- finish block (MIR.Jump joinPointBlock arguments)
     Core.TupleAccess tupleValue index -> do
         undefined
-    Core.ConstructorCase scrutinee cases ->
-        undefined
+    Core.ConstructorCase scrutinee cases -> do
+        (block, scrutinee) <- compileValue block scrutinee
+        tag <- newVar
+        block <- addInstruction block (MIR.LoadSumTag tag scrutinee undefined)
+
+        targetBlocks <- for (HashMap.toList cases) \(constructorName, (parameters, bodyStatements, bodyExpr)) -> do
+            index <-
+                GraphPersistence.getDataConstructorIndex constructorName >>= \case
+                    OnlyConstructor -> panic $ "Constructor case on type with only data constructor " <> Vega.prettyName Vega.VarKind constructorName
+                    MultiConstructor index -> pure index
+            targetBlockBuilder <- newBlock (MkPhis mempty)
+            let targetBlockDescriptor = targetBlockBuilder.descriptor
+
+            targetBlockBuilder <- execState block $ forIndexed_ parameters \name productIndex -> do
+                targetBlockBuilder <- get
+                parameterVariable <- newVar
+                registerVariable name parameterVariable undefined
+                targetBlockBuilder <-
+                    addInstruction
+                        targetBlockBuilder
+                        ( MIR.AccessField
+                            parameterVariable
+                            [MIR.SumConstructorPath index, MIR.ProductFieldPath productIndex]
+                            scrutinee
+                        )
+                put targetBlockBuilder
+
+            compileBody targetBlockBuilder bodyStatements bodyExpr
+
+            pure (index, targetBlockDescriptor)
+        finish block (MIR.SwitchInt{var = tag, cases = fromList targetBlocks})
     Core.Lambda parameters statements returnExpr -> do
         lambdaName <- undefined
         let returnRepresentation = undefined returnExpr
@@ -151,8 +196,15 @@ compileValues block values = mapAccumLM compileValue block values
 compileValue :: (Compile es) => BlockBuilder -> Core.Value -> Eff es (BlockBuilder, MIR.Variable)
 compileValue block = \case
     Core.Var var -> case var of
-        Core.Local name -> undefined
-        Core.Global name -> pure (block, undefined)
+        Core.Local name -> do
+            (var, _) <- getLocal name
+            pure (block, var)
+        Core.Global name -> do
+            -- TODO: detect if name is a function and return MIR.LoadGlobalClosure in that case instead
+            var <- newVar
+            block <- addInstruction block (MIR.LoadGlobal var name)
+
+            pure (block, var)
     Core.Literal literal -> do
         variable <- newVar
         case literal of

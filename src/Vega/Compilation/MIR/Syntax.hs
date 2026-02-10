@@ -6,6 +6,7 @@ import GHC.Generics (Generically (..))
 import Relude
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation)
 import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, localIdentText, lparen, number, pretty, rparen, (<+>))
+import Vega.Syntax qualified as Vega
 
 data Program = MkProgram
     { declarations :: Seq Declaration
@@ -14,7 +15,8 @@ data Program = MkProgram
 
 data Declaration = DefineFunction
     { name :: CoreName
-    , parameters :: Seq (LocalCoreName, Representation)
+    , parameters :: Seq (Variable, Representation)
+    , returnRepresentation :: Representation
     , init :: BlockDescriptor
     , blocks :: HashMap BlockDescriptor Block
     }
@@ -24,7 +26,7 @@ newtype BlockDescriptor = MkBlockDescriptor Unique
     deriving stock (Generic)
     deriving newtype (Eq, Hashable)
 
-newtype Phis = MkPhys (HashMap Variable (Seq Variable))
+newtype Phis = MkPhis (HashMap Variable (Seq Variable))
 
 data Block = MkBlock
     { phis :: Phis
@@ -36,12 +38,15 @@ data Block = MkBlock
 newtype Variable = MkVariable Int
     deriving newtype (Eq, Hashable)
 
-data Path = SumField Int
+data PathSegment = SumConstructorPath Int
+    | ProductFieldPath Int
     deriving (Generic)
+
+type Path = Seq PathSegment
 
 data Instruction
     = Add Variable Variable Variable
-    | ReadField Variable Representation Path
+    | AccessField Variable Path Variable -- TODO: representation?
     | Box
         { var :: Variable
         , target :: Variable
@@ -51,17 +56,20 @@ data Instruction
     | ProductConstructor {var :: Variable, values :: Seq Variable, representation :: Representation}
     | SumConstructor {var :: Variable, tag :: Int, values :: Seq Variable, representation :: Representation}
     | AllocClosure {var :: Variable, closedValues :: Seq Variable, representation :: Representation}
-    | LoadIntLiteral Variable Int
-    | Global Variable CoreName
+    | LoadGlobalClosure {var :: Variable, functionName :: Vega.GlobalName}
+    | LoadGlobal {var :: Variable, globalName :: Vega.GlobalName}
+    | LoadIntLiteral {var :: Variable, literal :: Int}
+    | LoadSumTag {var :: Variable, sum :: Variable, sumRepresentation :: Representation}
+    | CallDirect {var :: Variable, functionName :: Vega.GlobalName, arguments :: (Seq Variable)}
+    | CallClosure {var :: Variable, closure :: Variable, arguments :: (Seq Variable)}
     deriving (Generic)
 
 data Terminator
     = Return Variable
-    | Jump BlockDescriptor (Seq Variable)
-    | CallDirect Variable CoreName (Seq Variable) BlockDescriptor
-    | CallIndirect Variable Variable (Seq Variable) BlockDescriptor
-    | TailCallDirect CoreName (Seq Variable)
-    | TailCallIndirect Variable (Seq Variable)
+    | Jump BlockDescriptor
+    | SwitchInt {var :: Variable, cases :: Seq (Int, BlockDescriptor)}
+    | TailCallDirect {functionName :: Vega.GlobalName, arguments :: Seq Variable}
+    | TailCallClosure {closure :: Variable, arguments :: Seq Variable}
     deriving (Generic)
 
 instance Pretty Declaration where
@@ -69,8 +77,8 @@ instance Pretty Declaration where
         DefineFunction{name, parameters, init, blocks} -> do
             pretty name
                 <> typedArguments parameters
-                <> keyword "="
-                <> lparen "{"
+                    <+> keyword "="
+                    <+> lparen "{"
                 <> "\n  "
                 <> align
                     ( keyword "init:"
@@ -84,7 +92,7 @@ instance Pretty Declaration where
                 <> rparen "}"
 
 prettyBlock :: BlockDescriptor -> Block -> Doc Ann
-prettyBlock descriptor MkBlock{phis = MkPhys phiMap, instructions, terminator} =
+prettyBlock descriptor MkBlock{phis = MkPhis phiMap, instructions, terminator} =
     align $
         pretty descriptor
             <> keyword ":"
@@ -100,11 +108,54 @@ prettyBlock descriptor MkBlock{phis = MkPhys phiMap, instructions, terminator} =
                     <> pretty terminator
                 )
 
-deriving via Generically Path instance Pretty Path
+deriving via Generically PathSegment instance Pretty PathSegment
 
-deriving via Generically Instruction instance Pretty Instruction
+prettyPath :: Path -> Doc Ann
+prettyPath path = lparen "[" <> intercalateDoc (keyword "->") (fmap pretty path) <> rparen "]"
 
-deriving via Generically Terminator instance Pretty Terminator
+instance Pretty Instruction where
+    pretty = \case
+        Add var arg1 arg2 -> keywordInstruction "add" var [pretty arg1, pretty arg2]
+        AccessField var path value -> keywordInstruction "accessField" var [prettyPath path, pretty value]
+        Box
+            { var
+            , target
+            , targetRepresentation
+            } -> keywordInstruction "box" var [pretty target, pretty targetRepresentation]
+        Unbox{var, boxedTarget, representation} -> keywordInstruction "unbox" var [pretty boxedTarget, pretty representation]
+        ProductConstructor{var, values, representation} ->
+            pretty var <+> keyword "=" <+> keyword "product" <+> arguments values <+> pretty representation
+        SumConstructor{var, tag, values, representation} ->
+            pretty var <+> keyword "=" <+> keyword "sum" <+> lparen "[" <> number tag <> rparen "]" <> arguments values <+> pretty representation
+        AllocClosure{var, closedValues, representation} -> keywordInstruction "allocClosure" var (fmap pretty closedValues <> [pretty representation])
+        LoadGlobalClosure{var, functionName} ->
+            keywordInstruction "loadGlobalClosure" var [Vega.prettyGlobal Vega.VarKind functionName]
+        LoadGlobal var globalName ->
+            keywordInstruction "loadGlobal" var [Vega.prettyGlobal Vega.VarKind globalName]
+        LoadIntLiteral var int ->
+            keywordInstruction "int" var [number int]
+        LoadSumTag{var, sum, sumRepresentation} -> keywordInstruction "loadSumTag" var [pretty sum, pretty sumRepresentation]
+        CallDirect{var, functionName, arguments = callArguments} -> keywordInstruction "callDirect" var [Vega.prettyGlobal Vega.VarKind functionName] <> arguments callArguments
+        CallClosure{var, closure, arguments = callArguments} -> keywordInstruction "callClosure" var [pretty closure] <> arguments callArguments
+
+keywordInstruction :: Text -> Variable -> Seq (Doc Ann) -> Doc Ann
+keywordInstruction name var arguments =
+    pretty var <+> keyword "=" <+> keyword name <+> intercalateDoc " " arguments
+
+instance Pretty Terminator where
+    pretty = \case
+        Return value -> keyword "return" <+> pretty value
+        Jump block -> keyword "jump" <+> pretty block
+        SwitchInt value targets ->
+            keyword "switchInt" <+> pretty value <+> lparen "["
+                <> align "\n  "
+                <> intercalateDoc "\n" (fmap (\(value, target) -> number value <+> keyword "->" <+> pretty target) targets)
+                <> "\n"
+                <> rparen "]"
+        TailCallDirect functionName callArguments ->
+            keyword "tailcallDirect" <+> Vega.prettyGlobal Vega.VarKind functionName <> arguments callArguments
+        TailCallClosure closure callArguments ->
+            keyword "tailcallClosure" <+> pretty closure <> arguments callArguments
 
 instance Pretty BlockDescriptor where
     pretty (MkBlockDescriptor unique) = number (hashUnique unique)
