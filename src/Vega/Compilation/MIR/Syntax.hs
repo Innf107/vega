@@ -1,29 +1,11 @@
-module Vega.Compilation.LIR.Syntax (
-    Program (..),
-    Variable (..),
-    Declaration (..),
-    Block (..),
-    BlockDescriptor (..),
-    Instruction (..),
-    Terminator (..),
-) where
-
-import Relude
-
--- TODO: move this somewhere else
+module Vega.Compilation.MIR.Syntax where
 
 import Data.HashMap.Strict qualified as HashMap
-import Data.Sequence qualified as Seq
-import Data.Unique (hashUnique)
+import Data.Unique (Unique, hashUnique)
 import GHC.Generics (Generically (..))
-import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName)
-import Vega.Compilation.LIR.Layout (Layout)
-import Vega.Effect.Unique.Static.Local (Unique)
-import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, lparen, number, pretty, rparen, vsep, (<+>), localIdentText)
-
-newtype Variable = MkVariable Int
-
-data FunctionName
+import Relude
+import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation)
+import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, localIdentText, lparen, number, pretty, rparen, (<+>))
 
 data Program = MkProgram
     { declarations :: Seq Declaration
@@ -32,8 +14,7 @@ data Program = MkProgram
 
 data Declaration = DefineFunction
     { name :: CoreName
-    , parameters :: Seq LocalCoreName
-    , layouts :: Seq Layout
+    , parameters :: Seq (LocalCoreName, Representation)
     , init :: BlockDescriptor
     , blocks :: HashMap BlockDescriptor Block
     }
@@ -43,26 +24,33 @@ newtype BlockDescriptor = MkBlockDescriptor Unique
     deriving stock (Generic)
     deriving newtype (Eq, Hashable)
 
+newtype Phis = MkPhys (HashMap Variable (Seq Variable))
+
 data Block = MkBlock
-    { arguments :: Seq Variable
+    { phis :: Phis
+    , arguments :: Seq Variable
     , instructions :: Seq Instruction
     , terminator :: Terminator
     }
     deriving (Generic)
 
+newtype Variable = MkVariable Int
+
+data Path = SumField Int
+    deriving (Generic)
+
 data Instruction
     = Add Variable Variable Variable
-    | GetElementPointer
-        { result :: Variable
-        , pointer :: Variable
-        , resultLayout :: Layout
-        , arrayOffset :: Int
-        , internalOffset :: Int
+    | ReadField Variable Representation Path
+    | Box
+        { var :: Variable
+        , target :: Variable
+        , targetRepresentation :: Representation
         }
-    | AllocA Variable Layout
-    | Memcpy Variable Variable Layout
-    | Allocate Variable Layout
-    | AllocateClosure Variable CoreName Layout
+    | Unbox {var :: Variable, boxedTarget :: Variable, representation :: Representation}
+    | RecordConstructor {var :: Variable, values :: Seq Variable, representation :: Representation}
+    | SumConstructor { var :: Variable, tag :: Int, values :: Seq Variable, representation :: Representation }
+    | AllocClosure { var :: Variable, closedValues :: Seq Variable, representation :: Representation }
     | IntConstant Variable Int
     | Global Variable CoreName
     deriving (Generic)
@@ -78,18 +66,15 @@ data Terminator
 
 instance Pretty Declaration where
     pretty = \case
-        DefineFunction{name, parameters, layouts, init, blocks} -> do
+        DefineFunction{name, parameters, init, blocks} -> do
             pretty name
-                <> arguments parameters
+                <> typedArguments parameters
                 <> keyword "="
                 <> lparen "{"
                 <> "\n  "
                 <> align
-                    ( keyword "layouts:"
-                        <+> align (vsep (Seq.mapWithIndex (\index layout -> number index <+> keyword ":" <+> pretty layout) layouts))
-                        <> "\n"
-                        <> keyword "init:"
-                            <+> pretty init
+                    ( keyword "init:"
+                        <+> pretty init
                         <> "\n"
                         <> keyword "blocks:"
                         <> "\n  "
@@ -110,6 +95,8 @@ prettyBlock descriptor MkBlock{arguments = blockArguments, instructions, termina
                     <> pretty terminator
                 )
 
+deriving via Generically Path instance Pretty Path
+
 deriving via Generically Instruction instance Pretty Instruction
 
 deriving via Generically Terminator instance Pretty Terminator
@@ -119,8 +106,9 @@ instance Pretty BlockDescriptor where
 
 instance Pretty Variable where
     pretty (MkVariable name) = localIdentText ("x" <> show name)
-instance Pretty FunctionName where
-    pretty = \case {}
 
 arguments :: (Pretty a, Foldable f) => f a -> Doc Ann
 arguments elements = lparen "(" <> intercalateDoc (keyword ", ") (map pretty (toList elements)) <> rparen ")"
+
+typedArguments :: (Pretty a, Pretty b, Foldable f) => f (a, b) -> Doc Ann
+typedArguments elements = lparen "(" <> intercalateDoc (keyword ", ") (map (\(x, y) -> pretty x <+> keyword ":" <+> pretty y) (toList elements)) <> rparen ")"

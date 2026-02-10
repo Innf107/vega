@@ -1,38 +1,36 @@
-module Vega.Compilation.LIR.CoreToLIR (compileDeclaration) where
+module Vega.Compilation.MIR.CoreToMIR (compileDeclaration) where
 
 import Effectful
 import Relude hiding (State, get, modify, put, runState)
 
 import Effectful.State.Static.Local (State, get, modify, put, runState)
 
+import Data.Foldable (foldrM)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import Data.Traversable (for)
 import Data.Vector.Generic qualified as Vector
-import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName)
+import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
-import Vega.Compilation.LIR.Layout (Layout, generateLayout)
-import Vega.Compilation.LIR.Layout qualified as Layout
-import Vega.Compilation.LIR.Syntax qualified as LIR
+import Vega.Compilation.MIR.Syntax qualified as MIR
+import Vega.Effect.GraphPersistence
+import Vega.Effect.GraphPersistence qualified as GraphPersistence
 import Vega.Effect.Trace (Trace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique)
 import Vega.Panic (panic)
 import Vega.Pretty (pretty)
-import Vega.Util (mapAccumLM, forIndexed_, forFoldLM, indexed)
-import Data.Foldable (foldrM)
-import qualified Vega.Syntax as Vega
-import Vega.Effect.GraphPersistence
-import qualified Vega.Effect.GraphPersistence as GraphPersistence
+import Vega.Syntax qualified as Vega
+import Vega.Util (forFoldLM, forIndexed_, indexed, mapAccumLM)
 
 type Compile es = (GraphPersistence :> es, Trace :> es, NewUnique :> es, State CurrentDeclarationState :> es)
 
 data CurrentDeclarationState = MkDeclarationState
-    { blocks :: HashMap LIR.BlockDescriptor LIR.Block
-    , joinPoints :: HashMap LocalCoreName LIR.BlockDescriptor
-    , additionalDeclarations :: Seq LIR.Declaration
+    { blocks :: HashMap MIR.BlockDescriptor MIR.Block
+    , joinPoints :: HashMap LocalCoreName MIR.BlockDescriptor
+    , additionalDeclarations :: Seq MIR.Declaration
     , -- TOOD: preserve the order or something?
-      locals :: HashMap LocalCoreName LIR.Variable
-    , layouts :: Seq Layout
+      locals :: HashMap LocalCoreName (MIR.Variable, Representation)
+    , varCount :: Int
     }
 
 initialDeclarationState :: CurrentDeclarationState
@@ -42,17 +40,17 @@ initialDeclarationState =
         , joinPoints = mempty
         , additionalDeclarations = []
         , locals = mempty
-        , layouts = mempty
+        , varCount = 0
         }
 
-registerVariable :: (Compile es) => LocalCoreName -> LIR.Variable -> Eff es ()
-registerVariable local variable = do
-    modify (\state -> state{locals = HashMap.insert local variable state.locals})
+registerVariable :: (Compile es) => LocalCoreName -> MIR.Variable -> Representation -> Eff es ()
+registerVariable local variable representation = do
+    modify (\state -> state{locals = HashMap.insert local (variable, representation) state.locals})
 
-registerAdditionalDeclarations :: (Compile es) => Seq LIR.Declaration -> Eff es ()
+registerAdditionalDeclarations :: (Compile es) => Seq MIR.Declaration -> Eff es ()
 registerAdditionalDeclarations declarations = modify (\state -> state{additionalDeclarations = state.additionalDeclarations <> declarations})
 
-compileDeclaration :: (GraphPersistence :> es, Trace :> es, NewUnique :> es) => Core.Declaration -> Eff es (Seq LIR.Declaration)
+compileDeclaration :: (GraphPersistence :> es, Trace :> es, NewUnique :> es) => Core.Declaration -> Eff es (Seq MIR.Declaration)
 compileDeclaration = \case
     Core.DefineFunction{name, representationParameters = _, parameters, returnRepresentation, statements, result} -> do
         compileFunction (Core.Global name) parameters returnRepresentation statements result
@@ -64,17 +62,16 @@ compileFunction ::
     Core.Representation ->
     Seq Core.Statement ->
     Core.Expr ->
-    Eff es (Seq LIR.Declaration)
+    Eff es (Seq MIR.Declaration)
 compileFunction functionName parameters returnRepresentation statements returnExpr = do
     (initDescriptor, finalDeclarationState) <- runState initialDeclarationState $ do
         initialBlock <- newBlock []
         compileBody initialBlock statements returnExpr
         pure (initialBlock.descriptor)
     let declaration =
-            LIR.DefineFunction
+            MIR.DefineFunction
                 { name = functionName
-                , parameters = fmap fst parameters
-                , layouts = finalDeclarationState.layouts
+                , parameters
                 , blocks = finalDeclarationState.blocks
                 , init = initDescriptor
                 }
@@ -84,14 +81,14 @@ compileBody :: (Compile es) => BlockBuilder -> Seq Core.Statement -> Core.Expr -
 compileBody block statements returnExpr = case statements of
     Empty -> compileReturn block returnExpr
     Core.Let name representation expr :<| rest -> do
-        var <- newVar (generateLayout representation)
-        registerVariable name var
+        var <- newVar
+        registerVariable name var representation
         block <- compileLet block var expr
         compileBody block rest returnExpr
     Core.LetJoin name parameters statements returnExpr :<| rest -> do
-        parameterVariables <- for parameters \(parameter, _representation) -> do
-            variable <- newVar undefined
-            registerVariable parameter variable
+        parameterVariables <- for parameters \(parameter, representation) -> do
+            variable <- newVar
+            registerVariable parameter variable representation
             pure variable
         joinPointBlock <- newBlock parameterVariables
         compileBody joinPointBlock statements returnExpr
@@ -99,14 +96,14 @@ compileBody block statements returnExpr = case statements of
         compileBody block rest returnExpr
     Core.LetFunction{} :<| rest -> undefined
 
-compileLet :: (Compile es) => BlockBuilder -> LIR.Variable -> Core.Expr -> Eff es BlockBuilder
+compileLet :: (Compile es) => BlockBuilder -> MIR.Variable -> Core.Expr -> Eff es BlockBuilder
 compileLet block local = \case
     Core.Value value -> undefined
     Core.Application function arguments -> do
         (block, arguments) <- compileValues block arguments
         continuation <- newBlock []
         -- TODO: distinguish between direct and indirect calls
-        finish block (LIR.CallDirect local function arguments continuation.descriptor)
+        finish block (MIR.CallDirect local function arguments continuation.descriptor)
         pure continuation
     Core.JumpJoin joinPoint _arguments -> do
         panic $ "JumpJoin for join point " <> pretty joinPoint <> " in non-tail position"
@@ -122,16 +119,16 @@ compileReturn :: (Compile es) => BlockBuilder -> Core.Expr -> Eff es ()
 compileReturn block = \case
     Core.Value value -> do
         (block, value) <- compileValue block value
-        finish block (LIR.Return value)
+        finish block (MIR.Return value)
     Core.Application function arguments -> do
         (block, arguments) <- compileValues block arguments
         -- TODO: this may not actually be a direct call?
-        finish block (LIR.TailCallDirect function arguments)
+        finish block (MIR.TailCallDirect function arguments)
     Core.JumpJoin joinPoint arguments -> do
         (block, arguments) <- compileValues block arguments
 
         joinPointBlock <- joinPointBlockFor joinPoint
-        finish block (LIR.Jump joinPointBlock arguments)
+        finish block (MIR.Jump joinPointBlock arguments)
     Core.TupleAccess tupleValue index -> do
         undefined
     Core.ConstructorCase scrutinee cases ->
@@ -142,37 +139,24 @@ compileReturn block = \case
         lambdaDeclarations <- compileFunction lambdaName parameters returnRepresentation statements returnExpr
         registerAdditionalDeclarations lambdaDeclarations
         let value = undefined
-        finish block (LIR.Return value)
+        finish block (MIR.Return value)
 
-compileValues :: (Compile es) => BlockBuilder -> Seq Core.Value -> Eff es (BlockBuilder, Seq LIR.Variable)
+compileValues :: (Compile es) => BlockBuilder -> Seq Core.Value -> Eff es (BlockBuilder, Seq MIR.Variable)
 compileValues block values = mapAccumLM compileValue block values
 
-compileValue :: (Compile es) => BlockBuilder -> Core.Value -> Eff es (BlockBuilder, LIR.Variable)
+compileValue :: (Compile es) => BlockBuilder -> Core.Value -> Eff es (BlockBuilder, MIR.Variable)
 compileValue block = \case
     Core.Var var -> case var of
         Core.Local name -> undefined
         Core.Global name -> pure (block, undefined)
     Core.Literal literal -> do
-        layout <- undefined literal
-        variable <- newVar layout
+        variable <- newVar
         undefined
     Core.DataConstructorApplication constructor arguments representation -> do
         (block, arguments) <- compileValues block arguments
+        undefined
 
-        -- TODO: add the tag for sum constructors
-
-        let layout = generateLayout representation
-
-        result <- newVar layout
-        block <- addInstruction block $ LIR.AllocA result layout
-        
-        block <- forFoldLM (indexed arguments) block \block (index, argument) -> do
-            (block, target) <- pointerToPath undefined undefined undefined undefined
-            addInstruction block $ LIR.Memcpy target argument undefined
-            
-        pure (block, result)
-
-compileLambda :: (Compile es) => BlockBuilder -> LIR.Variable -> Seq (LocalCoreName, Core.Representation) -> Core.Representation -> Seq Core.Statement -> Core.Expr -> Eff es BlockBuilder
+compileLambda :: (Compile es) => BlockBuilder -> MIR.Variable -> Seq (LocalCoreName, Core.Representation) -> Core.Representation -> Seq Core.Statement -> Core.Expr -> Eff es BlockBuilder
 compileLambda block local parameters returnRepresentation statements returnExpr = do
     lambdaName <- undefined
 
@@ -180,61 +164,44 @@ compileLambda block local parameters returnRepresentation statements returnExpr 
     registerAdditionalDeclarations lambdaDeclarations
     -- TODO: do this properly with the right layout
     let locals = undefined
-    addInstruction block (LIR.AllocateClosure local lambdaName locals)
+    -- addInstruction block (MIR.AllocateClosure local lambdaName locals)
     undefined
 
-addJoinPoint :: (Compile es) => LocalCoreName -> LIR.BlockDescriptor -> Eff es ()
+addJoinPoint :: (Compile es) => LocalCoreName -> MIR.BlockDescriptor -> Eff es ()
 addJoinPoint name blockDescriptor = do
     modify (\state -> state{joinPoints = HashMap.insert name blockDescriptor state.joinPoints})
 
-joinPointBlockFor :: (Compile es) => LocalCoreName -> Eff es LIR.BlockDescriptor
+joinPointBlockFor :: (Compile es) => LocalCoreName -> Eff es MIR.BlockDescriptor
 joinPointBlockFor name = do
     MkDeclarationState{joinPoints} <- get
     case HashMap.lookup name joinPoints of
         Nothing -> panic $ "JumpJoin to join point without a block descriptor: " <> pretty name
         Just descriptor -> pure descriptor
 
-pointerToPath :: (HasCallStack, Compile es) => LIR.Variable -> Layout -> Layout.Path -> BlockBuilder -> Eff es (BlockBuilder, LIR.Variable)
-pointerToPath pointer layout path block = go block 0 path
-  where
-    go block offset = \case
-        Empty -> do
-            result <- newVar layout
-            block <- addInstruction block (LIR.GetElementPointer{result, pointer, arrayOffset = 0, internalOffset = 0, resultLayout = layout})
-            pure (block, result)
-        (Layout.ProductField index :<| rest) -> case layout.contents of
-            Layout.ProductLayout{offsets} -> do
-                go block (offset + (offsets Vector.! index)) rest
-            _ -> panic $ "product field accessed on non-product layout"
-        (Layout.SumConstructor index :<| rest) -> case layout.contents of
-            Layout.SumLayout{constructors} -> do
-                undefined
-            _ -> panic $ "sum constructor accessed on non-sum layout"
-
-newVar :: (Compile es) => Layout -> Eff es LIR.Variable
-newVar layout = do
+newVar :: (Compile es) => Eff es MIR.Variable
+newVar = do
     state <- get
-    let variable = LIR.MkVariable (length state.layouts)
-    put (state{layouts = state.layouts <> [layout]})
+    let variable = MIR.MkVariable state.varCount
+    put (state {varCount = state.varCount + 1})
     pure variable
 
 data BlockBuilder = MkBlockBuilder
-    { descriptor :: LIR.BlockDescriptor
-    , arguments :: Seq LIR.Variable
-    , instructions :: Seq LIR.Instruction
+    { descriptor :: MIR.BlockDescriptor
+    , arguments :: Seq MIR.Variable
+    , instructions :: Seq MIR.Instruction
     }
 
-newBlock :: (Compile es) => Seq LIR.Variable -> Eff es BlockBuilder
+newBlock :: (Compile es) => Seq MIR.Variable -> Eff es BlockBuilder
 newBlock arguments = do
-    descriptor <- LIR.MkBlockDescriptor <$> newUnique
+    descriptor <- MIR.MkBlockDescriptor <$> newUnique
     pure MkBlockBuilder{descriptor, arguments, instructions = []}
 
 -- The f only exists to allow shadowing the builder.
 -- If you need this in a pure context, just instantiate it with Identity
-addInstruction :: (Applicative f) => BlockBuilder -> LIR.Instruction -> f BlockBuilder
+addInstruction :: (Applicative f) => BlockBuilder -> MIR.Instruction -> f BlockBuilder
 addInstruction builder newInstruction = pure $ builder{instructions = builder.instructions <> [newInstruction]}
 
-finish :: (Compile es) => BlockBuilder -> LIR.Terminator -> Eff es ()
+finish :: (Compile es) => BlockBuilder -> MIR.Terminator -> Eff es ()
 finish (MkBlockBuilder{descriptor, arguments, instructions}) terminator = do
-    let finishedBlock = LIR.MkBlock{arguments, instructions, terminator}
+    let finishedBlock = MIR.MkBlock{arguments, instructions, terminator, phis = undefined}
     modify (\state -> state{blocks = HashMap.insert descriptor finishedBlock state.blocks})

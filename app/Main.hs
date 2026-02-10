@@ -19,7 +19,7 @@ import GHC.Read (readsPrec)
 import System.IO (hIsTerminalDevice)
 import Vega.BuildConfig (BuildConfigPresence (..), findBuildConfig)
 import Vega.Compilation.Core.Syntax qualified as Core
-import Vega.Compilation.LIR.Syntax qualified as LIR
+import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Driver (CompilationResult (..))
 import Vega.Effect.DebugEmit
 import Vega.Effect.GraphPersistence (GraphPersistence)
@@ -58,7 +58,7 @@ instance Read DebugEmitOption where
         _ -> []
 data DebugEmitConfig = MkDebugEmitConfig
     { debugCore :: DebugEmitOption
-    , debugLIR :: DebugEmitOption
+    , debugMIR :: DebugEmitOption
     }
 
 buildOptions :: Parser Options
@@ -90,14 +90,14 @@ buildOptions = do
                 <> value None
                 <> help ("Core output for debugging. Can be one of: file, stderr, none")
             )
-    debugLIR <-
+    debugMIR <-
         option
             auto
-            ( long "debug-lir"
+            ( long "debug-mir"
                 <> value None
-                <> help ("LIR output for debugging. Can be one of: file, stderr, none")
+                <> help ("MIR output for debugging. Can be one of: file, stderr, none")
             )
-    pure Build{persistence, includeUnique, debugEmitConfig = MkDebugEmitConfig{debugCore, debugLIR}}
+    pure Build{persistence, includeUnique, debugEmitConfig = MkDebugEmitConfig{debugCore, debugMIR}}
 
 runCoreEmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Seq Core.Declaration) : es) a -> Eff es a
 runCoreEmit config cont = case config.debugCore of
@@ -108,13 +108,13 @@ runCoreEmit config cont = case config.debugCore of
         emitAllToFile render "core.vegacore" cont
     ToStderr -> emitToStderr (\declarations -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
 
-runLIREmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Seq LIR.Declaration) : es) a -> Eff es a
-runLIREmit config cont = case config.debugCore of
+runMIREmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Seq MIR.Declaration) : es) a -> Eff es a
+runMIREmit config cont = case config.debugCore of
     None -> ignoreEmit cont
     ToFile -> do
         let render declarations = encodeUtf8 do
                 prettyPlain (intercalateDoc "\n\n" (fmap pretty declarations))
-        emitAllToFile render "lir.vegalir" cont
+        emitAllToFile render "mir.vegamir" cont
     ToStderr -> emitToStderr (\declarations -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
 
 execOptions :: Parser Options
@@ -138,7 +138,7 @@ run ::
     PersistenceBackend ->
     Eff
         '[ DebugEmit (Seq Core.Declaration)
-         , DebugEmit (Seq LIR.Declaration)
+         , DebugEmit (Seq MIR.Declaration)
          , Concurrent
          , Process
          , GraphPersistence
@@ -152,7 +152,7 @@ run debugConfig persistence action = case persistence of
     InMemory ->
         action
             & runCoreEmit debugConfig
-            & runLIREmit debugConfig
+            & runMIREmit debugConfig
             & runConcurrent
             & runProcess
             & runInMemory
@@ -202,5 +202,5 @@ main = do
                                         PlainError plainError -> pure $ pretty plainError
                                     eprint doc
                             exitFailure
-        Exec{file, mainFunction} -> run MkDebugEmitConfig{debugCore = None, debugLIR = None} InMemory do
+        Exec{file, mainFunction} -> run MkDebugEmitConfig{debugCore = None, debugMIR = None} InMemory do
             Driver.execute file mainFunction

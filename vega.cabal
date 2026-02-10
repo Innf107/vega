@@ -1,6 +1,6 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.37.0.
+-- This file has been generated from package.yaml by hpack version 0.38.1.
 --
 -- see: https://github.com/sol/hpack
 
@@ -30,16 +30,13 @@ library
       Vega.Builtins
       Vega.Compilation.Core.Syntax
       Vega.Compilation.Core.VegaToCore
-      Vega.Compilation.CoreToLLVM
       Vega.Compilation.JavaScript.Assemble
       Vega.Compilation.JavaScript.Syntax
       Vega.Compilation.JavaScript.VegaToJavaScript
-      Vega.Compilation.LIR.CoreToLIR
-      Vega.Compilation.LIR.Layout
-      Vega.Compilation.LIR.Syntax
+      Vega.Compilation.MIR.CoreToMIR
+      Vega.Compilation.MIR.Syntax
+      Vega.Compilation.MIRToLLVM
       Vega.Compilation.PatternMatching
-      Vega.Compilation.X86_64.LIRToX86_64
-      Vega.Compilation.X86_64.Syntax
       Vega.Debruijn
       Vega.Debug
       Vega.Diff

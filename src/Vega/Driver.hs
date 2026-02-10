@@ -32,10 +32,8 @@ import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.Core.VegaToCore qualified as VegaToCore
 import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
 import Vega.Compilation.JavaScript.VegaToJavaScript qualified as JavaScript
-import Vega.Compilation.LIR.CoreToLIR qualified as LIR
-import Vega.Compilation.LIR.Syntax qualified as LIR
-import Vega.Compilation.X86_64.LIRToX86_64 qualified as LIRToX86_64
-import Vega.Compilation.X86_64.Syntax qualified as X86
+import Vega.Compilation.MIR.Syntax qualified as MIR
+import Vega.Compilation.MIRToLLVM qualified as MIRToLLVM
 import Vega.Diff (DiffChange (..))
 import Vega.Diff qualified as Diff
 import Vega.Effect.DebugEmit (DebugEmit, debugEmit)
@@ -54,6 +52,7 @@ import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
+import qualified Vega.Compilation.MIR.CoreToMIR as CoreToMIR
 
 data CompilationResult
     = CompilationSuccessful
@@ -71,7 +70,7 @@ type Driver es =
     , Process :> es
     , Trace :> es
     , DebugEmit (Seq Core.Declaration) :> es
-    , DebugEmit (Seq LIR.Declaration) :> es
+    , DebugEmit (Seq MIR.Declaration) :> es
     )
 
 findSourceFiles :: (Driver es) => Eff es (Seq FilePath)
@@ -244,15 +243,15 @@ compileBackend = do
             -- TODO: make this configurable and make the path absolute
             writeFileLBS (toString $ config.contents.name <> ".js") (encodeUtf8 (TextBuilder.toText jsCode))
         BuildConfig.NativeRelease -> runNewUnique do
-            let compileToLIR declarationName = do
+            let compileToMIR declarationName = do
                     core <-
                         GraphPersistence.getCompiledCore declarationName >>= \case
                             Ok core -> pure core
                             Missing{} -> panic $ "Missing Core for " <> pretty declarationName <> " in NativeRelease compilation to LIR"
                     fold <$> for core \declaration -> do
-                        lir <- LIR.compileDeclaration declaration
-                        debugEmit lir
-                        pure lir
+                        mir <- CoreToMIR.compileDeclaration declaration
+                        debugEmit mir
+                        pure mir
 
             let reachableStream = GraphPersistence.reachableFrom entryPointDeclaration
 
@@ -260,12 +259,13 @@ compileBackend = do
                 False -> pure ()
                 True -> Streaming.mapM_ (\declarationName -> trace Reachable (pretty declarationName)) reachableStream
 
-            lir <- mconcat <$> Streaming.toList_ (Streaming.mapM compileToLIR reachableStream)
+            mirDeclarations <- mconcat <$> Streaming.toList_ (Streaming.mapM compileToMIR reachableStream)
 
-            program <- LIRToX86_64.compile lir
-            writeBuildFile "out.s" (X86.renderASM entryPoint program)
-            asmPath <- buildFilePath "out.s"
-            callProcess "gcc" [asmPath]
+            let mirProgram = MIR.MkProgram {declarations = mirDeclarations}
+
+            llvmModule <- MIRToLLVM.compile mirProgram
+
+            undefined
         _ -> undefined
 
 execute :: FilePath -> Text -> Eff es ()
