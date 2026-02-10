@@ -15,7 +15,7 @@ import Effectful.Reader.Static (Reader, ask, runReader)
 import Effectful.State.Static.Local
 import GHC.List (List)
 import Vega.Builtins (builtinGlobals, defaultImportScope)
-import Vega.Effect.GraphPersistence (GraphPersistence, findMatchingNames, getDefiningDeclaration, getModuleImportScope)
+import Vega.Effect.GraphPersistence (DataConstructorIndex (..), GraphPersistence, findMatchingNames, getDefiningDeclaration, getModuleImportScope, setDataConstructorIndex)
 import Vega.Effect.Output.Static.Local qualified as Output
 import Vega.Effect.Output.Static.Local.HashSet qualified as Output.HashSet
 import Vega.Error (RenameError (..), RenameErrorSet (..))
@@ -216,8 +216,14 @@ renameDeclarationSyntax = \case
     DefineVariantType{name, typeParameters, constructors} -> do
         let env = emptyEnv
         (env, typeParameters) <- renameTypeVarBinders env typeParameters
-        constructors <- for constructors \(loc, dataConstructorName, parameters) -> do
+        constructors <- for (Util.indexed constructors) \(index, (loc, dataConstructorName, parameters)) -> do
             parameters <- traverse (renameTypeSyntax env) parameters
+            let constructorIndex =
+                    if length constructors == 1
+                        then OnlyConstructor
+                        else MultiConstructor index
+            setDataConstructorIndex (Global dataConstructorName) constructorIndex
+
             pure (loc, dataConstructorName, parameters)
         pure (DefineVariantType{name, typeParameters, constructors})
     DefineExternalFunction{name, type_} -> do

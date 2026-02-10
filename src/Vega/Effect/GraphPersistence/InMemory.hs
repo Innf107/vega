@@ -20,6 +20,7 @@ import Vega.Effect.GraphPersistence hiding (
     getCompiledCore,
     getCompiledJS,
     getCurrentErrors,
+    getDataConstructorIndex,
     getDefiningDeclaration,
     getDependencies,
     getDependents,
@@ -39,6 +40,7 @@ import Vega.Effect.GraphPersistence hiding (
     setCompiledCore,
     setCompiledJS,
     setConstructorRepresentation,
+    setDataConstructorIndex,
     setKnownDeclarations,
     setModuleImportScope,
     setParsed,
@@ -94,6 +96,8 @@ type ImportScopes = CuckooHashTable ModuleName ImportScope
 
 type DefiningDeclarations = CuckooHashTable GlobalName DeclarationName
 
+type DataConstructorIndices = CuckooHashTable Name DataConstructorIndex
+
 type InMemory es =
     ( IOE :> es
     , Trace :> es
@@ -104,6 +108,7 @@ type InMemory es =
     , Reader CachedTypes :> es
     , Reader CachedKinds :> es
     , Reader DefiningDeclarations :> es
+    , Reader DataConstructorIndices :> es
     )
 
 declarationData :: (HasCallStack, InMemory es) => DeclarationName -> Eff es DeclarationData
@@ -498,6 +503,17 @@ setDefiningDeclaration global declaration = do
     definingDeclarations <- ask @DefiningDeclarations
     liftIO $ HashTable.insert definingDeclarations global declaration
 
+getDataConstructorIndex :: (InMemory es) => Name -> Eff es DataConstructorIndex
+getDataConstructorIndex name = do
+    dataConstructorIndices <- ask @DataConstructorIndices
+    liftIO $ HashTable.lookup dataConstructorIndices name >>= \case
+        Nothing -> panic $ "Trying to access index of unrecorded data constructor: " <> prettyName DataConstructorKind name
+        Just index -> pure index
+
+setDataConstructorIndex :: (InMemory es) => Name -> DataConstructorIndex -> Eff es ()
+setDataConstructorIndex global index = do
+    dataConstructorIndices <- ask @DataConstructorIndices
+    liftIO $ HashTable.insert dataConstructorIndices global index
 
 runInMemory :: forall a es. (Trace :> es, IOE :> es) => Eff (GraphPersistence : es) a -> Eff es a
 runInMemory action = do
@@ -515,6 +531,8 @@ runInMemory action = do
 
     definingDeclarations :: DefiningDeclarations <- liftIO HashTable.new
 
+    dataConstructorIndices :: DataConstructorIndices <- liftIO HashTable.new
+
     action & interpret \_ ->
         runReader lastKnownDeclarationsPerFile
             . runReader declarations
@@ -523,6 +541,7 @@ runInMemory action = do
             . runReader cachedTypes
             . runReader cachedKinds
             . runReader definingDeclarations
+            . runReader dataConstructorIndices
             . \case
                 LastKnownDeclarations filePath -> lastKnownDeclarations filePath
                 SetKnownDeclarations filePath declarations -> setKnownDeclarations filePath declarations
@@ -562,3 +581,5 @@ runInMemory action = do
                 GetRemainingWork backend -> getRemainingWork backend
                 --
                 GetDefiningDeclaration name -> getDefiningDeclaration name
+                GetDataConstructorIndex name -> getDataConstructorIndex name
+                SetDataConstructorIndex name index -> setDataConstructorIndex name index

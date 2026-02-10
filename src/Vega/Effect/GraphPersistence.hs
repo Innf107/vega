@@ -43,6 +43,10 @@ data CachedType
     | CachedTypeSyntax (TypeSyntax Renamed)
     | CachedType Type
 
+data DataConstructorIndex
+    = OnlyConstructor
+    | MultiConstructor Int
+
 data GraphPersistence :: Effect where
     -- Module Data
     LastKnownDeclarations :: FilePath -> GraphPersistence m (Maybe (HashMap DeclarationName (Declaration Parsed)))
@@ -86,6 +90,8 @@ data GraphPersistence :: Effect where
     GetRemainingWork :: Backend -> GraphPersistence m (Seq WorkItem)
     --
     GetDefiningDeclaration :: GlobalName -> GraphPersistence m (Maybe DeclarationName)
+    GetDataConstructorIndex :: Name -> GraphPersistence m DataConstructorIndex
+    SetDataConstructorIndex :: Name -> DataConstructorIndex -> GraphPersistence m ()
 
 makeEffect ''GraphPersistence
 

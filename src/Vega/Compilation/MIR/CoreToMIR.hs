@@ -12,6 +12,7 @@ import Data.Traversable (for)
 import Data.Vector.Generic qualified as Vector
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
+import Vega.Compilation.MIR.Syntax (Phis (..))
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Effect.GraphPersistence
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
@@ -20,7 +21,7 @@ import Vega.Effect.Unique.Static.Local (NewUnique, newUnique)
 import Vega.Panic (panic)
 import Vega.Pretty (pretty)
 import Vega.Syntax qualified as Vega
-import Vega.Util (forFoldLM, forIndexed_, indexed, mapAccumLM)
+import Vega.Util (assert, forFoldLM, forIndexed_, indexed, mapAccumLM)
 
 type Compile es = (GraphPersistence :> es, Trace :> es, NewUnique :> es, State CurrentDeclarationState :> es)
 
@@ -65,7 +66,7 @@ compileFunction ::
     Eff es (Seq MIR.Declaration)
 compileFunction functionName parameters returnRepresentation statements returnExpr = do
     (initDescriptor, finalDeclarationState) <- runState initialDeclarationState $ do
-        initialBlock <- newBlock []
+        initialBlock <- newBlock (MkPhys mempty)
         compileBody initialBlock statements returnExpr
         pure (initialBlock.descriptor)
     let declaration =
@@ -86,14 +87,17 @@ compileBody block statements returnExpr = case statements of
         block <- compileLet block var expr
         compileBody block rest returnExpr
     Core.LetJoin name parameters statements returnExpr :<| rest -> do
-        parameterVariables <- for parameters \(parameter, representation) -> do
-            variable <- newVar
-            registerVariable parameter variable representation
-            pure variable
-        joinPointBlock <- newBlock parameterVariables
-        compileBody joinPointBlock statements returnExpr
-        addJoinPoint name joinPointBlock.descriptor
-        compileBody block rest returnExpr
+        undefined
+    {-
+    parameterVariables <- for parameters \(parameter, representation) -> do
+        variable <- newVar
+        registerVariable parameter variable representation
+        pure variable
+    joinPointBlock <- newBlock parameterVariables
+    compileBody joinPointBlock statements returnExpr
+    addJoinPoint name joinPointBlock.descriptor
+    compileBody block rest returnExpr
+    -}
     Core.LetFunction{} :<| rest -> undefined
 
 compileLet :: (Compile es) => BlockBuilder -> MIR.Variable -> Core.Expr -> Eff es BlockBuilder
@@ -101,7 +105,7 @@ compileLet block local = \case
     Core.Value value -> undefined
     Core.Application function arguments -> do
         (block, arguments) <- compileValues block arguments
-        continuation <- newBlock []
+        continuation <- newBlock (MkPhys mempty)
         -- TODO: distinguish between direct and indirect calls
         finish block (MIR.CallDirect local function arguments continuation.descriptor)
         pure continuation
@@ -151,10 +155,24 @@ compileValue block = \case
         Core.Global name -> pure (block, undefined)
     Core.Literal literal -> do
         variable <- newVar
-        undefined
+        case literal of
+            Core.IntLiteral value -> do
+                -- TODO: check the size properly etc.
+                block <- addInstruction block (MIR.LoadIntLiteral variable (fromIntegral value))
+                pure (block, variable)
+            _ -> undefined
     Core.DataConstructorApplication constructor arguments representation -> do
         (block, arguments) <- compileValues block arguments
-        undefined
+        variable <- newVar
+        builder <- case constructor of
+            Core.TupleConstructor size -> do
+                assert (size == length arguments)
+                addInstruction block (MIR.ProductConstructor{var = variable, values = arguments, representation = representation})
+            Core.UserDefinedConstructor constructorName -> do
+                GraphPersistence.getDataConstructorIndex constructorName >>= \case
+                    OnlyConstructor -> addInstruction block (MIR.ProductConstructor{var = variable, values = arguments, representation = representation})
+                    MultiConstructor tag -> addInstruction block (MIR.SumConstructor{var = variable, tag, values = arguments, representation})
+        pure (builder, variable)
 
 compileLambda :: (Compile es) => BlockBuilder -> MIR.Variable -> Seq (LocalCoreName, Core.Representation) -> Core.Representation -> Seq Core.Statement -> Core.Expr -> Eff es BlockBuilder
 compileLambda block local parameters returnRepresentation statements returnExpr = do
@@ -182,19 +200,19 @@ newVar :: (Compile es) => Eff es MIR.Variable
 newVar = do
     state <- get
     let variable = MIR.MkVariable state.varCount
-    put (state {varCount = state.varCount + 1})
+    put (state{varCount = state.varCount + 1})
     pure variable
 
 data BlockBuilder = MkBlockBuilder
     { descriptor :: MIR.BlockDescriptor
-    , arguments :: Seq MIR.Variable
     , instructions :: Seq MIR.Instruction
+    , phis :: MIR.Phis
     }
 
-newBlock :: (Compile es) => Seq MIR.Variable -> Eff es BlockBuilder
-newBlock arguments = do
+newBlock :: (Compile es) => MIR.Phis -> Eff es BlockBuilder
+newBlock phis = do
     descriptor <- MIR.MkBlockDescriptor <$> newUnique
-    pure MkBlockBuilder{descriptor, arguments, instructions = []}
+    pure MkBlockBuilder{descriptor, instructions = [], phis}
 
 -- The f only exists to allow shadowing the builder.
 -- If you need this in a pure context, just instantiate it with Identity
@@ -202,6 +220,6 @@ addInstruction :: (Applicative f) => BlockBuilder -> MIR.Instruction -> f BlockB
 addInstruction builder newInstruction = pure $ builder{instructions = builder.instructions <> [newInstruction]}
 
 finish :: (Compile es) => BlockBuilder -> MIR.Terminator -> Eff es ()
-finish (MkBlockBuilder{descriptor, arguments, instructions}) terminator = do
-    let finishedBlock = MIR.MkBlock{arguments, instructions, terminator, phis = undefined}
+finish (MkBlockBuilder{descriptor, instructions, phis}) terminator = do
+    let finishedBlock = MIR.MkBlock{instructions, terminator, phis}
     modify (\state -> state{blocks = HashMap.insert descriptor finishedBlock state.blocks})

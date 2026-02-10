@@ -28,13 +28,13 @@ newtype Phis = MkPhys (HashMap Variable (Seq Variable))
 
 data Block = MkBlock
     { phis :: Phis
-    , arguments :: Seq Variable
     , instructions :: Seq Instruction
     , terminator :: Terminator
     }
     deriving (Generic)
 
 newtype Variable = MkVariable Int
+    deriving newtype (Eq, Hashable)
 
 data Path = SumField Int
     deriving (Generic)
@@ -48,10 +48,10 @@ data Instruction
         , targetRepresentation :: Representation
         }
     | Unbox {var :: Variable, boxedTarget :: Variable, representation :: Representation}
-    | RecordConstructor {var :: Variable, values :: Seq Variable, representation :: Representation}
-    | SumConstructor { var :: Variable, tag :: Int, values :: Seq Variable, representation :: Representation }
-    | AllocClosure { var :: Variable, closedValues :: Seq Variable, representation :: Representation }
-    | IntConstant Variable Int
+    | ProductConstructor {var :: Variable, values :: Seq Variable, representation :: Representation}
+    | SumConstructor {var :: Variable, tag :: Int, values :: Seq Variable, representation :: Representation}
+    | AllocClosure {var :: Variable, closedValues :: Seq Variable, representation :: Representation}
+    | LoadIntLiteral Variable Int
     | Global Variable CoreName
     deriving (Generic)
 
@@ -84,11 +84,16 @@ instance Pretty Declaration where
                 <> rparen "}"
 
 prettyBlock :: BlockDescriptor -> Block -> Doc Ann
-prettyBlock descriptor MkBlock{arguments = blockArguments, instructions, terminator} =
+prettyBlock descriptor MkBlock{phis = MkPhys phiMap, instructions, terminator} =
     align $
         pretty descriptor
-            <> arguments blockArguments
-            <> "\n  "
+            <> keyword ":"
+            <> "\n"
+            <> ( case HashMap.toList phiMap of
+                    [] -> ""
+                    phis -> intercalateDoc "\n" (map (\(result, inputs) -> pretty result <> keyword " = " <> keyword "φ" <> arguments inputs) phis) <> "\n"
+               )
+            <> "  "
             <> align
                 ( intercalateDoc "\n" (fmap pretty instructions)
                     <> "\n"
