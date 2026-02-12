@@ -148,8 +148,8 @@ instance Pretty Terminator where
         Jump block -> keyword "jump" <+> pretty block
         SwitchInt value targets ->
             keyword "switchInt" <+> pretty value <+> lparen "["
-                <> align "\n  "
-                <> intercalateDoc "\n" (fmap (\(value, target) -> number value <+> keyword "->" <+> pretty target) targets)
+                <> "\n  "
+                <> align (intercalateDoc "\n" (fmap (\(value, target) -> number value <+> keyword "->" <+> pretty target) targets))
                 <> "\n"
                 <> rparen "]"
         TailCallDirect functionName callArguments ->
