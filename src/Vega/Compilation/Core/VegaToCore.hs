@@ -125,13 +125,14 @@ compileExpr expr = do
             pure (statements, Core.Value value, representation)
     case expr of
         Vega.Var{} -> deferToValue
-        Vega.DataConstructor { valueRepresentation, name } -> arityOfDataConstructor name >>= \case
-            Nothing -> deferToValue
-            Just arity -> do
-                -- TODO: We need more than the arity here. We actually need the *representations* of the arguments.
-                -- This is particularly annoying because we do have the *types* of the arguments but we don't have a
-                -- way of accessing their kinds from here
-                undefined
+        Vega.DataConstructor{valueRepresentation, name} ->
+            arityOfDataConstructor name >>= \case
+                Nothing -> deferToValue
+                Just arity -> do
+                    -- TODO: We need more than the arity here. We actually need the *representations* of the arguments.
+                    -- This is particularly annoying because we do have the *types* of the arguments but we don't have a
+                    -- way of accessing their kinds from here
+                    undefined
         Vega.Application _ _ (Vega.DataConstructor{}) _ -> deferToValue
         Vega.Application _ returnRepresentation functionExpr argExprs -> do
             (functionStatements, function) <- compileExprToValue_ functionExpr
@@ -181,10 +182,13 @@ compileExpr expr = do
             pure
                 ( conditionStatements
                 , Core.ConstructorCase
-                    conditionValue
-                    [ (booleanConstructorName True, ([], thenStatements, thenExpr))
-                    , (booleanConstructorName False, ([], elseStatements, elseExpr))
-                    ]
+                    { scrutinee = conditionValue
+                    , scrutineeRepresentation = Core.boolRepresentation
+                    , cases =
+                        [ (booleanConstructorName True, ([], thenStatements, thenExpr))
+                        , (booleanConstructorName False, ([], elseStatements, elseExpr))
+                        ]
+                    }
                 , thenRepresentation
                 )
         Vega.SequenceBlock{statements} -> compileStatements statements
@@ -364,7 +368,7 @@ compileCaseTree compileGoal caseTree scrutinees = do
                         Just (joinPointName, _) ->
                             pure ([], Core.JumpJoin joinPointName (fmap (\var -> Core.Var (Core.Local var)) boundValues))
                     _ -> panic $ "Not all scrutinees consumed. Remaining: [" <> intercalateDoc ", " (fmap pretty scrutinees) <> "]"
-            PatternMatching.ConstructorCase{constructors} -> do
+            PatternMatching.ConstructorCase{constructors, scrutineeRepresentation} -> do
                 let (scrutinee, rest) = consume scrutinees
                 cases <-
                     fromList <$> for (Map.toList constructors) \(constructor, (argumentCount, subTree)) -> do
@@ -372,7 +376,8 @@ compileCaseTree compileGoal caseTree scrutinees = do
                         (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local) locals <> rest) boundValues subTree
 
                         pure (constructor, (locals, subTreeStatements, subTreeExpr))
-                pure ([], Core.ConstructorCase scrutinee cases)
+                scrutineeRepresentation <- convertRepresentation scrutineeRepresentation
+                pure ([], Core.ConstructorCase{scrutinee = scrutinee, scrutineeRepresentation, cases})
             PatternMatching.TupleCase count subTree -> do
                 let (scrutinee, rest) = consume scrutinees
                 locals <- Seq.replicateA count newLocal
@@ -575,7 +580,7 @@ coalesceExpr substitution = \case
                     (makeExpr substitution)
             )
     Core.TupleAccess value index -> pure (substitution, \substitution -> Core.TupleAccess (applySubst substitution value) index)
-    Core.ConstructorCase scrutinee cases -> do
+    Core.ConstructorCase scrutinee scrutineeRepresentation cases -> do
         let coalesceCase substitution (parameters, statements, expr) = do
                 (substitution, makeStatements) <- coalesceStatements substitution statements
                 (substitution, makeExpr) <- coalesceExpr substitution expr
@@ -588,7 +593,7 @@ coalesceExpr substitution = \case
         pure
             ( substitution
             , \substitution ->
-                Core.ConstructorCase (applySubst substitution scrutinee) (fmap ($ substitution) makeCases)
+                Core.ConstructorCase{scrutinee = applySubst substitution scrutinee, scrutineeRepresentation, cases = fmap ($ substitution) makeCases}
             )
 
 applySubst :: Substitution -> Core.Value -> Core.Value

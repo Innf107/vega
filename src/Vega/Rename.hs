@@ -313,10 +313,10 @@ renamePattern env = \case
         (innerPattern, innerTrans) <- renamePattern env innerPattern
         (localName, envTrans) <- bindLocalVar name
         pure (AsPattern loc () innerPattern localName, envTrans . innerTrans)
-    ConstructorPattern{loc, constructor, subPatterns} -> do
+    ConstructorPattern{loc, constructor, constructorExt, subPatterns} -> do
         constructor <- findDataConstructorName env loc constructor
         (subPatterns, envTransformers) <- Seq.unzip <$> for subPatterns (renamePattern env)
-        pure (ConstructorPattern{loc, constructor, subPatterns}, Util.compose envTransformers)
+        pure (ConstructorPattern{loc, constructor, constructorExt, subPatterns}, Util.compose envTransformers)
     TuplePattern loc subPatterns -> do
         (subPatterns, transformers) <- Seq.unzip <$> traverse (renamePattern env) subPatterns
         pure (TuplePattern loc subPatterns, Util.compose transformers)

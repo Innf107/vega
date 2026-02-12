@@ -35,7 +35,7 @@ builtinKinds =
     [ (internalName "Int", Type (PrimitiveRep IntRep))
     , (internalName "String", Type (PrimitiveRep BoxedRep))
     , (internalName "Double", Type (PrimitiveRep DoubleRep))
-    , (internalName "Bool", Type (SumRep [PrimitiveRep UnitRep, PrimitiveRep UnitRep]))
+    , (internalName "Bool", Type boolRepresentation)
     , (internalName "Array", forallVisible Monomorphized "r" Rep \r -> [Type r] :-> Type (ArrayRep r))
     ]
 

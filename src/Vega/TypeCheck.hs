@@ -319,7 +319,7 @@ checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <>
     case pattern_ of
         VarPattern loc () var isShadowed -> do
             rep <- representationOfType loc env expectedType
-            pure (VarPattern { loc = loc, ext = rep, name = var, isShadowed = isShadowed }, bindVarType var expectedType)
+            pure (VarPattern{loc = loc, ext = rep, name = var, isShadowed = isShadowed}, bindVarType var expectedType)
         AsPattern loc () pattern_ name -> do
             (pattern_, innerTrans) <- checkPattern env expectedType pattern_
             rep <- representationOfType loc env expectedType
@@ -364,7 +364,7 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
     VarPattern loc () varName isShadowed -> do
         rep <- MetaVar <$> freshMeta "r" Rep
         type_ <- MetaVar <$> freshMeta (varName.name) (Type rep)
-        pure (VarPattern { loc = loc, ext = rep, name = varName, isShadowed = isShadowed }, type_, bindVarType varName type_)
+        pure (VarPattern{loc = loc, ext = rep, name = varName, isShadowed = isShadowed}, type_, bindVarType varName type_)
     AsPattern loc () innerPattern name -> do
         (innerPattern, innerType, innerTrans) <- inferPattern env innerPattern
         rep <- representationOfType loc env innerType
@@ -387,9 +387,19 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
                     (subPatterns, _subPatternTypes, envTransformers) <-
                         unzip3Seq <$> for subPatterns \pattern_ -> do
                             inferPattern env pattern_
-                    pure (ConstructorPattern{loc, constructor, subPatterns}, constructorType, Util.compose envTransformers)
+                    representation <- representationOfType loc env constructorType
+                    pure
+                        ( ConstructorPattern{loc, constructor, constructorExt = representation, subPatterns}
+                        , constructorType
+                        , Util.compose envTransformers
+                        )
                 Empty -> do
-                    pure (ConstructorPattern{loc, constructor, subPatterns = []}, constructorType, id)
+                    representation <- representationOfType loc env constructorType
+                    pure
+                        ( ConstructorPattern{loc, constructor, constructorExt = representation, subPatterns = []}
+                        , constructorType
+                        , id
+                        )
 
         case constructorType of
             TypeConstructor{} -> nullaryCase
@@ -409,7 +419,12 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
                 (subPatterns, envTransformers) <- for2 parameterTypes subPatterns \type_ pattern_ -> do
                     checkPattern env type_ pattern_
 
-                pure (ConstructorPattern{loc, constructor, subPatterns}, resultType, Util.compose envTransformers)
+                representation <- representationOfType loc env resultType
+                pure
+                    ( ConstructorPattern{loc, constructor, constructorExt = representation, subPatterns}
+                    , resultType
+                    , Util.compose envTransformers
+                    )
     TuplePattern{loc, subPatterns} -> do
         (subPatterns, subPatternTypes, envTransformers) <-
             unzip3Seq <$> for subPatterns \pattern_ -> do

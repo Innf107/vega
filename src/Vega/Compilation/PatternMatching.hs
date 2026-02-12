@@ -21,11 +21,12 @@ data CaseTree goal
         -- We use Map instead of HashMap to get a faster unionWith operation
         -- (with HashMap, merging would have been quadratic in the number of constructors)
         { constructors :: Map Name (Int, CaseTree goal)
+        , scrutineeRepresentation :: Type
         , default_ :: Maybe (CaseTree goal)
         }
     | TupleCase Int (CaseTree goal)
     | -- Bind a scrutinee to a variable without consuming it
-      BindVar LocalName Type (CaseTree goal)
+      BindVar {name :: LocalName, representation :: Type, next :: CaseTree goal}
     | -- Consume a scrutinee and unconditionally continue
       Ignore (CaseTree goal)
     deriving (Generic, Functor, Foldable)
@@ -37,18 +38,18 @@ merge tree1 tree2 = case (tree1, tree2) of
     (Leaf leaf, _) -> Leaf leaf
     (_, Leaf _) -> panic $ "trying to merge " <> showHeadConstructor (coerce @_ @(CaseTree (Identity goal)) tree1) <> " with leaf"
     (Ignore subTree1, Ignore subTree2) -> Ignore (merge subTree1 subTree2)
-    (Ignore ignoreSubTree, ConstructorCase{constructors, default_}) -> do
+    (Ignore ignoreSubTree, ConstructorCase{scrutineeRepresentation, constructors, default_}) -> do
         let mergedConstructors = fmap (\(count, subTree) -> (count, merge (replicateIgnore count ignoreSubTree) subTree)) constructors
         let mergedDefault = case default_ of
                 Nothing -> Just ignoreSubTree
                 Just defaultSubTree -> Just (merge ignoreSubTree defaultSubTree)
-        ConstructorCase{constructors = mergedConstructors, default_ = mergedDefault}
-    (ConstructorCase{constructors, default_}, Ignore ignoreSubTree) -> do
+        ConstructorCase{scrutineeRepresentation, constructors = mergedConstructors, default_ = mergedDefault}
+    (ConstructorCase{scrutineeRepresentation, constructors, default_}, Ignore ignoreSubTree) -> do
         let mergedConstructors = fmap (\(count, subTree) -> (count, merge subTree (replicateIgnore count ignoreSubTree))) constructors
         let mergedDefault = case default_ of
                 Nothing -> Just ignoreSubTree
                 Just defaultSubTree -> Just (merge defaultSubTree ignoreSubTree)
-        ConstructorCase{constructors = mergedConstructors, default_ = mergedDefault}
+        ConstructorCase{scrutineeRepresentation, constructors = mergedConstructors, default_ = mergedDefault}
     (Ignore ignoreSubTree, TupleCase count tupleSubTree) ->
         TupleCase count (merge (replicateIgnore count ignoreSubTree) tupleSubTree)
     (TupleCase count tupleSubTree, Ignore ignoreSubTree) ->
@@ -58,8 +59,8 @@ merge tree1 tree2 = case (tree1, tree2) of
         BindVar name rep (merge tree subTree)
     (BindVar name rep subTree, tree) ->
         BindVar name rep (merge subTree tree)
-    ( ConstructorCase{constructors = constructors1, default_ = default1}
-        , ConstructorCase{constructors = constructors2, default_ = default2}
+    ( ConstructorCase{scrutineeRepresentation, constructors = constructors1, default_ = default1}
+        , ConstructorCase{scrutineeRepresentation = _, constructors = constructors2, default_ = default2}
         ) -> do
             let mergeConstructor constructorName (count1, subTree1) (count2, subTree2)
                     | count1 /= count2 = panic $ "Data constructor " <> prettyName DataConstructorKind constructorName <> " applied to different argument counts (" <> number count1 <> " vs " <> number count2 <> ")"
@@ -68,7 +69,14 @@ merge tree1 tree2 = case (tree1, tree2) of
                     (_, Nothing) -> default1
                     (Nothing, _) -> default2
                     (Just tree1, Just tree2) -> Just (merge tree1 tree2)
-            ConstructorCase{constructors = Map.unionWithKey mergeConstructor constructors1 constructors2, default_ = mergedDefault}
+            -- We assume that the representations match here. Ideally we would have a sanity check but
+            -- since representations are still vega-level types at this stage we can't actually check them for equality
+            -- that easily
+            ConstructorCase
+                { scrutineeRepresentation
+                , constructors = Map.unionWithKey mergeConstructor constructors1 constructors2
+                , default_ = mergedDefault
+                }
     (TupleCase count1 subTree1, TupleCase count2 subTree2)
         | count1 /= count2 -> panic $ "Tuple applied to different numbers of arguments (" <> number count1 <> " vs " <> number count2 <> ")"
         | otherwise -> TupleCase count1 (merge subTree1 subTree2)
@@ -100,12 +108,13 @@ compileMatch patterns = mergeAll $ fmap (\(pattern_, goal) -> compileSinglePatte
 compileSinglePattern :: Pattern Typed -> CaseTree goal -> CaseTree goal
 compileSinglePattern pattern_ leaf = case pattern_ of
     WildcardPattern{} -> Ignore leaf
-    VarPattern{loc = _, ext = rep, name, isShadowed = _} -> BindVar name rep (Ignore leaf)
-    AsPattern _loc rep inner name -> BindVar name rep (compileSinglePattern inner leaf)
-    ConstructorPattern{constructor, subPatterns} -> do
+    VarPattern{loc = _, ext = rep, name, isShadowed = _} -> BindVar{name = name, representation = rep, next = Ignore leaf}
+    AsPattern _loc rep inner name -> BindVar{name = name, representation = rep, next = compileSinglePattern inner leaf}
+    ConstructorPattern{constructorExt = scrutineeRepresentation, constructor, subPatterns} -> do
         let subTree = serializeSubPatternsWithLeaf subPatterns leaf
         ConstructorCase
-            { constructors = [(constructor, (length subPatterns, subTree))]
+            { scrutineeRepresentation
+            , constructors = [(constructor, (length subPatterns, subTree))]
             , default_ = Nothing
             }
     TuplePattern _ subPatterns -> do

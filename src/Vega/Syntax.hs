@@ -259,6 +259,7 @@ data Pattern p
     | AsPattern Loc (XAsPattern p) (Pattern p) (XLocalName p)
     | ConstructorPattern
         { loc :: Loc
+        , constructorExt :: XConstructorPattern p
         , constructor :: XName p
         , subPatterns :: Seq (Pattern p)
         }
@@ -275,6 +276,11 @@ type family XVarPattern p where
     XVarPattern Parsed = ()
     XVarPattern Renamed = ()
     XVarPattern Typed = Type -- Representation
+
+type family XConstructorPattern p where
+    XConstructorPattern Parsed = ()
+    XConstructorPattern Renamed = ()
+    XConstructorPattern Typed = Type -- Representation
 
 type family XAsPattern p where
     XAsPattern Parsed = ()
@@ -583,6 +589,9 @@ stringRepresentation = PrimitiveRep BoxedRep
 -- should treat it abstractly instead of depending on its concrete value
 functionRepresentation :: Type
 functionRepresentation = PrimitiveRep BoxedRep
+
+boolRepresentation :: Type
+boolRepresentation = SumRep [PrimitiveRep UnitRep, PrimitiveRep UnitRep]
 
 {- NOTE: Ord instances
 -----------------------------------------------------

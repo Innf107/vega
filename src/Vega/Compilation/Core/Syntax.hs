@@ -38,7 +38,7 @@ data Expr
       JumpJoin LocalCoreName (Seq Value)
     | Lambda (Seq (LocalCoreName, Representation)) (Seq Statement) Expr
     | TupleAccess Value Int
-    | ConstructorCase Value (HashMap Vega.Name (Seq LocalCoreName, Seq Statement, Expr))
+    | ConstructorCase {scrutinee :: Value, scrutineeRepresentation :: Representation, cases :: (HashMap Vega.Name (Seq LocalCoreName, Seq Statement, Expr)) }
 
 data Statement
     = Let LocalCoreName Representation Expr
@@ -135,11 +135,11 @@ instance Pretty Expr where
         Lambda parameters bodyStatements bodyExpr -> keyword "\\" <> typedParameters parameters <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
         TupleAccess tupleValue index -> do
             pretty tupleValue <> lparen "[" <> number index <> rparen "]"
-        ConstructorCase scrutinee cases -> do
+        ConstructorCase scrutinee representation cases -> do
             let prettyCase (constructor, (locals, bodyStatements, bodyExpr)) =
                     Vega.prettyName Vega.DataConstructorKind constructor <> arguments locals <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
 
-            keyword "match" <+> pretty scrutinee <+> lparen "{"
+            keyword "match" <+> pretty scrutinee <+> keyword ":" <+> pretty representation <+> lparen "{"
                 <> "\n"
                 <> indent 2 (align (intercalateDoc "\n" (map prettyCase (HashMap.toList cases))))
                 <> "\n"
@@ -198,3 +198,6 @@ stringRepresentation = PrimitiveRep Vega.BoxedRep
 -- should treat it abstractly instead of depending on its concrete value
 functionRepresentation :: Representation
 functionRepresentation = PrimitiveRep Vega.BoxedRep
+
+boolRepresentation :: Representation
+boolRepresentation = SumRep [PrimitiveRep Vega.UnitRep, PrimitiveRep Vega.UnitRep]

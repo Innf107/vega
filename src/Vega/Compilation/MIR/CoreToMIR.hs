@@ -130,7 +130,7 @@ compileLet block local = \case
         compileLambda block local parameters returnRepresentation statements returnExpr
     Core.TupleAccess tupleValue index -> do
         undefined
-    Core.ConstructorCase scrutinee cases -> do
+    Core.ConstructorCase {scrutinee, scrutineeRepresentation, cases} -> do
         undefined
 
 compileReturn :: (Compile es) => BlockBuilder -> Core.Expr -> Eff es ()
@@ -151,10 +151,10 @@ compileReturn block = \case
     -- finish block (MIR.Jump joinPointBlock arguments)
     Core.TupleAccess tupleValue index -> do
         undefined
-    Core.ConstructorCase scrutinee cases -> do
+    Core.ConstructorCase scrutinee scrutineeRepresentation cases -> do
         (block, scrutinee) <- compileValue block scrutinee
         tag <- newVar
-        block <- addInstruction block (MIR.LoadSumTag tag scrutinee undefined)
+        block <- addInstruction block (MIR.LoadSumTag tag scrutinee scrutineeRepresentation)
 
         targetBlocks <- for (HashMap.toList cases) \(constructorName, (parameters, bodyStatements, bodyExpr)) -> do
             index <-

@@ -448,13 +448,27 @@ pattern_ = do
             , do
                 startLoc <- single Lexer.Shadow
                 (name, endLoc) <- identifierWithLoc
-                pure (VarPattern {loc = startLoc <> endLoc, ext = (), name = name, isShadowed = True})
+                pure (VarPattern{loc = startLoc <> endLoc, ext = (), name = name, isShadowed = True})
             , do
                 (name, startLoc) <- constructorWithLoc
                 subPatterns <- optional (argumentsWithLoc pattern_)
                 case subPatterns of
-                    Nothing -> pure $ ConstructorPattern startLoc name (fromList [])
-                    Just (subPatterns, endLoc) -> pure $ ConstructorPattern (startLoc <> endLoc) name subPatterns
+                    Nothing ->
+                        pure $
+                            ConstructorPattern
+                                { loc = startLoc
+                                , constructorExt = ()
+                                , constructor = name
+                                , subPatterns = fromList []
+                                }
+                    Just (subPatterns, endLoc) ->
+                        pure $
+                            ConstructorPattern
+                                { loc = (startLoc <> endLoc)
+                                , constructorExt = ()
+                                , constructor = name
+                                , subPatterns = subPatterns
+                                }
             , do
                 (patterns, loc) <- argumentsWithLoc pattern_
                 case patterns of
