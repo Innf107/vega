@@ -164,7 +164,7 @@ compileReturn block = \case
             targetBlockBuilder <- newBlock (MkPhis mempty)
             let targetBlockDescriptor = targetBlockBuilder.descriptor
 
-            targetBlockBuilder <- execState block $ forIndexed_ parameters \name productIndex -> do
+            targetBlockBuilder <- execState targetBlockBuilder $ forIndexed_ parameters \name productIndex -> do
                 targetBlockBuilder <- get
                 parameterVariable <- newVar
                 registerVariable name parameterVariable undefined
