@@ -35,6 +35,7 @@ library
       Vega.Compilation.JavaScript.VegaToJavaScript
       Vega.Compilation.MIR.CoreToMIR
       Vega.Compilation.MIR.Syntax
+      Vega.Compilation.MIR.Verify
       Vega.Compilation.MIRToLLVM
       Vega.Compilation.PatternMatching
       Vega.Debruijn

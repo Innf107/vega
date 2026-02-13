@@ -26,7 +26,7 @@ newtype BlockDescriptor = MkBlockDescriptor Unique
     deriving stock (Generic)
     deriving newtype (Eq, Hashable)
 
-newtype Phis = MkPhis (HashMap Variable (Seq Variable))
+newtype Phis = MkPhis (HashMap Variable (HashMap BlockDescriptor Variable))
 
 data Block = MkBlock
     { phis :: Phis
