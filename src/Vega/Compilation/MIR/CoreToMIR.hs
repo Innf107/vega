@@ -199,10 +199,10 @@ compileValue block = \case
         Core.Local name -> do
             (var, _) <- getLocal name
             pure (block, var)
-        Core.Global name -> do
+        Core.Global globalName -> do
             -- TODO: detect if name is a function and return MIR.LoadGlobalClosure in that case instead
             var <- newVar
-            block <- addInstruction block (MIR.LoadGlobal var name)
+            block <- addInstruction block (MIR.LoadGlobal {var, globalName, representation=undefined})
 
             pure (block, var)
     Core.Literal literal -> do

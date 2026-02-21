@@ -38,7 +38,8 @@ data Block = MkBlock
 newtype Variable = MkVariable Int
     deriving newtype (Eq, Hashable)
 
-data PathSegment = SumConstructorPath Int
+data PathSegment
+    = SumConstructorPath Int
     | ProductFieldPath Int
     deriving (Generic)
 
@@ -57,7 +58,7 @@ data Instruction
     | SumConstructor {var :: Variable, tag :: Int, values :: Seq Variable, representation :: Representation}
     | AllocClosure {var :: Variable, closedValues :: Seq Variable, representation :: Representation}
     | LoadGlobalClosure {var :: Variable, functionName :: Vega.GlobalName}
-    | LoadGlobal {var :: Variable, globalName :: Vega.GlobalName}
+    | LoadGlobal {var :: Variable, globalName :: Vega.GlobalName, representation :: Representation}
     | LoadIntLiteral {var :: Variable, literal :: Int}
     | LoadSumTag {var :: Variable, sum :: Variable, sumRepresentation :: Representation}
     | CallDirect {var :: Variable, functionName :: Vega.GlobalName, arguments :: (Seq Variable)}
@@ -130,8 +131,8 @@ instance Pretty Instruction where
         AllocClosure{var, closedValues, representation} -> keywordInstruction "allocClosure" var (fmap pretty closedValues <> [pretty representation])
         LoadGlobalClosure{var, functionName} ->
             keywordInstruction "loadGlobalClosure" var [Vega.prettyGlobal Vega.VarKind functionName]
-        LoadGlobal var globalName ->
-            keywordInstruction "loadGlobal" var [Vega.prettyGlobal Vega.VarKind globalName]
+        LoadGlobal var globalName representation ->
+            keywordInstruction "loadGlobal" var [Vega.prettyGlobal Vega.VarKind globalName, pretty representation]
         LoadIntLiteral var int ->
             keywordInstruction "int" var [number int]
         LoadSumTag{var, sum, sumRepresentation} -> keywordInstruction "loadSumTag" var [pretty sum, pretty sumRepresentation]

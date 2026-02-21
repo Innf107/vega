@@ -2,6 +2,7 @@ module Vega.Driver (
     rebuild,
     execute,
     CompilationResult (..),
+    DriverConfig (..),
 ) where
 
 -- TODO: check that imports make sense somewhere
@@ -32,7 +33,9 @@ import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.Core.VegaToCore qualified as VegaToCore
 import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
 import Vega.Compilation.JavaScript.VegaToJavaScript qualified as JavaScript
+import Vega.Compilation.MIR.CoreToMIR qualified as CoreToMIR
 import Vega.Compilation.MIR.Syntax qualified as MIR
+import Vega.Compilation.MIR.Verify qualified as VerifyMIR
 import Vega.Compilation.MIRToLLVM qualified as MIRToLLVM
 import Vega.Diff (DiffChange (..))
 import Vega.Diff qualified as Diff
@@ -52,17 +55,20 @@ import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
-import qualified Vega.Compilation.MIR.CoreToMIR as CoreToMIR
 
 data CompilationResult
     = CompilationSuccessful
     | CompilationFailed
         {errors :: Seq CompilationError}
 
--- TODO: distinguish between new and repeated errors
+data DriverConfig = MkDriverConfig
+    { verifyMIR :: Bool
+    }
 
+-- TODO: distinguish between new and repeated errors
 type Driver es =
     ( Reader BuildConfig :> es
+    , Reader DriverConfig :> es
     , GraphPersistence :> es
     , IOE :> es
     , FileSystem :> es
@@ -243,6 +249,7 @@ compileBackend = do
             -- TODO: make this configurable and make the path absolute
             writeFileLBS (toString $ config.contents.name <> ".js") (encodeUtf8 (TextBuilder.toText jsCode))
         BuildConfig.NativeRelease -> runNewUnique do
+            MkDriverConfig{verifyMIR} <- ask
             let compileToMIR declarationName = do
                     core <-
                         GraphPersistence.getCompiledCore declarationName >>= \case
@@ -261,7 +268,14 @@ compileBackend = do
 
             mirDeclarations <- mconcat <$> Streaming.toList_ (Streaming.mapM compileToMIR reachableStream)
 
-            let mirProgram = MIR.MkProgram {declarations = mirDeclarations}
+            let mirProgram = MIR.MkProgram{declarations = mirDeclarations}
+            when verifyMIR do
+                VerifyMIR.verify mirProgram >>= \case
+                    [] -> pure ()
+                    errors -> for_ errors \error -> do
+                        -- TODO: make this more configurable than logging straight to stderr
+                        let ?config = Pretty.defaultPrettyANSIIConfig
+                        Pretty.eprintANSII (keyword "MIR VERIFICATION ERROR: " <> error)
 
             llvmModule <- MIRToLLVM.compile mirProgram
 

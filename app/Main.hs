@@ -14,7 +14,7 @@ import Effectful (Eff, IOE, runEff, (:>))
 import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.FileSystem (FileSystem, runFileSystem)
 import Effectful.Process (Process, runProcess)
-import Effectful.Reader.Static (runReader)
+import Effectful.Reader.Static (Reader, runReader)
 import GHC.Read (readsPrec)
 import System.IO (hIsTerminalDevice)
 import Vega.BuildConfig (BuildConfigPresence (..), findBuildConfig)
@@ -38,6 +38,7 @@ data Options
         { persistence :: PersistenceBackend
         , includeUnique :: Bool
         , debugEmitConfig :: DebugEmitConfig
+        , verifyMIR :: Bool
         }
     | Exec
         { file :: FilePath
@@ -97,7 +98,13 @@ buildOptions = do
                 <> value None
                 <> help ("MIR output for debugging. Can be one of: file, stderr, none")
             )
-    pure Build{persistence, includeUnique, debugEmitConfig = MkDebugEmitConfig{debugCore, debugMIR}}
+    verifyMIR <-
+        flag
+            False
+            True
+            (long "verify-mir" <> help ("Verify that the correctness intermediate MIR language is well-formed. This has a small performance cost and shouldn't be necessary unless the compiler has a bug."))
+            
+    pure Build{persistence, includeUnique, debugEmitConfig = MkDebugEmitConfig{debugCore, debugMIR}, verifyMIR}
 
 runCoreEmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Seq Core.Declaration) : es) a -> Eff es a
 runCoreEmit config cont = case config.debugCore of
@@ -134,10 +141,12 @@ parser =
 
 run ::
     (?config :: PrettyANSIIConfig) =>
+    Driver.DriverConfig ->
     DebugEmitConfig ->
     PersistenceBackend ->
     Eff
-        '[ DebugEmit (Seq Core.Declaration)
+        '[ Reader Driver.DriverConfig
+         , DebugEmit (Seq Core.Declaration)
          , DebugEmit (Seq MIR.Declaration)
          , Concurrent
          , Process
@@ -148,9 +157,10 @@ run ::
          ]
         a ->
     IO a
-run debugConfig persistence action = case persistence of
+run driverConfig debugConfig persistence action = case persistence of
     InMemory ->
         action
+            & runReader driverConfig
             & runCoreEmit debugConfig
             & runMIREmit debugConfig
             & runConcurrent
@@ -167,8 +177,12 @@ main = do
             MkPrettyANSIIConfig
                 { includeUnique = options.includeUnique
                 }
+    let driverConfig =
+            Driver.MkDriverConfig
+                { verifyMIR = options.verifyMIR
+                }
     case options of
-        Build{persistence, debugEmitConfig} -> run debugEmitConfig persistence do
+        Build{persistence, debugEmitConfig} -> run driverConfig debugEmitConfig persistence do
             let eprint :: forall io. (MonadIO io) => Doc Ann -> io ()
                 eprint doc = do
                     liftIO (hIsTerminalDevice stderr) >>= \case
@@ -202,5 +216,5 @@ main = do
                                         PlainError plainError -> pure $ pretty plainError
                                     eprint doc
                             exitFailure
-        Exec{file, mainFunction} -> run MkDebugEmitConfig{debugCore = None, debugMIR = None} InMemory do
+        Exec{file, mainFunction} -> run driverConfig MkDebugEmitConfig{debugCore = None, debugMIR = None} InMemory do
             Driver.execute file mainFunction
