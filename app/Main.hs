@@ -1,4 +1,5 @@
 {-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 module Main (main) where
 
@@ -12,11 +13,14 @@ import Data.Text.IO qualified as Text
 import Data.Yaml (prettyPrintParseException)
 import Effectful (Eff, IOE, runEff, (:>))
 import Effectful.Concurrent (Concurrent, runConcurrent)
+import Effectful.Dispatch.Dynamic (interpret_)
 import Effectful.FileSystem (FileSystem, runFileSystem)
 import Effectful.Process (Process, runProcess)
 import Effectful.Reader.Static (Reader, runReader)
 import GHC.Read (readsPrec)
+import LLVM.Core qualified as LLVM
 import System.IO (hIsTerminalDevice)
+import System.OsPath (osp)
 import Vega.BuildConfig (BuildConfigPresence (..), findBuildConfig)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.MIR.Syntax qualified as MIR
@@ -60,6 +64,7 @@ instance Read DebugEmitOption where
 data DebugEmitConfig = MkDebugEmitConfig
     { debugCore :: DebugEmitOption
     , debugMIR :: DebugEmitOption
+    , debugLLVM :: DebugEmitOption
     }
 
 buildOptions :: Parser Options
@@ -98,13 +103,17 @@ buildOptions = do
                 <> value None
                 <> help ("MIR output for debugging. Can be one of: file, stderr, none")
             )
+    debugLLVM <-
+        option
+            auto
+            (long "debug-llvm" <> value None <> help ("LLVM output for debugging. Can be one of: file, stderr, none"))
     verifyMIR <-
         flag
             False
             True
             (long "verify-mir" <> help ("Verify that the correctness intermediate MIR language is well-formed. This has a small performance cost and shouldn't be necessary unless the compiler has a bug."))
-            
-    pure Build{persistence, includeUnique, debugEmitConfig = MkDebugEmitConfig{debugCore, debugMIR}, verifyMIR}
+
+    pure Build{persistence, includeUnique, debugEmitConfig = MkDebugEmitConfig{debugCore, debugMIR, debugLLVM}, verifyMIR}
 
 runCoreEmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Seq Core.Declaration) : es) a -> Eff es a
 runCoreEmit config cont = case config.debugCore of
@@ -116,13 +125,25 @@ runCoreEmit config cont = case config.debugCore of
     ToStderr -> emitToStderr (\declarations -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
 
 runMIREmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Seq MIR.Declaration) : es) a -> Eff es a
-runMIREmit config cont = case config.debugCore of
+runMIREmit config cont = case config.debugMIR of
     None -> ignoreEmit cont
     ToFile -> do
         let render declarations = encodeUtf8 do
                 prettyPlain (intercalateDoc "\n\n" (fmap pretty declarations))
         emitAllToFile render "mir.vegamir" cont
     ToStderr -> emitToStderr (\declarations -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
+
+runLLVMEmit :: (IOE :> es) => DebugEmitConfig -> Eff (DebugEmit LLVM.Module : es) a -> Eff es a
+runLLVMEmit config cont = case config.debugLLVM of
+    None -> ignoreEmit cont
+    ToFile ->
+        cont & interpret_ \case
+            DebugEmit module_ -> do
+                liftIO $ LLVM.printModuleToFile module_ [osp|llvm.ll|]
+    ToStderr ->
+        cont & interpret_ \case
+            DebugEmit module_ ->
+                liftIO $ LLVM.dumpModule module_
 
 execOptions :: Parser Options
 execOptions = do
@@ -148,6 +169,7 @@ run ::
         '[ Reader Driver.DriverConfig
          , DebugEmit (Seq Core.Declaration)
          , DebugEmit (Seq MIR.Declaration)
+         , DebugEmit LLVM.Module
          , Concurrent
          , Process
          , GraphPersistence
@@ -163,6 +185,7 @@ run driverConfig debugConfig persistence action = case persistence of
             & runReader driverConfig
             & runCoreEmit debugConfig
             & runMIREmit debugConfig
+            & runLLVMEmit debugConfig
             & runConcurrent
             & runProcess
             & runInMemory
@@ -216,5 +239,5 @@ main = do
                                         PlainError plainError -> pure $ pretty plainError
                                     eprint doc
                             exitFailure
-        Exec{file, mainFunction} -> run driverConfig MkDebugEmitConfig{debugCore = None, debugMIR = None} InMemory do
+        Exec{file, mainFunction} -> run driverConfig MkDebugEmitConfig{debugCore = None, debugMIR = None, debugLLVM = None} InMemory do
             Driver.execute file mainFunction

@@ -26,6 +26,7 @@ import TextBuilder qualified
 
 import Effectful.Exception (try)
 import Effectful.Process (Process, callProcess)
+import LLVM.Core qualified as LLVM
 import Streaming.Prelude qualified as Streaming
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
@@ -77,6 +78,7 @@ type Driver es =
     , Trace :> es
     , DebugEmit (Seq Core.Declaration) :> es
     , DebugEmit (Seq MIR.Declaration) :> es
+    , DebugEmit LLVM.Module :> es
     )
 
 findSourceFiles :: (Driver es) => Eff es (Seq FilePath)
@@ -278,6 +280,7 @@ compileBackend = do
                         Pretty.eprintANSII (keyword "MIR VERIFICATION ERROR: " <> error)
 
             llvmModule <- MIRToLLVM.compile mirProgram
+            debugEmit llvmModule
 
             undefined
         _ -> undefined
