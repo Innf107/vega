@@ -74,7 +74,6 @@ type Driver es =
     , IOE :> es
     , FileSystem :> es
     , Concurrent :> es
-    , Process :> es
     , Trace :> es
     , DebugEmit (Seq Core.Declaration) :> es
     , DebugEmit (Seq MIR.Declaration) :> es
