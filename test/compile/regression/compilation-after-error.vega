@@ -1,0 +1,12 @@
+-- Even though g's definition contains a type error, this would try to generate Core for it and
+-- consequently panic during Core generation
+-- (For some reason this doesn't trigger in the test suite though ughhhhhh)
+
+f : { x : Int, y : Int } -> Int
+f(r) = 0
+
+g : () -> Int
+g() = f()
+
+main : () -> ()
+main() = ()

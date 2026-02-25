@@ -270,6 +270,11 @@ renameTypeSyntax env = \case
     TupleS loc elements -> do
         elements <- traverse (renameTypeSyntax env) elements
         pure (TupleS loc elements)
+    RecordS loc fields -> do
+        fields <- for fields \(name, type_) -> do
+            type_ <- renameTypeSyntax env type_
+            pure (name, type_)
+        pure (RecordS loc fields)
     RepS loc -> pure (RepS loc)
     TypeS loc repKind -> do
         repKind <- renameKindSyntax env repKind
@@ -364,6 +369,11 @@ renameExpr env = \case
     TupleLiteral loc elements -> do
         elements <- traverse (renameExpr env) elements
         pure (TupleLiteral loc elements)
+    RecordLiteral loc elements -> do
+        elements <- for elements \(name, expr) -> do
+            expr <- renameExpr env expr
+            pure (name, expr)
+        pure (RecordLiteral loc elements)
     BinaryOperator loc arg1 operator arg2 -> do
         arg1 <- renameExpr env arg1
         arg2 <- renameExpr env arg2

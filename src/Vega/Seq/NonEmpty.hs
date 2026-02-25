@@ -5,6 +5,7 @@ module Vega.Seq.NonEmpty (
     pattern NonEmpty,
     toSeq,
     toNonEmptyList,
+    fromNonEmptyList,
     castToSeq,
     unzip,
     first,
@@ -37,6 +38,9 @@ instance Traversable NonEmpty where
 
 toNonEmptyList :: NonEmpty a -> Relude.NonEmpty a
 toNonEmptyList (x :<|| xs) = (x :| toList xs)
+
+fromNonEmptyList :: Relude.NonEmpty a -> NonEmpty a
+fromNonEmptyList (x :| xs) = MkNonEmpty (fromList (x : xs))
 
 toSeq :: NonEmpty a -> Seq a
 toSeq = coerce

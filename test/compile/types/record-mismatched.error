@@ -1,0 +1,8 @@
+$FILE:6:9: ERROR:
+Mismatched record fields in literal.
+    Missing fields: z
+    Excessive fields: y
+    This record is expected to have type { x : internal:Internal:Int, y : internal:Internal:Int }
+  ┃ 
+6 ┃ g() = f({x = 5, z = 3})
+  ┃         ▔▔▔▔▔▔▔▔▔▔▔▔▔▔

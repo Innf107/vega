@@ -1,0 +1,9 @@
+
+f : { x : Int, y : Int } -> Int
+f(r) = 0
+
+g : () -> Int
+g() = f({x = 5, z = 3})
+
+main : () -> ()
+main() = ()

@@ -178,7 +178,7 @@ representationLayout = \case
 -- TODO: consider using more standard name mangling i guess
 renderLLVMName :: Core.CoreName -> Text
 renderLLVMName = \case
-    Core.Global name -> "_vega_" <> renderPackageName name.moduleName.package <> Text.intercalate ":" (toList (name.moduleName.subModules)) <> "::" <> name.name
+    Core.Global name -> "_vega_" <> renderPackageName name.moduleName.package <> ":" <> Text.intercalate "/" (toList (name.moduleName.subModules)) <> ":" <> name.name
     Core.Local _ -> undefined
 
 llvmParameterLayout :: (?context :: LLVM.Context) => Representation -> Eff es LLVM.Type

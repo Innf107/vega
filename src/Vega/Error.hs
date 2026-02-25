@@ -17,6 +17,7 @@ module Vega.Error (
 
 import Relude hiding (Type)
 
+import Data.List qualified as List
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Sequence (Seq (..))
 import Data.Text qualified as Text
@@ -30,9 +31,11 @@ import Vega.Panic qualified as Panic
 import Vega.Parser (AdditionalParseError (..))
 import Vega.Parser qualified as Parser
 import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, note, number, plain, vsep, (<+>))
-import Vega.Syntax (GlobalName (..), Kind, LocalName, MetaVar, Name, NameKind (..), Type (Tuple), prettyGlobal, prettyGlobalText, prettyLocal, prettyName)
+import Vega.Syntax (GlobalName (..), Kind, LocalName, MetaVar, Name, NameKind (..), Type (..), prettyGlobal, prettyGlobalText, prettyLocal, prettyName)
 import Vega.Util (viaList)
 import Vega.Util qualified as Util
+import Vega.VectorMap (VectorMap)
+import Vega.VectorMap qualified as VectorMap
 
 data CompilationError
     = LexicalError LexicalError
@@ -110,6 +113,11 @@ data TypeError
         , expected :: Int
         , actual :: Int
         , expectedType :: Type
+        }
+    | MismatchedRecordFieldsInLiteral
+        { loc :: Loc
+        , expectedFields :: VectorMap Text Type
+        , actualFields :: Seq Text
         }
     | ConstructorPatternOfIncorrectNumberOfArgs
         { loc :: Loc
@@ -342,6 +350,19 @@ renderCompilationError = \case
                 align $
                     emphasis "Tuple literal has" <+> pluralNumber emphasis actual "element" <+> emphasis "but its type expects it to have" <+> number expected
                         <> "\n    The tuple is expected to have type" <+> pretty expectedType
+        MismatchedRecordFieldsInLiteral{loc = _, expectedFields, actualFields} -> do
+            let missingFieldsMessage = case toList actualFields List.\\ toList (VectorMap.sortedKeys expectedFields) of
+                    [] -> ""
+                    missingFields -> "\n    Missing fields: " <> intercalateDoc (keyword ", ") (fmap globalIdentText missingFields)
+            let excessiveFieldsMessage = case toList (VectorMap.sortedKeys expectedFields) List.\\ toList actualFields of
+                    [] -> ""
+                    missingFields -> "\n    Excessive fields: " <> intercalateDoc (keyword ", ") (fmap globalIdentText missingFields)
+            align $
+                emphasis "Mismatched record fields in literal."
+                    <> missingFieldsMessage
+                    <> excessiveFieldsMessage
+                    <> "\n    This record is expected to have type" <+> pretty (Record expectedFields)
+
         ConstructorPatternOfIncorrectNumberOfArgs{loc = _, actual, expectedTypes} ->
             align $
                 emphasis "Constructor pattern binds" <+> pluralNumber emphasis actual "parameter" <+> emphasis "but its type expects it to bind" <+> number (length expectedTypes)

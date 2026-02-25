@@ -44,6 +44,7 @@ import Vega.Syntax (Pass (..))
 import Vega.Syntax qualified as Vega
 import Vega.Util (assert)
 import Vega.Util qualified as Util
+import Vega.VectorMap qualified as VectorMap
 import Witherable (wither)
 
 type Compile es =
@@ -173,6 +174,7 @@ compileExpr expr = do
         Vega.IntLiteral{} -> deferToValue
         Vega.DoubleLiteral{} -> deferToValue
         Vega.TupleLiteral{} -> deferToValue
+        Vega.RecordLiteral{} -> deferToValue
         Vega.BinaryOperator{} -> undefined
         Vega.If{condition, thenBranch, elseBranch} -> do
             (conditionStatements, conditionValue) <- compileExprToValue_ condition
@@ -243,6 +245,15 @@ compileExprToValue expr = do
             pure
                 ( fold statements
                 , Core.DataConstructorApplication (Core.TupleConstructor (length elementValues)) elementValues representation
+                , representation
+                )
+        Vega.RecordLiteral _loc fields -> do
+            let values = fmap snd $ sortBy (compare `on` fst) (toList fields)
+            (statements, elementValues, elementRepresentations) <- unzip3 <$> for values compileExprToValue
+            let representation = Core.ProductRep (fromList elementRepresentations)
+            pure
+                ( fold statements
+                , Core.DataConstructorApplication (Core.TupleConstructor (length elementValues)) (fromList elementValues) representation
                 , representation
                 )
         Vega.BinaryOperator{} -> undefined
@@ -469,6 +480,7 @@ convertRepresentation type_ = do
         Vega.Function{} -> invalidKind
         Vega.TypeFunction{} -> invalidKind
         Vega.Tuple{} -> invalidKind
+        Vega.Record{} -> invalidKind
         Vega.Pure{} -> invalidKind
         Vega.Rep{} -> invalidKind
         Vega.Type{} -> invalidKind

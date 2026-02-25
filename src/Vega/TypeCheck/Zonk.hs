@@ -8,10 +8,11 @@ import Vega.Syntax
 import Data.Unique (Unique)
 import Effectful (Eff, IOE, (:>))
 import GHC.Generics qualified as Generics
+import Vega.Effect.Meta.Static (ReadMeta, followMetasWithoutPathCompression, readMeta)
 import Vega.Error (TypeError, TypeErrorSet)
 import Vega.Loc (Loc)
 import Vega.Seq.NonEmpty (NonEmpty)
-import Vega.Effect.Meta.Static (ReadMeta, readMeta, followMetasWithoutPathCompression)
+import Vega.VectorMap (VectorMap)
 
 class Zonkable a where
     default zonk :: (ReadMeta :> es) => (Generic a, ZonkableGeneric (Generics.Rep a)) => a -> Eff es a
@@ -59,6 +60,9 @@ instance (Zonkable a) => Zonkable (Seq a) where
 instance (Zonkable a) => Zonkable (NonEmpty a) where
     zonk seq = traverse zonk seq
 
+instance (Zonkable value) => Zonkable (VectorMap key value) where
+    zonk map = traverse zonk map
+
 instance (Zonkable a) => Zonkable (Maybe a)
 instance (Zonkable a, Zonkable b) => Zonkable (a, b)
 
@@ -85,3 +89,4 @@ deriving via ZonkIgnored Unique instance Zonkable Unique
 deriving via ZonkIgnored Loc instance Zonkable Loc
 deriving via ZonkIgnored Int instance Zonkable Int
 deriving via ZonkIgnored PrimitiveRep instance Zonkable PrimitiveRep
+deriving via ZonkIgnored Text instance Zonkable Text

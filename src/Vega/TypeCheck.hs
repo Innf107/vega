@@ -18,6 +18,7 @@ import Data.Foldable (foldrM)
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
+import Data.Vector.Strict qualified as Strict
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
 import Effectful.State.Static.Local (evalState, get, put, runState)
 import GHC.Exts (isTrue#, reallyUnsafePtrEquality)
@@ -36,6 +37,8 @@ import Vega.Seq.NonEmpty (NonEmpty (..), toSeq)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.TypeCheck.Zonk (zonk)
 import Vega.Util qualified as Util
+import Vega.VectorMap (VectorMap)
+import Vega.VectorMap qualified as VectorMap
 import Witherable (mapMaybe)
 
 data Env = MkEnv
@@ -86,7 +89,6 @@ type TypeCheckCore es =
     , BindMeta :> es
     )
 
--- TODO: factor out the reference/unique bits so you don't need full IOE
 type TypeCheck es =
     ( GraphPersistence :> es
     , Output DeferredConstraint :> es
@@ -511,6 +513,33 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
                 check env ambientEffect elementType element
 
             pure (TupleLiteral loc elements)
+        RecordLiteral loc fields -> do
+            fieldTypes <-
+                followMetas expectedType >>= \case
+                    Record fieldTypes -> pure fieldTypes
+                    _ -> do
+                        fieldTypes <-
+                            VectorMap.fromList <$> for (toList fields) \(fieldName, _) -> do
+                                type_ <- MetaVar <$> freshTypeMeta "f"
+                                pure (fieldName, type_)
+                        subsumes loc env (Record fieldTypes) expectedType
+                        pure fieldTypes
+
+            let sortedActualFieldNames = sort (fmap fst (toList fields))
+            when (toList (VectorMap.sortedKeys fieldTypes) /= sortedActualFieldNames) do
+                typeError
+                    MismatchedRecordFieldsInLiteral
+                        { loc
+                        , expectedFields = fieldTypes
+                        , actualFields = fromList sortedActualFieldNames
+                        }
+            fields <- for fields \(fieldName, fieldExpr) -> do
+                type_ <- case VectorMap.lookup fieldName fieldTypes of
+                    Just type_ -> pure type_
+                    Nothing -> dummyTypeMeta
+                fieldExpr <- check env ambientEffect type_ fieldExpr
+                pure (fieldName, fieldExpr)
+            pure (RecordLiteral loc fields)
         PartialApplication{} -> deferToInference
         BinaryOperator{} -> deferToInference
         Match{loc, scrutinee, cases} -> do
@@ -620,6 +649,15 @@ infer env ambientEffect expr = do
         TupleLiteral loc elements -> do
             (elementTypes, elements) <- Seq.unzip <$> for elements (infer env ambientEffect)
             pure (Tuple elementTypes, TupleLiteral loc elements)
+        RecordLiteral loc fields -> do
+            fieldsWithTypes <- for fields \(fieldName, fieldExpr) -> do
+                (fieldType, fieldExpr) <- infer env ambientEffect fieldExpr
+                pure (fieldName, fieldType, fieldExpr)
+
+            let type_ = Record $ VectorMap.fromList $ toList $ fmap (\(fieldName, fieldType, _) -> (fieldName, fieldType)) fieldsWithTypes
+            let syntax = RecordLiteral loc (fmap (\(fieldName, _, fieldExpr) -> (fieldName, fieldExpr)) fieldsWithTypes)
+
+            pure (type_, syntax)
         Match{loc, scrutinee, cases} -> do
             (scrutineeType, scrutinee) <- infer env ambientEffect scrutinee
             resultType <- MetaVar <$> freshTypeMeta "a"
@@ -785,8 +823,7 @@ inferType env syntax = do
                             , TypeApplicationS loc typeConstructorSyntax argumentsSyntax
                             )
                     | otherwise -> do
-                        dummyKind <- MetaVar <$> freshMeta "k" Kind
-                        dummyResult <- MetaVar <$> freshMeta "err" dummyKind
+                        dummyResult <- dummyMetaOfUnknownKind
                         typeError
                             ( TypeConstructorAppliedToIncorrectNumberOfArguments
                                 { loc
@@ -856,6 +893,17 @@ inferType env syntax = do
         TupleS loc elements -> do
             (elementReps, elementTypes, elementTypeSyntax) <- unzip3Seq <$> traverse (inferType env) elements
             pure (Type (ProductRep elementReps), Tuple elementTypes, TupleS loc elementTypeSyntax)
+        RecordS loc fields -> do
+            fieldsWithReps <- for fields \(fieldName, fieldType) -> do
+                (fieldRep, fieldType, fieldTypeSyntax) <- inferTypeRep env fieldType
+                pure (fieldName, (fieldRep, fieldType, fieldTypeSyntax))
+            let fieldMap = VectorMap.fromList (toList fieldsWithReps)
+
+            let representation = Type (ProductRep (Util.viaList $ fmap (\(rep, _, _) -> rep) (VectorMap.sortedValues fieldMap)))
+            let type_ = Record (fmap (\(_, type_, _) -> type_) fieldMap)
+            let syntax = RecordS loc (fmap (\(fieldName, (_, _, fieldTypeSyntax)) -> (fieldName, fieldTypeSyntax)) fieldsWithReps)
+
+            pure (representation, type_, syntax)
         RepS loc -> pure (Kind, Rep, RepS loc)
         TypeS loc repSyntax -> do
             (rep, repSyntax) <- checkType env Parametric Rep repSyntax
@@ -919,6 +967,7 @@ kindOf loc env = \case
     Function{} -> pure (Type functionRepresentation)
     TypeFunction{} -> pure Kind
     Tuple elements -> Type . ProductRep <$> traverse (kindOf loc env) elements
+    Record fields -> Type . ProductRep . Util.viaList <$> traverse (kindOf loc env) (VectorMap.sortedValues fields)
     MetaVar meta -> pure meta.kind
     Skolem skolem -> pure skolem.kind
     Pure -> pure Effect
@@ -1039,6 +1088,9 @@ substituteTypeVariables substitution type_ =
         Tuple elements -> do
             elements <- traverse (substituteTypeVariables substitution) elements
             pure (Tuple elements)
+        Record fields -> do
+            fields <- for fields (substituteTypeVariables substitution)
+            pure (Record fields)
         -- Because we ran followMetas on type_, this has to be an unsubstituted MetaVar
         type_@MetaVar{} -> pure type_
         type_@Skolem{} -> pure type_
@@ -1306,6 +1358,12 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
                                 _ <- zipWithSeqM go elements1 elements2
                                 pure ()
                         _ -> unificationFailure
+                    Record fields1 -> case type2 of
+                        Record fields2
+                            | VectorMap.sortedKeys fields1 == VectorMap.sortedKeys fields2 -> do
+                                for_ (Strict.zip (VectorMap.sortedValues fields1) (VectorMap.sortedValues fields2)) \(type1, type2) -> do
+                                    go type1 type2
+                        _ -> unificationFailure
                     Skolem skolem1 -> case type2 of
                         Skolem skolem2
                             | skolem1 == skolem2 -> pure ()
@@ -1407,6 +1465,9 @@ occursAndAdjust meta type_ = do
                 for_ parameters go
                 go result
             Tuple elements -> for_ elements go
+            Record fields -> do
+                for_ (VectorMap.sortedValues fields) \type_ -> do
+                    go type_
             MetaVar foundMeta
                 | meta == foundMeta ->
                     throwError_ ()
@@ -1460,6 +1521,9 @@ dummyMetaOfUnknownKind = do
     trace TypeCheck $ "dummyMetaOfUnknownKind" <+> keyword "~>" <+> pretty dummyMeta <+> keyword ":" <+> pretty metaKind
     pure dummyMeta
 
+dummyTypeMeta :: (TypeCheck es) => Eff es Type
+dummyTypeMeta = MetaVar <$> freshTypeMeta "err"
+
 freshSkolem :: (TypeCheck es) => LocalName -> Monomorphization -> Kind -> Eff es Skolem
 freshSkolem originalName monomorphization kind = do
     identity <- newUnique
@@ -1512,6 +1576,9 @@ solveMonomorphized onMetaVar loc env type_ =
                 go result
             Tuple elements -> do
                 for_ elements go
+            Record fields -> do
+                for_ (VectorMap.sortedValues fields) \type_ -> do
+                    go type_
             Pure -> pure ()
             Rep -> pure ()
             Type rep -> go rep

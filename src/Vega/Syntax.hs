@@ -15,6 +15,8 @@ import GHC.Generics (Generically (..))
 import System.IO.Unsafe (unsafePerformIO)
 import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, lparen, meta, rparen, skolem, (<+>))
 import Vega.Seq.NonEmpty (NonEmpty (..))
+import Vega.VectorMap (VectorMap)
+import Vega.VectorMap qualified as VectorMap
 
 newtype PackageName = MkPackageName Text
     deriving stock (Generic, Eq, Show, Ord)
@@ -182,6 +184,7 @@ data Expr p
     | IntLiteral Loc Integer
     | DoubleLiteral Loc Rational
     | TupleLiteral Loc (Seq (Expr p))
+    | RecordLiteral Loc (NonEmpty (Text, Expr p))
     | BinaryOperator Loc (Expr p) BinaryOperator (Expr p)
     | If
         { loc :: Loc
@@ -318,6 +321,7 @@ data TypeSyntax p
     | PureFunctionS Loc (Seq (TypeSyntax p)) (TypeSyntax p)
     | FunctionS Loc (Seq (TypeSyntax p)) (EffectSyntax p) (TypeSyntax p)
     | TupleS Loc (Seq (TypeSyntax p))
+    | RecordS Loc (NonEmpty (Text, (TypeSyntax p)))
     | -- Kinds
       RepS Loc
     | TypeS Loc (KindSyntax p)
@@ -395,6 +399,7 @@ data Type
     | Function (Seq Type) Effect Type
     | TypeFunction (Seq Type) Type
     | Tuple (Seq Type)
+    | Record (VectorMap Text Type)
     | MetaVar MetaVar
     | Skolem Skolem
     | Pure
@@ -491,6 +496,15 @@ instance Pretty Type where
         Function arguments effect result ->
             prettyArguments arguments <+> keyword "-{" <> pretty effect <> keyword "}>" <+> pretty result
         Tuple elements -> prettyArguments elements
+        Record elements ->
+            lparen "{"
+                <+> intercalateDoc
+                    ", "
+                    ( fmap
+                        (\(key, type_) -> prettyGlobalText VarKind key <+> keyword ":" <+> pretty type_)
+                        (VectorMap.toList elements)
+                    )
+                <+> rparen "}"
         MetaVar meta -> do
             -- We cannot use the usual 'Vega.Effect.Meta.Static.followMetas' here since
             -- that would create an import cycle (and we really don't want to add an hs-boot file

@@ -1,0 +1,6 @@
+
+f : { x : Int, y : Int } -> Int
+f({ y, x }) = x
+
+main : () -> ()
+main() = ()

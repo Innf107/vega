@@ -27,6 +27,7 @@ import Vega.Panic (panic)
 import Vega.Pretty (localIdentText)
 import Vega.Seq.NonEmpty (NonEmpty (..), pattern NonEmpty)
 import Vega.Syntax
+import qualified Vega.Seq.NonEmpty as NonEmpty
 
 type Compile es =
     ( Trace :> es
@@ -103,6 +104,11 @@ compileExpr = \case
     TupleLiteral _ elements -> do
         jsElements <- for elements compileExpr
         pure $ JS.ArrayLiteral jsElements
+    RecordLiteral _ fields -> do
+        jsFields <- for (NonEmpty.toSeq fields) \(name, expr) -> do
+            jsExpr <- compileExpr expr
+            pure (name, jsExpr)
+        pure $ JS.ObjectLiteral jsFields
     BinaryOperator _ left operator right -> do
         leftExpr <- compileExpr left
         rightExpr <- compileExpr right

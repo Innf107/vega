@@ -1,0 +1,6 @@
+
+f : { x : Int, y : Int } -> Int
+f(r) = r.x
+
+main : () -> ()
+main() = ()

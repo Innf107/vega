@@ -345,6 +345,16 @@ type_ =
                             (type_ :<| Empty) -> pure type_
                             parameters -> pure (TupleS loc parameters)
                     ]
+            , do
+                startLoc <- single LBrace
+                let recordField = do
+                        key <- identifier
+                        _ <- single Lexer.Colon
+                        value <- type_
+                        pure (key, value)
+                fields <- recordField `sepBy1` (single Comma <|> semicolon)
+                endLoc <- single RBrace
+                pure (RecordS (startLoc <> endLoc) fields)
             ]
 
 effectArrow :: Parser (EffectSyntax Parsed)
@@ -569,11 +579,7 @@ expr = label "expression" exprLogical
                 _ <- single Lexer.Else
                 elseBranch <- expr
                 pure (Syntax.If{loc = startLoc <> getLoc elseBranch, condition, thenBranch, elseBranch})
-            , do
-                startLoc <- single Lexer.LBrace
-                statements <- fromList <$> statement `sepEndBy` semicolon
-                endLoc <- single Lexer.RBrace
-                pure (SequenceBlock (startLoc <> endLoc) statements)
+            , blockOrRecord
             , do
                 startLoc <- single Lexer.Match
                 scrutinee <- expr
@@ -582,6 +588,34 @@ expr = label "expression" exprLogical
                 endLoc <- single RBrace
                 pure (Syntax.Match{loc = startLoc <> endLoc, scrutinee, cases})
             ]
+
+blockOrRecord :: Parser (Expr Parsed)
+blockOrRecord = do
+    startLoc <- single Lexer.LBrace
+    choice
+        [ do
+            endLoc <- single Lexer.RBrace
+            pure (SequenceBlock (startLoc <> endLoc) mempty)
+        , do
+            firstRecordField <- try recordField
+            rest <- option [] do
+                _ <- single Lexer.Comma
+                recordField `sepEndBy1` (single Lexer.Comma <|> semicolon)
+            -- TODO: error on duplicate keys (here and for record types)
+            endLoc <- single Lexer.RBrace
+            pure (RecordLiteral (startLoc <> endLoc) (NonEmpty.fromNonEmptyList (firstRecordField :| rest)))
+        , do
+            body <- statement `sepEndBy` semicolon
+            endLoc <- single Lexer.RBrace
+            pure (SequenceBlock (startLoc <> endLoc) body)
+        ]
+  where
+    recordField :: Parser (Text, Expr Parsed)
+    recordField = do
+        key <- identifier
+        _ <- single Lexer.Equals
+        value <- expr
+        pure (key, value)
 
 matchCase :: Parser (MatchCase Parsed)
 matchCase = do
