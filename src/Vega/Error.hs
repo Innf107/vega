@@ -119,6 +119,11 @@ data TypeError
         , expectedFields :: VectorMap Text Type
         , actualFields :: Seq Text
         }
+    | MismatchedRecordFieldsInPattern
+        { loc :: Loc
+        , expectedFields :: VectorMap Text Type
+        , actualFields :: Seq Text
+        }
     | ConstructorPatternOfIncorrectNumberOfArgs
         { loc :: Loc
         , actual :: Int
@@ -351,6 +356,18 @@ renderCompilationError = \case
                     emphasis "Tuple literal has" <+> pluralNumber emphasis actual "element" <+> emphasis "but its type expects it to have" <+> number expected
                         <> "\n    The tuple is expected to have type" <+> pretty expectedType
         MismatchedRecordFieldsInLiteral{loc = _, expectedFields, actualFields} -> do
+            let missingFieldsMessage = case toList actualFields List.\\ toList (VectorMap.sortedKeys expectedFields) of
+                    [] -> ""
+                    missingFields -> "\n    Missing fields: " <> intercalateDoc (keyword ", ") (fmap globalIdentText missingFields)
+            let excessiveFieldsMessage = case toList (VectorMap.sortedKeys expectedFields) List.\\ toList actualFields of
+                    [] -> ""
+                    missingFields -> "\n    Excessive fields: " <> intercalateDoc (keyword ", ") (fmap globalIdentText missingFields)
+            align $
+                emphasis "Mismatched record fields in literal."
+                    <> missingFieldsMessage
+                    <> excessiveFieldsMessage
+                    <> "\n    This record is expected to have type" <+> pretty (Record expectedFields)
+        MismatchedRecordFieldsInPattern{loc = _, expectedFields, actualFields} -> do
             let missingFieldsMessage = case toList actualFields List.\\ toList (VectorMap.sortedKeys expectedFields) of
                     [] -> ""
                     missingFields -> "\n    Missing fields: " <> intercalateDoc (keyword ", ") (fmap globalIdentText missingFields)

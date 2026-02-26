@@ -120,6 +120,8 @@ compileSinglePattern pattern_ leaf = case pattern_ of
     TuplePattern _ subPatterns -> do
         let subTree = serializeSubPatternsWithLeaf subPatterns leaf
         TupleCase (length subPatterns) subTree
+    RecordPattern{loc = _, fields} -> do
+        undefined
     TypePattern _ inner _ -> compileSinglePattern inner leaf
     OrPattern _ alternatives -> do
         mergeAll $ fmap (\pattern_ -> compileSinglePattern pattern_ leaf) alternatives

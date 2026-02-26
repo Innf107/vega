@@ -357,6 +357,33 @@ checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <>
             (patterns, envTransformers) <- for2 elementPatterns elementTypes \pattern_ type_ -> do
                 checkPattern env type_ pattern_
             pure (TuplePattern loc patterns, Util.compose envTransformers)
+        RecordPattern loc fieldPatterns -> do
+            fieldTypes <-
+                followMetas expectedType >>= \case
+                    Record fieldTypes -> pure fieldTypes
+                    _ -> do
+                        fieldTypes <-
+                            VectorMap.fromList <$> for (toList fieldPatterns) \(fieldName, _) -> do
+                                type_ <- MetaVar <$> freshTypeMeta "f"
+                                pure (fieldName, type_)
+                        subsumes loc env (Record fieldTypes) expectedType
+                        pure fieldTypes
+
+            let sortedActualFieldNames = sort (fmap fst (toList fieldPatterns))
+            when (toList (VectorMap.sortedKeys fieldTypes) /= sortedActualFieldNames) do
+                typeError
+                    MismatchedRecordFieldsInPattern
+                        { loc
+                        , expectedFields = fieldTypes
+                        , actualFields = fromList sortedActualFieldNames
+                        }
+            (fieldPatterns, envTransformers) <- NonEmpty.unzip <$> for fieldPatterns \(fieldName, fieldPattern) -> do
+                type_ <- case VectorMap.lookup fieldName fieldTypes of
+                    Just type_ -> pure type_
+                    Nothing -> dummyTypeMeta
+                (fieldPattern, envTrans) <- checkPattern env type_ fieldPattern
+                pure ((fieldName, fieldPattern), envTrans)
+            pure (RecordPattern loc fieldPatterns, Util.compose envTransformers)
 
 inferPattern :: (TypeCheck es) => Env -> Pattern Renamed -> Eff es (Pattern Typed, Type, Env -> Env)
 inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadConstructor pattern_) $ case pattern_ of
@@ -432,6 +459,16 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
             unzip3Seq <$> for subPatterns \pattern_ -> do
                 inferPattern env pattern_
         pure (TuplePattern{loc, subPatterns}, Tuple subPatternTypes, Util.compose envTransformers)
+    RecordPattern{loc, fields} -> do
+        fieldsWithTypes <- for fields \(fieldName, subPattern) -> do
+            (subPattern, type_, envTrans) <- inferPattern env subPattern
+            pure (fieldName, (subPattern, type_, envTrans))
+
+        let pattern_ = RecordPattern{loc, fields = fmap (\(name, (subPattern, _, _)) -> (name, subPattern)) fieldsWithTypes}
+        let type_ = Record (VectorMap.fromList $ toList (fmap (\(name, (_, type_, _)) -> (name, type_)) fieldsWithTypes))
+        let envTransformer = Util.compose $ fmap (\(_name, (_, _, transformer)) -> transformer) fieldsWithTypes
+
+        pure (pattern_, type_, envTransformer)
     TypePattern loc innerPattern typeSyntax -> do
         (_kind, type_, typeSyntax) <- inferTypeRep env typeSyntax
         (innerPattern, envTrans) <- checkPattern env type_ innerPattern

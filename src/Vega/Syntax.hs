@@ -270,6 +270,10 @@ data Pattern p
         { loc :: Loc
         , subPatterns :: Seq (Pattern p)
         }
+    | RecordPattern
+        { loc :: Loc
+        , fields :: NonEmpty (Text, Pattern p)
+        }
     | TypePattern Loc (Pattern p) (TypeSyntax p)
     | OrPattern Loc (NonEmpty (Pattern p))
     deriving stock (Generic)

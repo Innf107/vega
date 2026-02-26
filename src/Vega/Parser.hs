@@ -485,9 +485,20 @@ pattern_ = do
                     (pattern_ :<| Empty) -> pure pattern_
                     _ -> pure $ TuplePattern loc patterns
             , do
+                startLoc <- single LBrace
+                fields <- recordField `sepBy1` (single Comma <|> semicolon)
+                endLoc <- single RBrace
+                pure (RecordPattern (startLoc <> endLoc) fields)
+            , do
                 loc <- single Underscore
                 pure (WildcardPattern loc)
             ]
+            where
+                recordField = do
+                    fieldName <- identifier
+                    _ <- single Colon
+                    fieldPattern <- pattern_
+                    pure (fieldName, fieldPattern)
 
 expr :: Parser (Expr Parsed)
 expr = label "expression" exprLogical

@@ -20,6 +20,7 @@ import Vega.Effect.Output.Static.Local qualified as Output
 import Vega.Effect.Output.Static.Local.HashSet qualified as Output.HashSet
 import Vega.Error (RenameError (..), RenameErrorSet (..))
 import Vega.Loc (Loc)
+import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Util (mapAccumLM)
 import Vega.Util qualified as Util
 
@@ -325,6 +326,12 @@ renamePattern env = \case
     TuplePattern loc subPatterns -> do
         (subPatterns, transformers) <- Seq.unzip <$> traverse (renamePattern env) subPatterns
         pure (TuplePattern loc subPatterns, Util.compose transformers)
+    RecordPattern loc fields -> do
+        (fields, transformers) <-
+            NonEmpty.unzip <$> for fields \(name, pattern_) -> do
+                (pattern_, transformer) <- renamePattern env pattern_
+                pure ((name, pattern_), transformer)
+        pure (RecordPattern loc fields, Util.compose transformers)
     TypePattern loc innerPattern type_ -> do
         (innerPattern, innerTrans) <- renamePattern env innerPattern
         type_ <- renameTypeSyntax env type_
