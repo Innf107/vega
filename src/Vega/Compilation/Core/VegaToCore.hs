@@ -34,7 +34,7 @@ import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 import Vega.Effect.Meta.Static (BindMeta, ReadMeta, followMetasWithoutPathCompression, runMeta)
 import Vega.Effect.Meta.Static qualified as Meta
-import Vega.Effect.Trace (Category (Patterns), Trace, trace)
+import Vega.Effect.Trace (Category (CoreRep, Patterns), Trace, trace, withTrace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
 import Vega.Panic (panic)
 import Vega.Pretty (align, indent, intercalateDoc, keyword, pretty, (<+>))
@@ -83,7 +83,7 @@ compileDeclarationSyntax ::
     Vega.DeclarationName ->
     Vega.DeclarationSyntax Typed ->
     Eff es (Seq Core.Declaration)
-compileDeclarationSyntax declarationName = \case
+compileDeclarationSyntax _declarationName = \case
     Vega.DefineFunction{ext, name, typeSignature = _, declaredTypeParameters = _, parameters, body} -> do
         monomorphizableRepresentationVariables <- extractMonomorphizableRepresentationVariables ext.forallBinders
         let (env, representationParameters) = envAndLimitFromRepresentationVariables monomorphizableRepresentationVariables
@@ -454,8 +454,8 @@ booleanConstructorName False = Vega.Global (Vega.internalName "False")
 This is mostly blind unwrapping and following meta variables, except for the case for unbound meta variables where
 we give them representation `Unit` (which is like defaulting them to `()` but friendlier for error messages)
 -}
-convertRepresentation :: (Compile es) => Vega.Type -> Eff es Core.Representation
-convertRepresentation type_ = do
+convertRepresentation :: (HasCallStack, Compile es) => Vega.Type -> Eff es Core.Representation
+convertRepresentation type_ = withTrace CoreRep ("convertRepresentation: " <> pretty type_) do
     let invalidKind = panic $ "Invalid representation in conversion to Core: " <> pretty type_ <> "\n    This should have been caught in the type checker."
     followMetasWithoutPathCompression type_ >>= \case
         Vega.MetaVar{} -> pure $ Core.ProductRep []

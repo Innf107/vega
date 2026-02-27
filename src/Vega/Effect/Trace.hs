@@ -39,6 +39,7 @@ data Category
     | Patterns
     | ImportScope
     | Reachable
+    | CoreRep
     deriving (Generic, Show, Enum, Bounded)
 
 data Trace :: Effect where
@@ -67,6 +68,7 @@ data Traces = MkTraces
     , patterns :: Bool
     , importScope :: Bool
     , reachable :: Bool
+    , coreRepresentations :: Bool
     }
 
 defaultTraces :: Traces
@@ -85,6 +87,7 @@ defaultTraces =
         , patterns = False
         , importScope = False
         , reachable = False
+        , coreRepresentations = False
         }
 
 categoryWidth :: Traces -> Int
@@ -132,6 +135,7 @@ traceEnabledIn category enabledTraces = case category of
     Patterns -> enabledTraces.patterns
     ImportScope -> enabledTraces.importScope
     Reachable -> enabledTraces.reachable
+    CoreRep -> enabledTraces.coreRepresentations
 
 getTraces :: (MonadIO io) => io Traces
 getTraces =
@@ -157,6 +161,7 @@ getTraces =
         ("patterns" : rest) -> go (traces{patterns = True}) rest
         ("import-scope" : rest) -> go (traces{importScope = True}) rest
         ("reachable" : rest) -> go (traces{reachable = True}) rest
+        ("core-representations" : rest) -> go (traces{coreRepresentations = True}) rest
         (trace_ : rest) -> do
             -- TODO: make the warning prettier
             putTextLn $ "WARNING: unrecognized trace category: " <> trace_

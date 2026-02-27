@@ -377,12 +377,13 @@ checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <>
                         , expectedFields = fieldTypes
                         , actualFields = fromList sortedActualFieldNames
                         }
-            (fieldPatterns, envTransformers) <- NonEmpty.unzip <$> for fieldPatterns \(fieldName, fieldPattern) -> do
-                type_ <- case VectorMap.lookup fieldName fieldTypes of
-                    Just type_ -> pure type_
-                    Nothing -> dummyTypeMeta
-                (fieldPattern, envTrans) <- checkPattern env type_ fieldPattern
-                pure ((fieldName, fieldPattern), envTrans)
+            (fieldPatterns, envTransformers) <-
+                NonEmpty.unzip <$> for fieldPatterns \(fieldName, fieldPattern) -> do
+                    type_ <- case VectorMap.lookup fieldName fieldTypes of
+                        Just type_ -> pure type_
+                        Nothing -> dummyTypeMeta
+                    (fieldPattern, envTrans) <- checkPattern env type_ fieldPattern
+                    pure ((fieldName, fieldPattern), envTrans)
             pure (RecordPattern loc fieldPatterns, Util.compose envTransformers)
 
 inferPattern :: (TypeCheck es) => Env -> Pattern Renamed -> Eff es (Pattern Typed, Type, Env -> Env)
@@ -1003,8 +1004,12 @@ kindOf loc env = \case
         kindOf loc innerEnv body
     Function{} -> pure (Type functionRepresentation)
     TypeFunction{} -> pure Kind
-    Tuple elements -> Type . ProductRep <$> traverse (kindOf loc env) elements
-    Record fields -> Type . ProductRep . Util.viaList <$> traverse (kindOf loc env) (VectorMap.sortedValues fields)
+    Tuple elements -> do
+        elementRepresentations <- traverse (representationOfType loc env) elements
+        pure $ Type (ProductRep elementRepresentations)
+    Record fields -> do
+        fieldRepresentations <- traverse (representationOfType loc env) (VectorMap.sortedValues fields)
+        pure $ Type (ProductRep (Util.viaList fieldRepresentations))
     MetaVar meta -> pure meta.kind
     Skolem skolem -> pure skolem.kind
     Pure -> pure Effect

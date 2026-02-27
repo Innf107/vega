@@ -493,12 +493,16 @@ pattern_ = do
                 loc <- single Underscore
                 pure (WildcardPattern loc)
             ]
-            where
-                recordField = do
-                    fieldName <- identifier
-                    _ <- single Colon
+      where
+        recordField = do
+            (fieldName, loc) <- identifierWithLoc
+            choice
+                [ do
+                    _ <- single Equals
                     fieldPattern <- pattern_
                     pure (fieldName, fieldPattern)
+                , pure (fieldName, VarPattern{loc, ext = (), name = fieldName, isShadowed = False})
+                ]
 
 expr :: Parser (Expr Parsed)
 expr = label "expression" exprLogical
