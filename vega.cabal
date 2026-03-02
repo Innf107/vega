@@ -33,10 +33,11 @@ library
       Vega.Compilation.JavaScript.Assemble
       Vega.Compilation.JavaScript.Syntax
       Vega.Compilation.JavaScript.VegaToJavaScript
+      Vega.Compilation.LLVM.Layout
+      Vega.Compilation.LLVM.MIRToLLVM
       Vega.Compilation.MIR.CoreToMIR
       Vega.Compilation.MIR.Syntax
       Vega.Compilation.MIR.Verify
-      Vega.Compilation.MIRToLLVM
       Vega.Compilation.PatternMatching
       Vega.Debruijn
       Vega.Debug

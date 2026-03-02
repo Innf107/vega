@@ -4,7 +4,7 @@
 -- ImplicitParams with do blocks quite a lot here and we don't actually need ApplicativeDo
 {-# LANGUAGE NoApplicativeDo #-}
 
-module Vega.Compilation.MIRToLLVM where
+module Vega.Compilation.LLVM.MIRToLLVM where
 
 import Relude hiding (State, evalState, get, modify, put)
 
@@ -20,12 +20,14 @@ import LLVM.Core qualified as LLVM
 import LLVM.InstructionBuilder qualified as LLVMBuilder
 import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
+import Vega.Compilation.LLVM.Layout (Layout)
+import Vega.Compilation.LLVM.Layout qualified as Layout
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Panic (panic)
 import Vega.Pretty (pretty)
 import Vega.Syntax (renderPackageName)
 import Vega.Syntax qualified as Vega
-import Vega.Util (viaList)
+import Vega.Util (forIndexed_, viaList)
 
 data DeclarationState = MkDeclarationState
     { registeredBlocks :: HashMap MIR.BlockDescriptor LLVM.BasicBlock
@@ -33,7 +35,11 @@ data DeclarationState = MkDeclarationState
     , variableMappings :: HashMap MIR.Variable LLVM.Value
     }
 
-type Compile es = (?context :: LLVM.Context, IOE :> es, ?function :: LLVM.Value, State DeclarationState :> es)
+data FunctionEnv = MkFunctionEnv
+    { sretVariable :: Maybe (LLVM.Value, Layout)
+    }
+
+type Compile es = (?context :: LLVM.Context, IOE :> es, ?function :: LLVM.Value, ?functionEnv :: FunctionEnv, State DeclarationState :> es)
 
 compile :: (IOE :> es) => MIR.Program -> Eff es LLVM.Module
 compile program = do
@@ -61,10 +67,32 @@ compileDeclaration module_ = \case
         , init
         , blocks
         } -> do
-            parameterTypes <- viaList <$> for parameters \(_, representation) -> llvmParameterLayout representation
-            returnType <- llvmReturnLayout returnRepresentation
-            function <- liftIO $ LLVM.addFunction module_ (renderLLVMName name) (LLVM.functionType parameterTypes returnType False)
+            returnLayout <- Layout.representationLayout returnRepresentation
+
+            baseParameterTypes <-
+                for parameters \(_, representation) ->
+                    Layout.llvmParameterType <$> Layout.representationLayout representation
+
+            (parameterTypes, returnType, usesSRet) <- case Layout.kind returnLayout of
+                Layout.AggregatePointer -> do
+                    -- If we return a complex (AggregatePointer) value, we can't return it directly
+                    -- but instead we need to assign it to an sret parameter. By convention, this is
+                    -- always our *last* parameter
+                    --
+                    -- TODO: add an sret attribute (and alignment??)
+                    pure (baseParameterTypes :|> LLVM.pointerType, LLVM.voidType, True)
+                Layout.LLVMScalar scalar -> pure (baseParameterTypes, scalar, False)
+
+            function <- liftIO $ LLVM.addFunction module_ (renderLLVMName name) (LLVM.functionType (viaList parameterTypes) returnType False)
             let ?function = function
+            let ?functionEnv =
+                    MkFunctionEnv
+                        { sretVariable =
+                            if usesSRet
+                                -- The sret parameter is always the last one
+                                then Just (LLVM.getParam function (length parameterTypes - 1), returnLayout)
+                                else Nothing
+                        }
 
             builder <- liftIO LLVMBuilder.createBuilder
 
@@ -111,16 +139,40 @@ compilePhis builder (MIR.MkPhis phis) = do
                 value <- lookupVar variable
                 block <- lookupBlock block
                 pure (value, block)
-        asVar targetVar $ LLVMBuilder.buildPhi builder undefined incomingValues
-
+        asVar_ targetVar $ LLVMBuilder.buildPhi builder undefined incomingValues
 
 compileInstruction :: (Compile es) => LLVMBuilder.Builder -> MIR.Instruction -> Eff es ()
 compileInstruction builder = \case
+    MIR.ProductConstructor{var, values, representation} -> do
+        llvmValues <- for values lookupVar
+        layout <- Layout.representationLayout representation
+
+        productPointer <- asVar var (LLVMBuilder.buildAlloca builder (Layout.llvmType layout))
+
+        forIndexed_ llvmValues \value index -> do
+            let (offset, _subLayout) = Layout.productOffsetAndLayout index layout
+            pointer <- case offset of
+                0 -> pure productPointer
+                _ -> do
+                    liftIO $ LLVMBuilder.buildGetElementPtr builder LLVM.int8Type productPointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] ""
+            _ <- liftIO $ LLVMBuilder.buildStore builder pointer value
+            pure ()
     _ -> undefined
 
 compileTerminator :: (Compile es) => LLVMBuilder.Builder -> MIR.Terminator -> Eff es ()
 compileTerminator builder = \case
-    MIR.Return variable -> undefined
+    MIR.Return variable -> do
+        value <- lookupVar variable
+
+        case ?functionEnv.sretVariable of
+            Nothing -> do
+                _ <- liftIO $ LLVMBuilder.buildRet builder value
+                pure ()
+            Just (target, returnLayout) -> do
+                -- The sret parameter is always the last parameter
+                _ <- liftIO $ LLVMBuilder.buildMemCpy builder target 0 value 0 (LLVM.constInt LLVM.int64Type (fromIntegral (Layout.size returnLayout)) False)
+                _ <- liftIO $ LLVMBuilder.buildRetVoid builder
+                pure ()
     _ -> undefined
 
 registerNewBlock :: (Compile es) => MIR.BlockDescriptor -> Eff es LLVM.BasicBlock
@@ -138,17 +190,18 @@ registerNewBlock descriptor = do
                 )
             pure llvmBlock
 
-data Layout = MkLayout
-    { size :: Int
-    , alignment :: Int
-    , llvmType :: LLVM.Type
-    }
-
-asVar :: (Compile es) => MIR.Variable -> (Text -> IO LLVM.Value) -> Eff es ()
+asVar :: (Compile es) => MIR.Variable -> (Text -> IO LLVM.Value) -> Eff es LLVM.Value
 asVar var cont = do
     llvmValue <- liftIO $ cont (renderVariable var)
 
     modify (\state -> state{variableMappings = HashMap.insert var llvmValue state.variableMappings})
+
+    pure llvmValue
+
+asVar_ :: (Compile es) => MIR.Variable -> (Text -> IO LLVM.Value) -> Eff es ()
+asVar_ var cont = do
+    _ <- asVar var cont
+    pure ()
 
 lookupVar :: (HasCallStack, Compile es) => MIR.Variable -> Eff es LLVM.Value
 lookupVar variable = do
@@ -165,42 +218,10 @@ lookupBlock block = do
         Just value -> pure value
 
 renderVariable :: MIR.Variable -> Text
-renderVariable (MIR.MkVariable var) = show var
-
-representationLayout :: (Compile es) => Representation -> Eff es Layout
-representationLayout = \case
-    Core.PrimitiveRep primitive -> case primitive of
-        Vega.IntRep -> pure (MkLayout{size = 8, alignment = 8, llvmType = LLVM.int64Type})
-        Vega.BoxedRep -> pure (MkLayout{size = 8, alignment = 8, llvmType = LLVM.pointerType})
-        _ -> undefined
-    _ -> undefined
+renderVariable (MIR.MkVariable var) = "x" <> show var
 
 -- TODO: consider using more standard name mangling i guess
 renderLLVMName :: Core.CoreName -> Text
 renderLLVMName = \case
     Core.Global name -> "_vega_" <> renderPackageName name.moduleName.package <> ":" <> Text.intercalate "/" (toList (name.moduleName.subModules)) <> ":" <> name.name
     Core.Local _ -> undefined
-
-llvmParameterLayout :: (?context :: LLVM.Context) => Representation -> Eff es LLVM.Type
-llvmParameterLayout representation = case representation of
-    Core.PrimitiveRep primitive -> primitiveLayout primitive
-    Core.ProductRep inner -> undefined
-    Core.SumRep{} -> undefined
-    _ -> undefined
-
-llvmReturnLayout :: (?context :: LLVM.Context) => Representation -> Eff es LLVM.Type
-llvmReturnLayout representation = case representation of
-    Core.PrimitiveRep primitive -> primitiveLayout primitive
-    Core.ProductRep [] -> pure $ LLVM.voidType
-    Core.ProductRep inner -> undefined
-    Core.SumRep{} -> undefined
-    _ -> undefined
-
-primitiveLayout :: (?context :: LLVM.Context) => Vega.PrimitiveRep -> Eff es LLVM.Type
-primitiveLayout = \case
-    Vega.UnitRep -> pure $ LLVM.structType [] False
-    Vega.EmptyRep -> pure LLVM.voidType
-    -- TODO: we might be able to give heap pointers a different address space from unmanaged pointers?
-    Vega.BoxedRep -> pure $ LLVM.pointerType
-    Vega.IntRep -> pure $ LLVM.int64Type
-    Vega.DoubleRep -> pure $ LLVM.doubleType

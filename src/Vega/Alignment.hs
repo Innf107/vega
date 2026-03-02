@@ -1,6 +1,7 @@
-module Vega.Alignment (Alignment, fromExponent, align) where
+module Vega.Alignment (Alignment, fromExponent, fromValue, align) where
 
 import Data.Bits (complement, shiftL, (.&.))
+import Data.Bits qualified as Bits
 import Relude
 import Vega.Pretty (Pretty, number, pretty)
 
@@ -9,6 +10,9 @@ newtype Alignment = MkAlignment {exponent :: Int}
 
 fromExponent :: Int -> Alignment
 fromExponent exponent = MkAlignment{exponent}
+
+fromValue :: Int -> Alignment
+fromValue value = MkAlignment (Bits.countLeadingZeros value - Bits.finiteBitSize value)
 
 align :: Alignment -> Int -> Int
 align MkAlignment{exponent} value = do
