@@ -347,6 +347,9 @@ type_ =
                 (name, loc) <- identifierWithLoc
                 pure $ TypeVarS loc name
             , do
+                (literal, loc) <- intLit
+                pure $ TypeIntLiteral loc literal
+            , do
                 (parameters, loc) <- argumentsWithLoc type_
                 choice
                     [ do

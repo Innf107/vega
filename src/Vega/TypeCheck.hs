@@ -39,7 +39,7 @@ import Vega.Panic (panic)
 import Vega.Pretty (align, emphasis, errorText, keyword, note, pretty, (<+>))
 import Vega.Seq.NonEmpty (NonEmpty (..), toSeq)
 import Vega.Seq.NonEmpty qualified as NonEmpty
-import Vega.TypeCheck.IntSum (freshIntSum, readIntSum, asIntSumMaybe, asIntSum)
+import Vega.TypeCheck.IntSum (asIntSum, asIntSumMaybe, freshIntSum, readIntSum)
 import Vega.TypeCheck.IntSum qualified as IntSum
 import Vega.TypeCheck.Zonk (zonk)
 import Vega.Util qualified as Util
@@ -1114,7 +1114,6 @@ splitFunctionType loc env expectedParameterCount type_ = do
             subsumes loc env type_ (Function parameters effect result)
             pure (parameters, effect, result, Nothing)
 
-
 representationOfType :: (TypeCheck es) => Loc -> Env -> Type -> Eff es Kind
 representationOfType loc env type_ =
     kindOf loc env type_ >>= \case
@@ -1654,28 +1653,30 @@ solveIntSum loc env sum = do
     (literal, metas, skolems, variables) <- IntSum.readIntSum shouldBeZero
     -- The easiest case: we are either already done or we don't have any unification variablees
     -- and so can't solve anything anyway.
-    if literal == 0 && metas == [] && skolems == [] && variables == [] then
-        pure ()
-    else if metas == [] then
-        -- TODO: include the original equation here
-        typeError (UnableToSolveIntegerSum loc sum)
-    else
-        case find (\(_, multiplicity) -> multiplicity == 1) (MultiSet.toMultiplicityList metas) of
-            Just (singleMeta, _) -> do
-                -- The easy case: we have a singular unification variable that we can use to
-                -- cancel out everything else
+    if literal == 0 && metas == [] && skolems == [] && variables == []
+        then
+            pure ()
+        else
+            if metas == []
+                then
+                    -- TODO: include the original equation here
+                    typeError (UnableToSolveIntegerSum loc sum)
+                else case find (\(_, multiplicity) -> multiplicity == 1 || multiplicity == -1) (MultiSet.toMultiplicityList metas) of
+                    Just (singleMeta, multiplicity) -> do
+                        -- The easy case: we have a singular unification variable that we can use to
+                        -- cancel out everything else
+                        everythingElse <- freshIntSum literal (MultiSet.deleteAll singleMeta metas) skolems variables
 
-                inverseOfEverythingElse <-
-                    freshIntSum
-                        -literal
-                        (MultiSet.negate (MultiSet.deleteAll singleMeta metas))
-                        (MultiSet.negate skolems)
-                        (MultiSet.negate variables)
-                bindMeta loc env singleMeta (IntSum inverseOfEverythingElse)
-            Nothing -> do
-                -- The difficult case.
-                -- This might still be solvable but it depends on the interplay of several unification variables
-                undefined
+                        inverseOfEverythingElse <-
+                            if multiplicity == 1
+                                then IntSum.scale (-1) everythingElse
+                                else pure everythingElse
+
+                        bindMeta loc env singleMeta (IntSum inverseOfEverythingElse)
+                    Nothing -> do
+                        -- The difficult case.
+                        -- This might still be solvable but it depends on the interplay of several unification variables
+                        undefined
 
 solveMonomorphized :: (TypeCheckCore es) => (MetaVar -> Eff es ()) -> Loc -> Env -> Type -> Eff es ()
 solveMonomorphized onMetaVar loc env type_ =
