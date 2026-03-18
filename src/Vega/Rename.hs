@@ -276,6 +276,14 @@ renameTypeSyntax env = \case
             type_ <- renameTypeSyntax env type_
             pure (name, type_)
         pure (RecordS loc fields)
+    TypeIntLiteral loc literal -> pure (TypeIntLiteral loc literal)
+    TypeOperator loc left operator right -> do
+        left <- renameTypeSyntax env left
+        right <- renameTypeSyntax env right
+        pure (TypeOperator loc left operator right)
+    TypeLiteralMultiply loc literal type_ -> do
+        type_ <- renameTypeSyntax env type_
+        pure (TypeLiteralMultiply loc literal type_)
     RepS loc -> pure (RepS loc)
     TypeS loc repKind -> do
         repKind <- renameKindSyntax env repKind
@@ -291,6 +299,7 @@ renameTypeSyntax env = \case
         inner <- renameTypeSyntax env inner
         pure (ArrayRepS loc inner)
     PrimitiveRepS loc rep -> pure (PrimitiveRepS loc rep)
+    IntegerS loc -> pure (IntegerS loc)
     KindS loc -> pure (KindS loc)
 
 renameKindSyntax :: (Rename es) => Env -> KindSyntax Parsed -> Eff es (KindSyntax Renamed)

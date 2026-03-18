@@ -27,6 +27,7 @@ data AdditionalParseError
     | UnknowNamedKind Loc Text
     | NonVarInFunctionDefinition Loc
     | InvalidExistentialBinder (ForallBinderS Parsed)
+    | NonLiteralMultiplication {loc :: Loc}
     deriving stock (Eq, Ord, Generic)
     deriving anyclass (HasLoc)
 
@@ -282,8 +283,27 @@ type_ =
     typeWithExistential =
         choice
             [ exists
-            , typeWithApplication
+            , typeWithOperator
             ]
+
+    typeWithOperator =
+        chainl1
+            typeWithApplication
+            ( choice
+                [ single Plus *> pure (\type1 type2 -> TypeOperator (getLoc type1 <> getLoc type2) type1 TypeAdd type2)
+                , single Minus *> pure (\type1 type2 -> TypeOperator (getLoc type1 <> getLoc type2) type1 TypeSubtract type2)
+                , typeLiteralMultiply
+                ]
+            )
+    typeLiteralMultiply =
+        single Asterisk
+            *> pure
+                ( \type1 type2 -> case (type1, type2) of
+                    (TypeIntLiteral _ n, other) -> TypeLiteralMultiply (getLoc type1 <> getLoc type2) n other
+                    (other, TypeIntLiteral _ n) -> TypeLiteralMultiply (getLoc type1 <> getLoc type2) n other
+                    _ -> undefined -- TODO: this should use NonLiteralMultiplication but we can't actually do that here
+                    -- because chainl1 needs to return a pure function
+                )
 
     typeWithApplication = do
         typeConstructor <- typeLeaf
@@ -316,6 +336,7 @@ type_ =
                                 "Boxed" -> PrimitiveRepS loc BoxedRep
                                 "IntRep" -> PrimitiveRepS loc IntRep
                                 "Kind" -> KindS loc
+                                "Integer" -> IntegerS loc
                                 _ -> TypeConstructorS loc name
                         pure $
                             foldl'

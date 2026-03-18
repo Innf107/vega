@@ -49,7 +49,9 @@ ghc-options:
 - -Werror=incomplete-patterns
 - -Wno-ambiguous-fields
 - -fno-show-error-context
+- -fno-show-valid-hole-fits
 - -fmax-relevant-binds=0
+- -fdefer-diagnostics
 
 library:
   source-dirs: src

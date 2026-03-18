@@ -2,25 +2,30 @@
 
 module Vega.Diff (DiffChange (..), Diff (..), diffDeclarations, reportNewModule) where
 
-import Relude hiding (Type, evalState, get, put, NonEmpty)
+import Relude hiding (NonEmpty, Type, evalState, get, put)
 
 import Vega.Syntax (
     BinaryOperator,
+    BinderVisibility,
     Declaration (name),
     DeclarationName (..),
     DeclarationSyntax,
     Expr,
+    ForallBinderS,
     GlobalName,
     LocalName,
     MatchCase,
     ModuleName (..),
+    Monomorphization,
     Name,
+    PackageName,
     ParsedModule (MkParsedModule, declarations),
     Pass (..),
     Pattern,
+    PrimitiveRep,
     Statement,
+    TypeOperator,
     TypeSyntax,
-    ForallBinderS, Monomorphization, BinderVisibility, PackageName, PrimitiveRep,
  )
 
 import Effectful
@@ -32,8 +37,8 @@ import Vega.Loc (Loc)
 import Data.Sequence qualified as Seq
 import Effectful.State.Static.Local (evalState, get, put)
 import Vega.Effect.Output.Static.Local (execOutputSeq, output, outputAll)
-import Vega.Util qualified as Util
 import Vega.Seq.NonEmpty (NonEmpty, toSeq)
+import Vega.Util qualified as Util
 
 data DiffChange
     = Added (Declaration Parsed)
@@ -97,8 +102,9 @@ instance Diff (IgnoredInDiff a) where
     diff _ _ = False
 
 class Diff a where
-    -- | Check if two values differ *for the purposes of recompilation checking*. In particular, this will
-    --         *ignore* source locations and other meta data
+    {- | Check if two values differ *for the purposes of recompilation checking*. In particular, this will
+        *ignore* source locations and other meta data
+    -}
     diff :: a -> a -> Bool
 
 instance (Diff a) => Diff (Seq a) where
@@ -106,7 +112,7 @@ instance (Diff a) => Diff (Seq a) where
         (Seq.length seq1 /= Seq.length seq2)
             || Util.seqAny2 diff seq1 seq2
 
-instance Diff a => Diff (NonEmpty a) where
+instance (Diff a) => Diff (NonEmpty a) where
     diff seq1 seq2 = diff (toSeq seq1) (toSeq seq2)
 
 deriving via Generically (Maybe a) instance (Diff a) => Diff (Maybe a)
@@ -141,5 +147,6 @@ deriving via DiffFromEq Integer instance Diff Integer
 deriving via DiffFromEq Rational instance Diff Rational
 deriving via DiffFromEq () instance Diff ()
 deriving via DiffFromEq Bool instance Diff Bool
+deriving via DiffFromEq TypeOperator instance Diff TypeOperator
 
 deriving via IgnoredInDiff Loc instance Diff Loc

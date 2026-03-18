@@ -15,10 +15,12 @@ import Vega.Effect.GraphPersistence (CachedType (..), GraphData (..), GraphPersi
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 
 import Data.Foldable (foldrM)
+import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Data.Vector.Strict qualified as Strict
+import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
 import Effectful.State.Static.Local (evalState, get, put, runState)
 import GHC.Exts (isTrue#, reallyUnsafePtrEquality)
@@ -31,10 +33,14 @@ import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutput
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
 import Vega.Loc (HasLoc (getLoc), Loc)
+import Vega.MultiSet (MultiSet)
+import Vega.MultiSet qualified as MultiSet
 import Vega.Panic (panic)
 import Vega.Pretty (align, emphasis, errorText, keyword, note, pretty, (<+>))
 import Vega.Seq.NonEmpty (NonEmpty (..), toSeq)
 import Vega.Seq.NonEmpty qualified as NonEmpty
+import Vega.TypeCheck.IntSum (freshIntSum, readIntSum, asIntSumMaybe, asIntSum)
+import Vega.TypeCheck.IntSum qualified as IntSum
 import Vega.TypeCheck.Zonk (zonk)
 import Vega.Util qualified as Util
 import Vega.VectorMap (VectorMap)
@@ -937,11 +943,45 @@ inferType env syntax = do
                 pure (fieldName, (fieldRep, fieldType, fieldTypeSyntax))
             let fieldMap = VectorMap.fromList (toList fieldsWithReps)
 
-            let representation = Type (ProductRep (Util.viaList $ fmap (\(rep, _, _) -> rep) (VectorMap.sortedValues fieldMap)))
+            let kind = Type (ProductRep (Util.viaList $ fmap (\(rep, _, _) -> rep) (VectorMap.sortedValues fieldMap)))
             let type_ = Record (fmap (\(_, type_, _) -> type_) fieldMap)
             let syntax = RecordS loc (fmap (\(fieldName, (_, _, fieldTypeSyntax)) -> (fieldName, fieldTypeSyntax)) fieldsWithReps)
 
-            pure (representation, type_, syntax)
+            pure (kind, type_, syntax)
+        TypeIntLiteral loc integer -> do
+            sum <- freshIntSum (fromIntegral integer) mempty mempty mempty
+            pure (Integer, IntSum sum, TypeIntLiteral loc integer)
+        TypeOperator loc left operator right -> do
+            (leftType, left) <- checkType env Parametric Integer left
+            (rightType, right) <- checkType env Parametric Integer right
+            (leftLiteral, leftMetas, leftSkolems, leftVariables) <- readIntSum =<< asIntSum (getLoc left) leftType
+            (rightLiteral, rightMetas, rightSkolems, rightVariables) <- readIntSum =<< asIntSum (getLoc right) rightType
+            sum <- case operator of
+                TypeAdd ->
+                    freshIntSum
+                        (leftLiteral + rightLiteral)
+                        (leftMetas <> rightMetas)
+                        (leftSkolems <> rightSkolems)
+                        (leftVariables <> rightVariables)
+                TypeSubtract ->
+                    freshIntSum
+                        (leftLiteral - rightLiteral)
+                        (leftMetas <> MultiSet.negate rightMetas)
+                        (leftSkolems <> MultiSet.negate rightSkolems)
+                        (leftVariables <> MultiSet.negate rightVariables)
+            pure (Integer, IntSum sum, TypeOperator loc left operator right)
+        TypeLiteralMultiply loc factor inner -> do
+            (innerType, inner) <- checkType env Parametric Integer inner
+            (literal, metas, skolems, variables) <- readIntSum =<< asIntSum (getLoc inner) innerType
+            -- TODO: throw an error if the factor is out of bounds of an Int
+            let intFactor = fromInteger factor
+            sum <-
+                freshIntSum
+                    (intFactor * literal)
+                    (MultiSet.mapMultiplicity (* intFactor) metas)
+                    (MultiSet.mapMultiplicity (* intFactor) skolems)
+                    (MultiSet.mapMultiplicity (* intFactor) variables)
+            pure (Integer, IntSum sum, TypeLiteralMultiply loc factor inner)
         RepS loc -> pure (Kind, Rep, RepS loc)
         TypeS loc repSyntax -> do
             (rep, repSyntax) <- checkType env Parametric Rep repSyntax
@@ -957,6 +997,7 @@ inferType env syntax = do
             (inner, innerSyntax) <- checkType env Parametric Rep inner
             pure (Rep, ArrayRep inner, ArrayRepS loc innerSyntax)
         PrimitiveRepS loc rep -> pure (Rep, PrimitiveRep rep, PrimitiveRepS loc rep)
+        IntegerS loc -> pure (Kind, Integer, IntegerS loc)
         KindS loc -> pure (Kind, Kind, KindS loc)
 
 inferTypeRep :: (TypeCheck es) => Env -> TypeSyntax Renamed -> Eff es (Kind, Type, TypeSyntax Typed)
@@ -1013,6 +1054,7 @@ kindOf loc env = \case
     MetaVar meta -> pure meta.kind
     Skolem skolem -> pure skolem.kind
     Pure -> pure Effect
+    IntSum{} -> pure Integer
     Rep -> pure Kind
     Type{} -> pure Kind
     Effect -> pure Kind
@@ -1020,6 +1062,7 @@ kindOf loc env = \case
     ProductRep{} -> pure Rep
     ArrayRep{} -> pure Rep
     PrimitiveRep{} -> pure Rep
+    Integer -> pure Kind
     Kind -> pure Kind
 
 -- | Like checkType but on evaluated `Type`s rather than TypeSyntax
@@ -1086,6 +1129,7 @@ splitFunctionType loc env expectedParameterCount type_ = do
             subsumes loc env type_ (Function parameters effect result)
             pure (parameters, effect, result, Nothing)
 
+
 representationOfType :: (TypeCheck es) => Loc -> Env -> Type -> Eff es Kind
 representationOfType loc env type_ =
     kindOf loc env type_ >>= \case
@@ -1137,6 +1181,21 @@ substituteTypeVariables substitution type_ =
         type_@MetaVar{} -> pure type_
         type_@Skolem{} -> pure type_
         type_@Pure -> pure type_
+        type_@(IntSum sum) -> do
+            (literal, metas, skolems, variables) <- readIntSum sum
+            if not (any (`MultiSet.member` variables) (HashMap.keys substitution))
+                then
+                    pure type_
+                else do
+                    let (substituted, remaining) = MultiSet.partition (`HashMap.member` substitution) variables
+                    substitutedSums <- for (MultiSet.toMultiplicityList substituted) \(var, count) -> do
+                        IntSum.scale count =<< asIntSum undefined (substitution HashMap.! var)
+
+                    substitutedSum <- foldlM IntSum.add IntSum.zero substitutedSums
+
+                    remainingSum <- freshIntSum literal metas skolems remaining
+
+                    IntSum <$> IntSum.add substitutedSum remainingSum
         type_@Rep -> pure type_
         Type rep -> do
             rep <- substituteTypeVariables substitution rep
@@ -1153,6 +1212,7 @@ substituteTypeVariables substitution type_ =
             pure (ArrayRep inner)
         type_@PrimitiveRep{} -> pure type_
         type_@Kind -> pure type_
+        type_@Integer -> pure type_
 
 binaryOperatorType :: BinaryOperator -> (Type, Type, Type)
 binaryOperatorType = \case
@@ -1413,6 +1473,21 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
                     Pure -> case type2 of
                         Pure -> pure ()
                         _ -> unificationFailure
+                    IntSum sum1 ->
+                        asIntSumMaybe type2 >>= \case
+                            Nothing -> unificationFailure
+                            Just sum2 -> do
+                                components1 <- IntSum.readIntSum sum1
+                                components2 <- IntSum.readIntSum sum2
+                                -- The easiest case: If both sides are already the same, we are done.
+                                -- readIntSum already followed unification variables for us so this
+                                -- will be usable whenever we don't actually need unification.
+                                if components1 == components2
+                                    then
+                                        pure ()
+                                    else do
+                                        shouldBeZero <- IntSum.subtract sum1 sum2
+                                        solveIntSum loc env shouldBeZero
                     Rep -> case type2 of
                         Rep -> pure ()
                         _ -> unificationFailure
@@ -1440,6 +1515,9 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
                     PrimitiveRep rep1 -> case type2 of
                         PrimitiveRep rep2
                             | rep1 == rep2 -> pure ()
+                        _ -> unificationFailure
+                    Integer -> case type2 of
+                        Integer -> pure ()
                         _ -> unificationFailure
                     Kind -> case type2 of
                         Kind -> pure ()
@@ -1517,6 +1595,9 @@ occursAndAdjust meta type_ = do
                 | otherwise -> pure ()
             Skolem{} -> pure ()
             Pure -> pure ()
+            IntSum sum -> do
+                (_, metas, _, _) <- readIntSum sum
+                for_ (MultiSet.distinctKeys metas) \meta -> go (MetaVar meta)
             Rep -> pure ()
             Type rep -> go rep
             Effect -> pure ()
@@ -1524,6 +1605,7 @@ occursAndAdjust meta type_ = do
             ProductRep elements -> for_ elements go
             ArrayRep inner -> go inner
             PrimitiveRep{} -> pure ()
+            Integer -> pure ()
             Kind -> pure ()
 
 subsumesEffect :: (TypeCheck es) => Effect -> Effect -> Eff es ()
@@ -1581,6 +1663,35 @@ monomorphized loc env type_ = do
     trace TypeCheck $ emphasis "mono" <+> pretty type_
     solveMonomorphized (\meta -> output (AssertMonomorphized loc env (MetaVar meta))) loc env type_
 
+solveIntSum :: (TypeCheck es) => Loc -> Env -> IntSum -> Eff es ()
+solveIntSum loc env sum = do
+    shouldBeZero <- IntSum.reduceZero sum
+    (literal, metas, skolems, variables) <- IntSum.readIntSum shouldBeZero
+    -- The easiest case: we are either already done or we don't have any unification variablees
+    -- and so can't solve anything anyway.
+    if literal == 0 && metas == [] && skolems == [] && variables == [] then
+        pure ()
+    else if metas == [] then
+        -- TODO: include the original equation here
+        typeError (UnableToSolveIntegerSum loc sum)
+    else
+        case find (\(_, multiplicity) -> multiplicity == 1) (MultiSet.toMultiplicityList metas) of
+            Just (singleMeta, _) -> do
+                -- The easy case: we have a singular unification variable that we can use to
+                -- cancel out everything else
+
+                inverseOfEverythingElse <-
+                    freshIntSum
+                        -literal
+                        (MultiSet.negate (MultiSet.deleteAll singleMeta metas))
+                        (MultiSet.negate skolems)
+                        (MultiSet.negate variables)
+                bindMeta loc env singleMeta (IntSum inverseOfEverythingElse)
+            Nothing -> do
+                -- The difficult case.
+                -- This might still be solvable but it depends on the interplay of several unification variables
+                undefined
+
 solveMonomorphized :: (TypeCheckCore es) => (MetaVar -> Eff es ()) -> Loc -> Env -> Type -> Eff es ()
 solveMonomorphized onMetaVar loc env type_ =
     go type_
@@ -1622,6 +1733,11 @@ solveMonomorphized onMetaVar loc env type_ =
                 for_ (VectorMap.sortedValues fields) \type_ -> do
                     go type_
             Pure -> pure ()
+            IntSum sum -> do
+                (_literal, metas, skolems, variables) <- readIntSum sum
+                for_ (MultiSet.distinctKeys metas) \meta -> go (MetaVar meta)
+                for_ (MultiSet.distinctKeys skolems) \skolem -> go (Skolem skolem)
+                for_ (MultiSet.distinctKeys variables) \variable -> go (TypeVar variable)
             Rep -> pure ()
             Type rep -> go rep
             Effect -> pure ()
@@ -1629,6 +1745,7 @@ solveMonomorphized onMetaVar loc env type_ =
             ProductRep elements -> for_ elements go
             ArrayRep inner -> go inner
             PrimitiveRep{} -> pure ()
+            Integer -> pure ()
             Kind -> pure ()
 
 type SolveConstraints es = (Error TypeError :> es, Output TypeError :> es, Trace :> es, ReadMeta :> es, BindMeta :> es)

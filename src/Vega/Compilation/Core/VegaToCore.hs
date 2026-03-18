@@ -486,6 +486,8 @@ convertRepresentation type_ = withTrace CoreRep ("convertRepresentation: " <> pr
         Vega.Type{} -> invalidKind
         Vega.Effect{} -> invalidKind
         Vega.Kind{} -> invalidKind
+        Vega.IntSum{} -> invalidKind
+        Vega.Integer -> invalidKind
 
 extractMonomorphizableRepresentationVariables :: (ReadMeta :> es) => Seq Vega.ForallBinder -> Eff es (Seq Vega.LocalName)
 extractMonomorphizableRepresentationVariables binders = wither go binders

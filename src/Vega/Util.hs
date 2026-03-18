@@ -22,7 +22,8 @@ module Vega.Util (
     These (..),
     zipWithLongest,
     spanMaybe,
-    takeWithPadding
+    takeWithPadding,
+    partitionMapM
 ) where
 
 import Data.HashMap.Strict qualified as HashMap
@@ -169,6 +170,14 @@ spanMaybe f seq = go [] seq
             | otherwise -> (passed, x :<| xs)
 
 takeWithPadding :: Int -> a -> [a] -> [a]
-takeWithPadding 0 _padding list = []
+takeWithPadding 0 _padding _list = []
 takeWithPadding n padding [] = replicate n padding
 takeWithPadding n padding (x : xs) = x : takeWithPadding (n - 1) padding xs
+
+partitionMapM :: Monad m => (a -> m (Maybe b)) -> [a] -> m ([b], [a])
+partitionMapM f list = go [] [] list
+    where
+        go passed failed [] = pure (passed, failed)
+        go passed failed (x : xs) = f x >>= \case
+            Nothing -> go passed (x : failed) xs
+            Just y -> go (y : passed) failed xs

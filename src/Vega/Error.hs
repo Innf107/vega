@@ -31,7 +31,7 @@ import Vega.Panic qualified as Panic
 import Vega.Parser (AdditionalParseError (..))
 import Vega.Parser qualified as Parser
 import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, note, number, plain, vsep, (<+>))
-import Vega.Syntax (GlobalName (..), Kind, LocalName, MetaVar, Name, NameKind (..), Type (..), prettyGlobal, prettyGlobalText, prettyLocal, prettyName)
+import Vega.Syntax (GlobalName (..), IntSum, Kind, LocalName, MetaVar, Name, NameKind (..), Type (..), prettyGlobal, prettyGlobalText, prettyLocal, prettyName)
 import Vega.Util (viaList)
 import Vega.Util qualified as Util
 import Vega.VectorMap (VectorMap)
@@ -163,6 +163,10 @@ data TypeError
         , expectedType :: Type
         , actualType :: Type
         , meta :: MetaVar
+        }
+    | UnableToSolveIntegerSum
+        { loc :: Loc
+        , sum :: IntSum
         }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
@@ -379,7 +383,6 @@ renderCompilationError = \case
                     <> missingFieldsMessage
                     <> excessiveFieldsMessage
                     <> "\n    This record is expected to have type" <+> pretty (Record expectedFields)
-
         ConstructorPatternOfIncorrectNumberOfArgs{loc = _, actual, expectedTypes} ->
             align $
                 emphasis "Constructor pattern binds" <+> pluralNumber emphasis actual "parameter" <+> emphasis "but its type expects it to bind" <+> number (length expectedTypes)
@@ -462,6 +465,9 @@ renderCompilationError = \case
                         <+> "type"
                         <+> pretty actualType
                     <> "\n    because the meta variable" <+> pretty meta <+> "occurs in both"
+        UnableToSolveIntegerSum{loc = _, sum} -> do
+            align $ emphasis "Unable to solve integer sum\n"
+                <> "  " <> pretty sum <+> keyword "=" <+> number @Int 0
     DriverError error -> pure $ case error of
         EntryPointNotFound entryPoint ->
             PlainError $

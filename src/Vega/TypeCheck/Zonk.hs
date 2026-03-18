@@ -51,6 +51,9 @@ instance Zonkable Type where
         firstLevel <- followMetasWithoutPathCompression type_
         coerce <$> zonk (Generics.Generically firstLevel)
 
+instance Zonkable IntSum where
+    zonk sum = undefined
+
 instance (Generic a, ZonkableGeneric (Generics.Rep a)) => Zonkable (Generics.Generically a) where
     zonk (Generics.Generically x) = Generics.Generically . Generics.to <$> zonkGeneric (Generics.from x)
 

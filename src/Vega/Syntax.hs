@@ -13,8 +13,12 @@ import Data.Text qualified as Text
 import Effectful (Eff, IOE, runEff, runPureEff, (:>))
 import GHC.Generics (Generically (..))
 import System.IO.Unsafe (unsafePerformIO)
-import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, lparen, meta, rparen, skolem, (<+>))
+import {-# SOURCE #-} Vega.Effect.Meta.Static qualified as Meta
+import Vega.MultiSet (MultiSet)
+import Vega.MultiSet qualified as MultiSet
+import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, lparen, meta, number, rparen, skolem, (<+>))
 import Vega.Seq.NonEmpty (NonEmpty (..))
+import {-# SOURCE #-} Vega.TypeCheck.IntSum qualified as IntSum
 import Vega.VectorMap (VectorMap)
 import Vega.VectorMap qualified as VectorMap
 
@@ -256,6 +260,11 @@ data BinaryOperator
     | Greater
     deriving stock (Generic)
 
+data TypeOperator
+    = TypeAdd
+    | TypeSubtract
+    deriving stock (Generic, Eq, Ord)
+
 data Pattern p
     = WildcardPattern Loc
     | VarPattern {loc :: Loc, ext :: (XVarPattern p), name :: (XLocalName p), isShadowed :: Bool}
@@ -326,6 +335,9 @@ data TypeSyntax p
     | FunctionS Loc (Seq (TypeSyntax p)) (EffectSyntax p) (TypeSyntax p)
     | TupleS Loc (Seq (TypeSyntax p))
     | RecordS Loc (NonEmpty (Text, (TypeSyntax p)))
+    | TypeIntLiteral Loc Integer
+    | TypeOperator Loc (TypeSyntax p) TypeOperator (TypeSyntax p)
+    | TypeLiteralMultiply Loc Integer (TypeSyntax p)
     | -- Kinds
       RepS Loc
     | TypeS Loc (KindSyntax p)
@@ -334,6 +346,7 @@ data TypeSyntax p
     | ProductRepS Loc (Seq (TypeSyntax p))
     | ArrayRepS Loc (TypeSyntax p)
     | PrimitiveRepS Loc PrimitiveRep
+    | IntegerS Loc
     | KindS Loc
     deriving stock (Generic)
     deriving anyclass (HasLoc)
@@ -407,10 +420,12 @@ data Type
     | MetaVar MetaVar
     | Skolem Skolem
     | Pure
+    | IntSum IntSum
     | -- Kinds
       Rep
     | Type Kind
     | Effect
+    | Integer
     | Kind
     | -- Representations
       SumRep (Seq Type)
@@ -447,8 +462,21 @@ data MetaVar = MkMetaVar
     , kind :: Kind
     }
 
+data IntSum = MkIntSum
+    { literal :: IORef Int
+    , metas :: IORef (MultiSet MetaVar)
+    , skolems :: IORef (MultiSet Skolem)
+    , variables :: IORef (MultiSet LocalName)
+    }
+
 instance Eq MetaVar where
     meta1 == meta2 = meta1.identity == meta2.identity
+
+instance Ord MetaVar where
+    compare meta1 meta2 = compare meta1.identity meta2.identity
+
+instance Hashable MetaVar where
+    hashWithSalt salt meta = hashWithSalt salt meta.identity
 
 data Skolem = MkSkolem
     { originalName :: LocalName
@@ -460,6 +488,12 @@ data Skolem = MkSkolem
 
 instance Eq Skolem where
     skolem1 == skolem2 = skolem1.identity == skolem2.identity
+
+instance Ord Skolem where
+    compare skolem1 skolem2 = compare skolem1.identity skolem2.identity
+
+instance Hashable Skolem where
+    hashWithSalt salt skolem = hashWithSalt salt skolem.identity
 
 type Effect = Type
 
@@ -510,7 +544,7 @@ instance Pretty Type where
                     )
                 <+> rparen "}"
         MetaVar meta -> do
-            -- We cannot use the usual 'Vega.Effect.Meta.Static.followMetas' here since
+            -- We cannot use the usual 'Vega.Effect.Meta.Static.followMetasWithoutPathCompression' here since
             -- that would create an import cycle (and we really don't want to add an hs-boot file
             -- to Vega.Syntax)
             -- The 'unsafePerformIO' is safe for the same reason that runReadMetaPure would be safe here.
@@ -522,6 +556,7 @@ instance Pretty Type where
                 MetaVar meta -> pretty meta
                 type_ -> pretty type_
         Skolem skolem -> pretty skolem
+        IntSum sum -> pretty sum
         Pure -> keyword "Pure"
         Rep -> keyword "Rep"
         Type rep -> keyword "Type" <> prettyArguments @[] [rep]
@@ -530,6 +565,7 @@ instance Pretty Type where
         ProductRep reps -> lparen "(" <> intercalateDoc (" " <> keyword "*" <> " ") (fmap pretty reps) <> rparen ")"
         ArrayRep inner -> keyword "ArrayRep" <> lparen "(" <> pretty inner <> rparen ")"
         PrimitiveRep rep -> pretty rep
+        Integer -> globalConstructorText "Integer"
         Kind -> keyword "Kind"
 
 prettyForallBinder :: ForallBinder -> Doc Ann
@@ -547,6 +583,28 @@ instance Pretty MetaVar where
 
 instance Pretty Skolem where
     pretty (MkSkolem{identity, originalName}) = skolem identity originalName.name
+
+instance Pretty IntSum where
+    pretty sum = runPureEff $ Meta.runReadMetaPure do
+        (literal, metas, skolems, variables) <- IntSum.readIntSumNonDestructive sum
+        pure $
+            if MultiSet.isEmpty metas && MultiSet.isEmpty skolems
+                then
+                    number literal
+                else do
+                    let variableDocs = fmap (\(var, count) -> if count == 1 then prettyLocal VarKind var else number count <> keyword "*" <> prettyLocal VarKind var) (MultiSet.toMultiplicityList variables)
+                    let skolemDocs = fmap (\(var, count) -> if count == 1 then pretty var else number count <> keyword "*" <> pretty var) (MultiSet.toMultiplicityList skolems)
+                    let metaDocs = fmap (\(var, count) -> if count == 1 then pretty var else number count <> keyword "*" <> pretty var) (MultiSet.toMultiplicityList skolems)
+
+                    lparen "("
+                        <> intercalateDoc
+                            (keyword " + ")
+                            ( variableDocs
+                                <> skolemDocs
+                                <> metaDocs
+                                <> if literal == 0 then [] else [number literal]
+                            )
+                        <> rparen ")"
 
 prettyName :: NameKind -> Name -> Doc Ann
 prettyName kind = \case
