@@ -954,33 +954,18 @@ inferType env syntax = do
         TypeOperator loc left operator right -> do
             (leftType, left) <- checkType env Parametric Integer left
             (rightType, right) <- checkType env Parametric Integer right
-            (leftLiteral, leftMetas, leftSkolems, leftVariables) <- readIntSum =<< asIntSum (getLoc left) leftType
-            (rightLiteral, rightMetas, rightSkolems, rightVariables) <- readIntSum =<< asIntSum (getLoc right) rightType
+            leftSum <- asIntSum (getLoc left) leftType
+            rightSum <- asIntSum (getLoc right) rightType
             sum <- case operator of
-                TypeAdd ->
-                    freshIntSum
-                        (leftLiteral + rightLiteral)
-                        (leftMetas <> rightMetas)
-                        (leftSkolems <> rightSkolems)
-                        (leftVariables <> rightVariables)
-                TypeSubtract ->
-                    freshIntSum
-                        (leftLiteral - rightLiteral)
-                        (leftMetas <> MultiSet.negate rightMetas)
-                        (leftSkolems <> MultiSet.negate rightSkolems)
-                        (leftVariables <> MultiSet.negate rightVariables)
+                TypeAdd -> IntSum.add leftSum rightSum
+                TypeSubtract -> IntSum.subtract leftSum rightSum
             pure (Integer, IntSum sum, TypeOperator loc left operator right)
         TypeLiteralMultiply loc factor inner -> do
             (innerType, inner) <- checkType env Parametric Integer inner
-            (literal, metas, skolems, variables) <- readIntSum =<< asIntSum (getLoc inner) innerType
+            sum <- asIntSum (getLoc inner) innerType
             -- TODO: throw an error if the factor is out of bounds of an Int
             let intFactor = fromInteger factor
-            sum <-
-                freshIntSum
-                    (intFactor * literal)
-                    (MultiSet.mapMultiplicity (* intFactor) metas)
-                    (MultiSet.mapMultiplicity (* intFactor) skolems)
-                    (MultiSet.mapMultiplicity (* intFactor) variables)
+            sum <- IntSum.scale intFactor sum
             pure (Integer, IntSum sum, TypeLiteralMultiply loc factor inner)
         RepS loc -> pure (Kind, Rep, RepS loc)
         TypeS loc repSyntax -> do
