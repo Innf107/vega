@@ -143,6 +143,10 @@ compilePhis builder (MIR.MkPhis phis) = do
 
 compileInstruction :: (Compile es) => LLVMBuilder.Builder -> MIR.Instruction -> Eff es ()
 compileInstruction builder = \case
+    MIR.Add out in1 in2 -> undefined
+    MIR.AccessField var path target -> undefined
+    MIR.Box{var, target, targetRepresentation} -> undefined
+    MIR.Unbox{var, boxedTarget, representation} -> undefined
     MIR.ProductConstructor{var, values, representation} -> do
         llvmValues <- for values lookupVar
         layout <- Layout.representationLayout representation
@@ -157,7 +161,16 @@ compileInstruction builder = \case
                     liftIO $ LLVMBuilder.buildGetElementPtr builder LLVM.int8Type productPointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] ""
             _ <- liftIO $ LLVMBuilder.buildStore builder pointer value
             pure ()
-    _ -> undefined
+    MIR.SumConstructor{var, tag, values, representation} -> undefined
+    MIR.AllocClosure{var, closedValues, representation} -> undefined
+    MIR.LoadGlobalClosure{var, functionName} -> do
+        undefined
+    MIR.LoadGlobal{var, globalName, representation} -> undefined
+    MIR.LoadIntLiteral{var, literal} -> do
+        insertVarMapping var (LLVM.constInt LLVM.int64Type (fromIntegral literal) True)
+    MIR.LoadSumTag{var, sum, sumRepresentation} -> undefined
+    MIR.CallDirect{var, functionName, arguments} -> undefined
+    MIR.CallClosure{var, closure, arguments} -> undefined
 
 compileTerminator :: (Compile es) => LLVMBuilder.Builder -> MIR.Terminator -> Eff es ()
 compileTerminator builder = \case
@@ -193,10 +206,12 @@ registerNewBlock descriptor = do
 asVar :: (Compile es) => MIR.Variable -> (Text -> IO LLVM.Value) -> Eff es LLVM.Value
 asVar var cont = do
     llvmValue <- liftIO $ cont (renderVariable var)
-
-    modify (\state -> state{variableMappings = HashMap.insert var llvmValue state.variableMappings})
-
+    insertVarMapping var llvmValue
     pure llvmValue
+
+
+insertVarMapping :: Compile es => MIR.Variable -> LLVM.Value -> Eff es ()
+insertVarMapping var llvmValue =  modify (\state -> state{variableMappings = HashMap.insert var llvmValue state.variableMappings})
 
 asVar_ :: (Compile es) => MIR.Variable -> (Text -> IO LLVM.Value) -> Eff es ()
 asVar_ var cont = do

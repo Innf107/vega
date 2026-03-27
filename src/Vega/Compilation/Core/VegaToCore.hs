@@ -85,6 +85,8 @@ compileDeclarationSyntax ::
     Eff es (Seq Core.Declaration)
 compileDeclarationSyntax _declarationName = \case
     Vega.DefineFunction{ext, name, typeSignature = _, declaredTypeParameters = _, parameters, body} -> do
+        GraphPersistence.setGlobalRepresentation name GraphPersistence.GlobalClosure
+
         monomorphizableRepresentationVariables <- extractMonomorphizableRepresentationVariables ext.forallBinders
         let (env, representationParameters) = envAndLimitFromRepresentationVariables monomorphizableRepresentationVariables
         runReader env do

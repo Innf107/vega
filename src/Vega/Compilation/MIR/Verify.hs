@@ -165,23 +165,10 @@ verifyBlock block = do
     verifyTerminator block.terminator
 
 verifyInstruction :: (Verify es) => MIR.Instruction -> Eff es ()
-verifyInstruction = \case
-    MIR.Add target var1 var2 -> undefined
-    MIR.AccessField target path source -> undefined
-    MIR.Box{} -> undefined
-    MIR.Unbox{} -> undefined
-    MIR.ProductConstructor{} -> undefined
-    MIR.SumConstructor{} -> undefined
-    MIR.AllocClosure{} -> undefined
-    MIR.LoadGlobalClosure{} -> undefined
-    MIR.LoadGlobal{} -> undefined
-    MIR.LoadIntLiteral{} -> undefined
-    MIR.LoadSumTag{} -> undefined
-    MIR.CallDirect{} -> undefined
-    MIR.CallClosure{} -> undefined
+verifyInstruction _ = pure () -- TODO: actually verify things here
 
 verifyTerminator :: (Verify es) => MIR.Terminator -> Eff es ()
-verifyTerminator = undefined
+verifyTerminator _ = pure () -- TODO: actually verify things here
 
 verificationError :: (Output (Doc Ann) :> es) => Doc Ann -> Eff es ()
 verificationError message = output message

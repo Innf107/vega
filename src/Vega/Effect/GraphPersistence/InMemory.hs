@@ -25,6 +25,7 @@ import Vega.Effect.GraphPersistence hiding (
     getDependencies,
     getDependents,
     getErrors,
+    getGlobalRepresentation,
     getGlobalType,
     getModuleImportScope,
     getParsed,
@@ -41,6 +42,7 @@ import Vega.Effect.GraphPersistence hiding (
     setCompiledJS,
     setConstructorRepresentation,
     setDataConstructorIndex,
+    setGlobalRepresentation,
     setKnownDeclarations,
     setModuleImportScope,
     setParsed,
@@ -98,6 +100,8 @@ type DefiningDeclarations = CuckooHashTable GlobalName DeclarationName
 
 type DataConstructorIndices = CuckooHashTable Name DataConstructorIndex
 
+type GlobalRepresentations = CuckooHashTable GlobalName GlobalRepresentation
+
 type InMemory es =
     ( IOE :> es
     , Trace :> es
@@ -109,6 +113,7 @@ type InMemory es =
     , Reader CachedKinds :> es
     , Reader DefiningDeclarations :> es
     , Reader DataConstructorIndices :> es
+    , Reader GlobalRepresentations :> es
     )
 
 declarationData :: (HasCallStack, InMemory es) => DeclarationName -> Eff es DeclarationData
@@ -295,6 +300,9 @@ failGraphData error = \case
 
 invalidate :: (InMemory es) => DeclarationName -> Eff es ()
 invalidate name = do
+    -- We don't need to invalidate GlobalRepresentations since any representation in there *not* existing
+    -- is just a compiler bug anyway.
+    -- TODO: It might be nice to do some sort of garbage collection from time to time though
     data_ <- declarationData name
     resetDependencies name
 
@@ -506,14 +514,28 @@ setDefiningDeclaration global declaration = do
 getDataConstructorIndex :: (InMemory es) => Name -> Eff es DataConstructorIndex
 getDataConstructorIndex name = do
     dataConstructorIndices <- ask @DataConstructorIndices
-    liftIO $ HashTable.lookup dataConstructorIndices name >>= \case
-        Nothing -> panic $ "Trying to access index of unrecorded data constructor: " <> prettyName DataConstructorKind name
-        Just index -> pure index
+    liftIO $
+        HashTable.lookup dataConstructorIndices name >>= \case
+            Nothing -> panic $ "Trying to access index of unrecorded data constructor: " <> prettyName DataConstructorKind name
+            Just index -> pure index
 
 setDataConstructorIndex :: (InMemory es) => Name -> DataConstructorIndex -> Eff es ()
 setDataConstructorIndex global index = do
     dataConstructorIndices <- ask @DataConstructorIndices
     liftIO $ HashTable.insert dataConstructorIndices global index
+
+getGlobalRepresentation :: (HasCallStack, InMemory es) => GlobalName -> Eff es GlobalRepresentation
+getGlobalRepresentation name = do
+    globalRepresentations <- ask @GlobalRepresentations
+    liftIO $
+        HashTable.lookup globalRepresentations name >>= \case
+            Nothing -> panic $ "No recorded core representation for global " <> prettyGlobal VarKind name
+            Just representation -> pure representation
+
+setGlobalRepresentation :: (InMemory es) => GlobalName -> GlobalRepresentation -> Eff es ()
+setGlobalRepresentation name representation = do
+    globalRepresentations <- ask @GlobalRepresentations
+    liftIO $ HashTable.insert globalRepresentations name representation
 
 runInMemory :: forall a es. (Trace :> es, IOE :> es) => Eff (GraphPersistence : es) a -> Eff es a
 runInMemory action = do
@@ -533,6 +555,8 @@ runInMemory action = do
 
     dataConstructorIndices :: DataConstructorIndices <- liftIO HashTable.new
 
+    globalRepresentations :: GlobalRepresentations <- liftIO HashTable.new
+
     action & interpret \_ ->
         runReader lastKnownDeclarationsPerFile
             . runReader declarations
@@ -542,6 +566,7 @@ runInMemory action = do
             . runReader cachedKinds
             . runReader definingDeclarations
             . runReader dataConstructorIndices
+            . runReader globalRepresentations
             . \case
                 LastKnownDeclarations filePath -> lastKnownDeclarations filePath
                 SetKnownDeclarations filePath declarations -> setKnownDeclarations filePath declarations
@@ -579,6 +604,8 @@ runInMemory action = do
                 -- Compilation
                 GetCurrentErrors -> getCurrentErrors
                 GetRemainingWork backend -> getRemainingWork backend
+                GetGlobalRepresentation global -> getGlobalRepresentation global
+                SetGlobalRepresentation global representation -> setGlobalRepresentation global representation
                 --
                 GetDefiningDeclaration name -> getDefiningDeclaration name
                 GetDataConstructorIndex name -> getDataConstructorIndex name

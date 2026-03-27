@@ -47,6 +47,10 @@ data DataConstructorIndex
     = OnlyConstructor
     | MultiConstructor Int
 
+data GlobalRepresentation
+    = GlobalVar Core.Representation
+    | GlobalClosure
+
 data GraphPersistence :: Effect where
     -- Module Data
     LastKnownDeclarations :: FilePath -> GraphPersistence m (Maybe (HashMap DeclarationName (Declaration Parsed)))
@@ -88,6 +92,9 @@ data GraphPersistence :: Effect where
     -- Compilation
     GetCurrentErrors :: GraphPersistence m (Seq CompilationError)
     GetRemainingWork :: Backend -> GraphPersistence m (Seq WorkItem)
+    -- TODO: not super happy about having this separate from declarations
+    GetGlobalRepresentation :: GlobalName -> GraphPersistence m GlobalRepresentation
+    SetGlobalRepresentation :: GlobalName -> GlobalRepresentation -> GraphPersistence m ()
     --
     GetDefiningDeclaration :: GlobalName -> GraphPersistence m (Maybe DeclarationName)
     GetDataConstructorIndex :: Name -> GraphPersistence m DataConstructorIndex

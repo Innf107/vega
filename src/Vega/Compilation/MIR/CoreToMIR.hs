@@ -202,9 +202,13 @@ compileValue block = \case
         Core.Global globalName -> do
             -- TODO: detect if name is a function and return MIR.LoadGlobalClosure in that case instead
             var <- newVar
-            block <- addInstruction block (MIR.LoadGlobal {var, globalName, representation=undefined})
-
-            pure (block, var)
+            GraphPersistence.getGlobalRepresentation globalName >>= \case
+                GlobalVar representation -> do
+                    block <- addInstruction block (MIR.LoadGlobal {var, globalName, representation})
+                    pure (block, var)
+                GlobalClosure -> do
+                    block <- addInstruction block (MIR.LoadGlobalClosure {var, functionName=globalName})
+                    pure (block, var)
     Core.Literal literal -> do
         variable <- newVar
         case literal of
