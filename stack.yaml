@@ -18,7 +18,7 @@
 # snapshot: ./custom-snapshot.yaml
 # snapshot: https://example.com/snapshots/2024-01-01.yaml
 snapshot:
-  url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/7.yaml
+  url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/6.yaml
 
 # User packages to be built.
 # Various formats can be used as shown in the example below.
@@ -38,7 +38,7 @@ packages:
 extra-deps:
 - hashtables-1.4.2
 - git: https://github.com/Innf107/llvm-ng
-  commit: 3d88390f444da87b4c66c7f6bbacf04d5d5c6b92
+  commit: 792234be8e289eee35269548779a127bb298e503
 - llvm-ffi-21.0.0.2@sha256:d898d53846373b86a6e34fc2c72cb79cbbe4398bd38e127c69367a933eba6e57,8424
 # - acme-missiles-0.3
 # - git: https://github.com/commercialhaskell/stack.git

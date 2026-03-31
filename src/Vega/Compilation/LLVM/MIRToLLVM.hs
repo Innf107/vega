@@ -103,7 +103,10 @@ compileDeclaration = \case
             -- TODO: we don't actually need to re-compute this twice now
             (_functionType, sretParameter) <- functionLLVMType parameters returnRepresentation
 
-            function <- liftIO $ LLVM.getNamedFunction ?module_ (renderLLVMName name)
+            function <-
+                LLVM.getNamedFunction ?module_ (renderLLVMName name) >>= \case
+                    Nothing -> panic $ "Unable to access function '" <> pretty name <> "' that should have been forward-declared."
+                    Just function_ -> pure function_
             let ?function = function
             let ?functionEnv =
                     MkFunctionEnv
@@ -211,9 +214,9 @@ compileTerminator builder = \case
 buildClosure :: (Compile es) => LLVMBuilder.Builder -> Vega.GlobalName -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
 buildClosure builder functionName closureLayout closureValue varName = do
     functionPointer <-
-        LLVM.getNamedGlobal ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
+        LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
             Nothing -> panic $ "Trying to create closure for non-existent top-level function: " <> Vega.prettyGlobal Vega.VarKind functionName
-            Just global -> pure (LLVM.globalAsValue global)
+            Just function_ -> pure function_
     let combinedLayout = Layout.productLayout [Layout.functionPointerLayout, closureLayout]
     buildProduct builder [functionPointer, closureValue] combinedLayout varName
 
