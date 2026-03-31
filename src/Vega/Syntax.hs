@@ -4,7 +4,35 @@
 module Vega.Syntax where
 
 import Data.Unique (Unique)
-import Relude hiding (NonEmpty, State, Type, evalState, get, put)
+import Relude
+    ( otherwise,
+      ($),
+      Eq((==)),
+      Functor(fmap),
+      Ord(compare),
+      Show,
+      Applicative(pure),
+      Foldable(toList),
+      Generic,
+      Semigroup((<>)),
+      Monoid(mempty),
+      Bool,
+      Int,
+      Integer,
+      Maybe(..),
+      Rational,
+      HashMap,
+      Seq,
+      Text,
+      HasCallStack,
+      Hashable(..),
+      HashSet,
+      show,
+      find,
+      (&&),
+      error,
+      readIORef,
+      IORef )
 import Vega.Loc (HasLoc, Loc)
 
 import Data.HashMap.Strict qualified as HashMap
@@ -345,6 +373,7 @@ data TypeSyntax p
     | SumRepS Loc (Seq (TypeSyntax p))
     | ProductRepS Loc (Seq (TypeSyntax p))
     | ArrayRepS Loc (TypeSyntax p)
+    | ClosureRepS Loc (TypeSyntax p)
     | PrimitiveRepS Loc PrimitiveRep
     | IntegerS Loc
     | KindS Loc
@@ -431,6 +460,7 @@ data Type
       SumRep (Seq Type)
     | ProductRep (Seq Type)
     | ArrayRep Type -- TODO: this should really be an AbstractRep (just like the primitiveReps)
+    | ClosureRep Type
     | PrimitiveRep PrimitiveRep
     deriving (Generic)
 
@@ -565,6 +595,7 @@ instance Pretty Type where
         ProductRep reps -> lparen "(" <> intercalateDoc (" " <> keyword "*" <> " ") (fmap pretty reps) <> rparen ")"
         ArrayRep inner -> keyword "ArrayRep" <> lparen "(" <> pretty inner <> rparen ")"
         PrimitiveRep rep -> pretty rep
+        ClosureRep inner -> keyword "Closure" <> lparen "(" <> pretty inner <> rparen ")"
         Integer -> globalConstructorText "Integer"
         Kind -> keyword "Kind"
 
@@ -664,7 +695,7 @@ stringRepresentation = PrimitiveRep BoxedRep
 -- The representation of functions. This *will* probably change in the future so code
 -- should treat it abstractly instead of depending on its concrete value
 functionRepresentation :: Type
-functionRepresentation = PrimitiveRep BoxedRep
+functionRepresentation = ClosureRep (PrimitiveRep BoxedRep)
 
 boolRepresentation :: Type
 boolRepresentation = SumRep [PrimitiveRep UnitRep, PrimitiveRep UnitRep]

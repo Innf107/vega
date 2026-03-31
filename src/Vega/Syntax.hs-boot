@@ -29,6 +29,7 @@ data Type
       SumRep (Seq Type)
     | ProductRep (Seq Type)
     | ArrayRep Type -- TODO: this should really be an AbstractRep (just like the primitiveReps)
+    | ClosureRep Type
     | PrimitiveRep PrimitiveRep
 
 data MetaVar

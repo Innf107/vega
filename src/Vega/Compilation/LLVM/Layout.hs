@@ -1,6 +1,9 @@
 module Vega.Compilation.LLVM.Layout (
     Layout,
     representationLayout,
+    boxedLayout,
+    functionPointerLayout,
+    productLayout,
     size,
     kind,
     LayoutKind (..),
@@ -69,7 +72,6 @@ llvmParameterType layout = case layout.kind of
     LLVMScalar type_ -> type_
     AggregatePointer -> LLVM.pointerType -- TODO: byval?? alignment??
 
-
 llvmType :: (?context :: LLVM.Context) => Layout -> LLVM.Type
 llvmType layout = case layout.kind of
     LLVMScalar type_ -> type_
@@ -97,6 +99,8 @@ representationLayout = \case
         pure (sumLayout constructorLayouts)
     Core.ArrayRep elements -> do
         undefined
+    Core.FunctionPointerRep ->
+        pure (MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.pointerType, details = Primitive})
     rep@Core.ParameterRep{} -> panic $ "Non-monomorphized parameter representation in layout generation: " <> pretty rep
 
 productLayout :: (?context :: LLVM.Context) => Seq Layout -> Layout
@@ -138,10 +142,17 @@ primitiveLayout :: (?context :: LLVM.Context) => Vega.PrimitiveRep -> Eff es Lay
 primitiveLayout = \case
     Vega.UnitRep -> pure (MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = AggregatePointer, details = Primitive})
     Vega.EmptyRep -> pure (MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = LLVMScalar LLVM.voidType, details = Primitive})
-    -- TODO: we might be able to give heap pointers a different address space from unmanaged pointers?
-    Vega.BoxedRep -> pure $ (MkLayout{size = 0, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.pointerType, details = Primitive})
+    Vega.BoxedRep -> pure boxedLayout
     Vega.IntRep -> pure $ MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.int64Type, details = Primitive}
     Vega.DoubleRep -> pure $ MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.doubleType, details = Primitive}
+
+-- TODO: we might be able to give heap pointers a different address space from unmanaged pointers?
+boxedLayout :: (?context :: LLVM.Context) => Layout
+boxedLayout = MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.pointerType, details = Primitive}
+
+-- TODO: This pointer should not count as boxed since it doesn't need to be followed by the GC
+functionPointerLayout :: (?context :: LLVM.Context) => Layout
+functionPointerLayout = MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.pointerType, details = Primitive}
 
 smallestPowerOfTwoFitting :: Int -> Int
 smallestPowerOfTwoFitting n = Bits.finiteBitSize n - Bits.countLeadingZeros (n - 1)

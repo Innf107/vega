@@ -38,7 +38,7 @@ data Expr
       JumpJoin LocalCoreName (Seq Value)
     | Lambda (Seq (LocalCoreName, Representation)) (Seq Statement) Expr
     | TupleAccess Value Int
-    | ConstructorCase {scrutinee :: Value, scrutineeRepresentation :: Representation, cases :: (HashMap Vega.Name (Seq LocalCoreName, Seq Statement, Expr)) }
+    | ConstructorCase {scrutinee :: Value, scrutineeRepresentation :: Representation, cases :: (HashMap Vega.Name (Seq LocalCoreName, Seq Statement, Expr))}
 
 data Statement
     = Let LocalCoreName Representation Expr
@@ -79,6 +79,7 @@ data Representation
     = ProductRep (Seq Representation)
     | SumRep (Seq Representation)
     | ArrayRep Representation
+    | FunctionPointerRep
     | PrimitiveRep Vega.PrimitiveRep
     | ParameterRep Debruijn.Index
     deriving (Eq)
@@ -95,6 +96,7 @@ instance Pretty Representation where
     pretty (SumRep []) = keyword "Empty"
     pretty (SumRep representations) = lparen "(" <> intercalateDoc (" " <> keyword "+" <> " ") (fmap pretty representations) <> rparen ")"
     pretty (ArrayRep inner) = keyword "ArrayRep" <> lparen "(" <> pretty inner <> rparen ")"
+    pretty FunctionPointerRep = keyword "FunctionPointer"
     pretty (PrimitiveRep rep) = pretty rep
     pretty (ParameterRep index) = pretty index
 

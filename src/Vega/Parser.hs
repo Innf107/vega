@@ -327,6 +327,9 @@ type_ =
                     "ArrayRep" -> case applications of
                         [(rep :<| Empty, appLoc)] -> pure (ArrayRepS (loc <> appLoc) rep)
                         _ -> undefined
+                    "Closure" -> case applications of
+                        [(rep :<| Empty, appLoc)] -> pure (ClosureRepS (loc <> appLoc) rep)
+                        _ -> undefined
                     _ -> do
                         let constructor = case name of
                                 "Effect" -> EffectS loc

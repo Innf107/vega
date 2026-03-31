@@ -27,7 +27,7 @@ import Vega.Panic (panic)
 import Vega.Pretty (pretty)
 import Vega.Syntax (renderPackageName)
 import Vega.Syntax qualified as Vega
-import Vega.Util (forIndexed_, viaList)
+import Vega.Util (forIndexed_, viaList, type (?))
 
 data DeclarationState = MkDeclarationState
     { registeredBlocks :: HashMap MIR.BlockDescriptor LLVM.BasicBlock
@@ -39,13 +39,17 @@ data FunctionEnv = MkFunctionEnv
     { sretVariable :: Maybe (LLVM.Value, Layout)
     }
 
-type Compile es = (?context :: LLVM.Context, IOE :> es, ?function :: LLVM.Value, ?functionEnv :: FunctionEnv, State DeclarationState :> es)
+type Compile es = (?context :: LLVM.Context, ?module_ :: LLVM.Module, IOE :> es, ?function :: LLVM.Value, ?functionEnv :: FunctionEnv, State DeclarationState :> es)
 
 compile :: (IOE :> es) => MIR.Program -> Eff es LLVM.Module
 compile program = do
     context <- liftIO LLVM.contextCreate
     let ?context = context
     module_ <- liftIO $ LLVM.moduleCreateWithName "idkwhattoputhereyet"
+    let ?module_ = module_
+    for_ program.declarations \declaration -> do
+        forwardDeclareDeclaration declaration
+
     for_ program.declarations \declaration -> do
         let initialState =
                 MkDeclarationState
@@ -53,13 +57,42 @@ compile program = do
                     , outstandingBlocks = []
                     , variableMappings = mempty
                     }
-        evalState initialState $ compileDeclaration module_ declaration
+        evalState initialState $ compileDeclaration declaration
     pure module_
 
+functionLLVMType :: (?context :: LLVM.Context) => Seq (MIR.Variable, Representation) -> Representation -> Eff es (LLVM.FunctionType, "sretParameter" ? Maybe (Int, Layout))
+functionLLVMType parameters returnRepresentation = do
+    returnLayout <- Layout.representationLayout returnRepresentation
+
+    baseParameterTypes <-
+        for parameters \(_, representation) ->
+            Layout.llvmParameterType <$> Layout.representationLayout representation
+
+    (parameterTypes, returnType, usesSRet) <- case Layout.kind returnLayout of
+        Layout.AggregatePointer -> do
+            -- If we return a complex (AggregatePointer) value, we can't return it directly
+            -- but instead we need to assign it to an sret parameter. By convention, this is
+            -- always our *last* parameter
+            --
+            -- TODO: add an sret attribute (and alignment??)
+            pure (baseParameterTypes :|> LLVM.pointerType, LLVM.voidType, True)
+        Layout.LLVMScalar scalar -> pure (baseParameterTypes, scalar, False)
+
+    -- The sret parameter is always the last one
+    let sretParameter = if usesSRet then Just (length parameterTypes - 1, returnLayout) else Nothing
+    pure (LLVM.functionType (viaList parameterTypes) returnType False, sretParameter)
+
+forwardDeclareDeclaration ::
+    (?context :: LLVM.Context, ?module_ :: LLVM.Module, IOE :> es) => MIR.Declaration -> Eff es ()
+forwardDeclareDeclaration = \case
+    MIR.DefineFunction{name, parameters, returnRepresentation} -> do
+        (llvmType, _) <- functionLLVMType parameters returnRepresentation
+        _ <- LLVM.addFunction ?module_ (renderLLVMName name) llvmType
+        pure ()
+
 compileDeclaration ::
-    (?context :: LLVM.Context, IOE :> es, State DeclarationState :> es) =>
-    LLVM.Module -> MIR.Declaration -> Eff es ()
-compileDeclaration module_ = \case
+    (?context :: LLVM.Context, ?module_ :: LLVM.Module, IOE :> es, State DeclarationState :> es) => MIR.Declaration -> Eff es ()
+compileDeclaration = \case
     MIR.DefineFunction
         { name
         , parameters
@@ -67,31 +100,18 @@ compileDeclaration module_ = \case
         , init
         , blocks
         } -> do
-            returnLayout <- Layout.representationLayout returnRepresentation
+            -- TODO: we don't actually need to re-compute this twice now
+            (_functionType, sretParameter) <- functionLLVMType parameters returnRepresentation
 
-            baseParameterTypes <-
-                for parameters \(_, representation) ->
-                    Layout.llvmParameterType <$> Layout.representationLayout representation
-
-            (parameterTypes, returnType, usesSRet) <- case Layout.kind returnLayout of
-                Layout.AggregatePointer -> do
-                    -- If we return a complex (AggregatePointer) value, we can't return it directly
-                    -- but instead we need to assign it to an sret parameter. By convention, this is
-                    -- always our *last* parameter
-                    --
-                    -- TODO: add an sret attribute (and alignment??)
-                    pure (baseParameterTypes :|> LLVM.pointerType, LLVM.voidType, True)
-                Layout.LLVMScalar scalar -> pure (baseParameterTypes, scalar, False)
-
-            function <- liftIO $ LLVM.addFunction module_ (renderLLVMName name) (LLVM.functionType (viaList parameterTypes) returnType False)
+            function <- liftIO $ LLVM.getNamedFunction ?module_ (renderLLVMName name)
             let ?function = function
             let ?functionEnv =
                     MkFunctionEnv
                         { sretVariable =
-                            if usesSRet
+                            case sretParameter of
                                 -- The sret parameter is always the last one
-                                then Just (LLVM.getParam function (length parameterTypes - 1), returnLayout)
-                                else Nothing
+                                Just (position, returnLayout) -> Just (LLVM.getParam function position, returnLayout)
+                                Nothing -> Nothing
                         }
 
             builder <- liftIO LLVMBuilder.createBuilder
@@ -164,7 +184,7 @@ compileInstruction builder = \case
     MIR.SumConstructor{var, tag, values, representation} -> undefined
     MIR.AllocClosure{var, closedValues, representation} -> undefined
     MIR.LoadGlobalClosure{var, functionName} -> do
-        undefined
+        asVar_ var $ buildClosure builder functionName Layout.boxedLayout LLVM.constNullPointer
     MIR.LoadGlobal{var, globalName, representation} -> undefined
     MIR.LoadIntLiteral{var, literal} -> do
         insertVarMapping var (LLVM.constInt LLVM.int64Type (fromIntegral literal) True)
@@ -188,6 +208,30 @@ compileTerminator builder = \case
                 pure ()
     _ -> undefined
 
+buildClosure :: (Compile es) => LLVMBuilder.Builder -> Vega.GlobalName -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
+buildClosure builder functionName closureLayout closureValue varName = do
+    functionPointer <-
+        LLVM.getNamedGlobal ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
+            Nothing -> panic $ "Trying to create closure for non-existent top-level function: " <> Vega.prettyGlobal Vega.VarKind functionName
+            Just global -> pure (LLVM.globalAsValue global)
+    let combinedLayout = Layout.productLayout [Layout.functionPointerLayout, closureLayout]
+    buildProduct builder [functionPointer, closureValue] combinedLayout varName
+
+buildProduct :: (Compile es) => LLVMBuilder.Builder -> Seq LLVM.Value -> Layout -> Text -> Eff es LLVM.Value
+buildProduct builder values layout varName = do
+    productPointer <- LLVMBuilder.buildAlloca builder (Layout.llvmType layout) varName
+
+    forIndexed_ values \value index -> do
+        let (offset, _subLayout) = Layout.productOffsetAndLayout index layout
+        pointer <- case offset of
+            0 -> pure productPointer
+            _ -> do
+                liftIO $ LLVMBuilder.buildGetElementPtr builder LLVM.int8Type productPointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] ""
+        _ <- liftIO $ LLVMBuilder.buildStore builder pointer value
+        pure ()
+
+    pure productPointer
+
 registerNewBlock :: (Compile es) => MIR.BlockDescriptor -> Eff es LLVM.BasicBlock
 registerNewBlock descriptor = do
     state <- get @DeclarationState
@@ -203,17 +247,16 @@ registerNewBlock descriptor = do
                 )
             pure llvmBlock
 
-asVar :: (Compile es) => MIR.Variable -> (Text -> IO LLVM.Value) -> Eff es LLVM.Value
+asVar :: (Compile es) => MIR.Variable -> (Text -> Eff es LLVM.Value) -> Eff es LLVM.Value
 asVar var cont = do
-    llvmValue <- liftIO $ cont (renderVariable var)
+    llvmValue <- cont (renderVariable var)
     insertVarMapping var llvmValue
     pure llvmValue
 
+insertVarMapping :: (Compile es) => MIR.Variable -> LLVM.Value -> Eff es ()
+insertVarMapping var llvmValue = modify (\state -> state{variableMappings = HashMap.insert var llvmValue state.variableMappings})
 
-insertVarMapping :: Compile es => MIR.Variable -> LLVM.Value -> Eff es ()
-insertVarMapping var llvmValue =  modify (\state -> state{variableMappings = HashMap.insert var llvmValue state.variableMappings})
-
-asVar_ :: (Compile es) => MIR.Variable -> (Text -> IO LLVM.Value) -> Eff es ()
+asVar_ :: (Compile es) => MIR.Variable -> (Text -> Eff es LLVM.Value) -> Eff es ()
 asVar_ var cont = do
     _ <- asVar var cont
     pure ()

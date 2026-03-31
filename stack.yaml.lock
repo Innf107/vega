@@ -12,15 +12,15 @@ packages:
   original:
     hackage: hashtables-1.4.2
 - completed:
-    commit: bb13b1ab87129d33a39ea0b62e6eff17a05fed76
+    commit: 3d88390f444da87b4c66c7f6bbacf04d5d5c6b92
     git: https://github.com/Innf107/llvm-ng
     name: llvm-ng
     pantry-tree:
-      sha256: 3d33523c84f0b4babe6c9bf44ca78a387e41e92293f91425ab3fe4874dfa3655
-      size: 1140
+      sha256: 6eba922956c214c4f39221caa5c8a9a626f6a5fecef5eba38fede357911e7520
+      size: 1141
     version: 0.1.0.0
   original:
-    commit: bb13b1ab87129d33a39ea0b62e6eff17a05fed76
+    commit: 3d88390f444da87b4c66c7f6bbacf04d5d5c6b92
     git: https://github.com/Innf107/llvm-ng
 - completed:
     hackage: llvm-ffi-21.0.0.2@sha256:d898d53846373b86a6e34fc2c72cb79cbbe4398bd38e127c69367a933eba6e57,8424
@@ -31,8 +31,8 @@ packages:
     hackage: llvm-ffi-21.0.0.2@sha256:d898d53846373b86a6e34fc2c72cb79cbbe4398bd38e127c69367a933eba6e57,8424
 snapshots:
 - completed:
-    sha256: 473840099b95facf73ec72dcafe53a2487bfadeceb03a981a19e16469503a342
-    size: 726266
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/6.yaml
+    sha256: b63fde5242c7a5d20e9c8070190038c5589424dabb8f8c7f02ec4b2be743ad23
+    size: 726276
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/7.yaml
   original:
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/6.yaml
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/7.yaml

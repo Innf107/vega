@@ -298,6 +298,9 @@ renameTypeSyntax env = \case
     ArrayRepS loc inner -> do
         inner <- renameTypeSyntax env inner
         pure (ArrayRepS loc inner)
+    ClosureRepS loc inner -> do
+        inner <- renameTypeSyntax env inner
+        pure (ClosureRepS loc inner)
     PrimitiveRepS loc rep -> pure (PrimitiveRepS loc rep)
     IntegerS loc -> pure (IntegerS loc)
     KindS loc -> pure (KindS loc)

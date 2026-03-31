@@ -8,7 +8,7 @@ impl HeapObject {
     pub const HEADER_SIZE_IN_BYTES: usize = size_of::<HeapObject>();
 
     pub fn data(object: *const HeapObject) -> *mut u8 {
-        unsafe { object.byte_offset(HeapObject::HEADER_SIZE_IN_BYTES as isize) as *mut u8 }
+        unsafe { object.byte_add(HeapObject::HEADER_SIZE_IN_BYTES) as *mut u8 }
     }
 }
 

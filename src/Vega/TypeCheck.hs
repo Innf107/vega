@@ -981,6 +981,9 @@ inferType env syntax = do
         ArrayRepS loc inner -> do
             (inner, innerSyntax) <- checkType env Parametric Rep inner
             pure (Rep, ArrayRep inner, ArrayRepS loc innerSyntax)
+        ClosureRepS loc inner -> do
+            (inner, innerSyntax) <- checkType env Parametric Rep inner
+            pure (Rep, ClosureRep inner, ClosureRepS loc innerSyntax)
         PrimitiveRepS loc rep -> pure (Rep, PrimitiveRep rep, PrimitiveRepS loc rep)
         IntegerS loc -> pure (Kind, Integer, IntegerS loc)
         KindS loc -> pure (Kind, Kind, KindS loc)
@@ -1046,6 +1049,7 @@ kindOf loc env = \case
     SumRep{} -> pure Rep
     ProductRep{} -> pure Rep
     ArrayRep{} -> pure Rep
+    ClosureRep{} -> pure Rep
     PrimitiveRep{} -> pure Rep
     Integer -> pure Kind
     Kind -> pure Kind
@@ -1194,6 +1198,9 @@ substituteTypeVariables substitution type_ =
         ArrayRep inner -> do
             inner <- substituteTypeVariables substitution inner
             pure (ArrayRep inner)
+        ClosureRep inner -> do
+            inner <- substituteTypeVariables substitution inner
+            pure (ClosureRep inner)
         type_@PrimitiveRep{} -> pure type_
         type_@Kind -> pure type_
         type_@Integer -> pure type_
@@ -1496,6 +1503,9 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
                     ArrayRep rep1 -> case type2 of
                         ArrayRep rep2 -> go rep1 rep2
                         _ -> unificationFailure
+                    ClosureRep rep1 -> case type2 of
+                        ClosureRep rep2 -> go rep1 rep2
+                        _ -> unificationFailure
                     PrimitiveRep rep1 -> case type2 of
                         PrimitiveRep rep2
                             | rep1 == rep2 -> pure ()
@@ -1588,6 +1598,7 @@ occursAndAdjust meta type_ = do
             SumRep elements -> for_ elements go
             ProductRep elements -> for_ elements go
             ArrayRep inner -> go inner
+            ClosureRep inner -> go inner
             PrimitiveRep{} -> pure ()
             Integer -> pure ()
             Kind -> pure ()
@@ -1730,6 +1741,7 @@ solveMonomorphized onMetaVar loc env type_ =
             SumRep elements -> for_ elements go
             ProductRep elements -> for_ elements go
             ArrayRep inner -> go inner
+            ClosureRep inner -> go inner
             PrimitiveRep{} -> pure ()
             Integer -> pure ()
             Kind -> pure ()

@@ -464,6 +464,9 @@ convertRepresentation type_ = withTrace CoreRep ("convertRepresentation: " <> pr
         Vega.SumRep representations -> Core.SumRep <$> traverse convertRepresentation representations
         Vega.ProductRep representations -> Core.ProductRep <$> traverse convertRepresentation representations
         Vega.ArrayRep inner -> Core.ArrayRep <$> convertRepresentation inner
+        Vega.ClosureRep inner -> do
+            innerRep <- convertRepresentation inner
+            pure (Core.ProductRep [Core.FunctionPointerRep, innerRep])
         Vega.PrimitiveRep rep -> pure $ Core.PrimitiveRep rep
         Vega.Skolem skolem -> do
             env <- ask @Env

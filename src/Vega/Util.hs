@@ -23,14 +23,15 @@ module Vega.Util (
     zipWithLongest,
     spanMaybe,
     takeWithPadding,
-    partitionMapM
+    partitionMapM,
+    type (?)
 ) where
 
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import Data.Traversable (for)
 import GHC.Base qualified
-import GHC.Exts (IsList (..))
+import GHC.Exts (IsList (..), Symbol)
 import GHC.Generics (C1, Generic (Rep), M1, Meta (..), (:+:))
 import GHC.TypeLits (KnownSymbol, symbolVal)
 import Relude hiding (toList)
@@ -181,3 +182,6 @@ partitionMapM f list = go [] [] list
         go passed failed (x : xs) = f x >>= \case
             Nothing -> go passed (x : failed) xs
             Just y -> go (y : passed) failed xs
+
+type (?) :: Symbol -> a -> a
+type (?) _label x = x
