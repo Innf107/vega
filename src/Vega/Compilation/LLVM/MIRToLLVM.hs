@@ -45,7 +45,7 @@ compile :: (IOE :> es) => MIR.Program -> Eff es LLVM.Module
 compile program = do
     context <- liftIO LLVM.contextCreate
     let ?context = context
-    module_ <- liftIO $ LLVM.moduleCreateWithName "idkwhattoputhereyet"
+    module_ <- LLVM.moduleCreateWithName "idkwhattoputhereyet"
     let ?module_ = module_
     for_ program.declarations \declaration -> do
         forwardDeclareDeclaration declaration
@@ -117,17 +117,17 @@ compileDeclaration = \case
                                 Nothing -> Nothing
                         }
 
-            builder <- liftIO LLVMBuilder.createBuilder
+            builder <- LLVMBuilder.createBuilder
 
-            initialBlock <- liftIO $ LLVM.appendBasicBlock function ""
+            initialBlock <- LLVM.appendBasicBlock function ""
             -- Because LLVM blocks may not jump back to the initial block, but MIR blocks may do that, we
             -- add an empty dummy block that just jumps to the first real block. LLVM should be able
             -- to optimize this out if it is not necessary.
 
             initialMIRBlock <- registerNewBlock init
 
-            liftIO $ LLVMBuilder.positionBuilderAtEnd builder initialBlock
-            _ <- liftIO $ LLVMBuilder.buildBr builder initialMIRBlock
+            LLVMBuilder.positionBuilderAtEnd builder initialBlock
+            _ <- LLVMBuilder.buildBr builder initialMIRBlock
 
             let go = do
                     state@MkDeclarationState{outstandingBlocks} <- get
@@ -149,7 +149,7 @@ compileRegisteredBlock builder descriptor block = do
     let llvmBlock = case HashMap.lookup descriptor registeredBlocks of
             Nothing -> panic $ "compileRegisteredBlock: Trying to compile unregistered MIR block " <> pretty descriptor
             Just llvmBlock -> llvmBlock
-    liftIO $ LLVMBuilder.positionBuilderAtEnd builder llvmBlock
+    LLVMBuilder.positionBuilderAtEnd builder llvmBlock
     compilePhis builder block.phis
     for_ block.instructions (compileInstruction builder)
     compileTerminator builder block.terminator
@@ -181,8 +181,8 @@ compileInstruction builder = \case
             pointer <- case offset of
                 0 -> pure productPointer
                 _ -> do
-                    liftIO $ LLVMBuilder.buildGetElementPtr builder LLVM.int8Type productPointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] ""
-            _ <- liftIO $ LLVMBuilder.buildStore builder pointer value
+                    LLVMBuilder.buildGetElementPtr builder LLVM.int8Type productPointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] ""
+            _ <- LLVMBuilder.buildStore builder pointer value
             pure ()
     MIR.SumConstructor{var, tag, values, representation} -> undefined
     MIR.AllocClosure{var, closedValues, representation} -> undefined
@@ -202,12 +202,12 @@ compileTerminator builder = \case
 
         case ?functionEnv.sretVariable of
             Nothing -> do
-                _ <- liftIO $ LLVMBuilder.buildRet builder value
+                _ <- LLVMBuilder.buildRet builder value
                 pure ()
             Just (target, returnLayout) -> do
                 -- The sret parameter is always the last parameter
-                _ <- liftIO $ LLVMBuilder.buildMemCpy builder target 0 value 0 (LLVM.constInt LLVM.int64Type (fromIntegral (Layout.size returnLayout)) False)
-                _ <- liftIO $ LLVMBuilder.buildRetVoid builder
+                _ <- LLVMBuilder.buildMemCpy builder target 0 value 0 (LLVM.constInt LLVM.int64Type (fromIntegral (Layout.size returnLayout)) False)
+                _ <- LLVMBuilder.buildRetVoid builder
                 pure ()
     _ -> undefined
 
@@ -229,8 +229,8 @@ buildProduct builder values layout varName = do
         pointer <- case offset of
             0 -> pure productPointer
             _ -> do
-                liftIO $ LLVMBuilder.buildGetElementPtr builder LLVM.int8Type productPointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] ""
-        _ <- liftIO $ LLVMBuilder.buildStore builder pointer value
+                LLVMBuilder.buildGetElementPtr builder LLVM.int8Type productPointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] ""
+        _ <- LLVMBuilder.buildStore builder pointer value
         pure ()
 
     pure productPointer
@@ -241,7 +241,7 @@ registerNewBlock descriptor = do
     case HashMap.lookup descriptor state.registeredBlocks of
         Just _previousBlock -> panic $ "Trying to register MIR block " <> pretty descriptor <> " twice"
         Nothing -> do
-            llvmBlock <- liftIO $ LLVM.appendBasicBlock ?function ""
+            llvmBlock <- LLVM.appendBasicBlock ?function ""
             put
                 ( state
                     { registeredBlocks = HashMap.insert descriptor llvmBlock state.registeredBlocks
