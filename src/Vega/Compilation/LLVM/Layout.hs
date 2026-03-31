@@ -17,32 +17,19 @@ module Vega.Compilation.LLVM.Layout (
 import Data.Bits qualified as Bits
 import Data.Foldable1 (maximum)
 import Data.Sequence (Seq (..))
+import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Effectful (Eff)
 import LLVM.Core qualified as LLVM
-import Relude (
-    Applicative (pure),
-    Bool (False),
-    Constraint,
-    Foldable (length, toList),
-    Int,
-    Integral (div),
-    NonEmpty ((:|)),
-    Num ((+), (-)),
-    Ord (max),
-    Semigroup ((<>)),
-    Seq,
-    map,
-    undefined,
-    ($),
- )
+import Relude
 import Vega.Alignment (Alignment)
 import Vega.Alignment qualified as Alignment
 import Vega.Alignment qualified as Vega
 import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
+import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
-import Vega.Pretty (pretty)
+import Vega.Pretty (number, pretty)
 import Vega.Syntax qualified as Vega
 
 data Layout = MkLayout
@@ -60,6 +47,7 @@ data LayoutDetails
     = ProductLayout {offsetsAndElementLayouts :: Seq (Int, Layout)}
     | SumLayout {tagSizeInBytes :: Int, constructorLayouts :: Seq Layout}
     | Primitive
+    deriving (Generic)
 
 size :: Layout -> Int
 size layout = layout.size
@@ -81,7 +69,11 @@ kind :: Layout -> LayoutKind
 kind layout = layout.kind
 
 productOffsetAndLayout :: Int -> Layout -> (Int, Layout)
-productOffsetAndLayout fieldIndex layout = undefined
+productOffsetAndLayout fieldIndex layout = case layout.details of
+    ProductLayout{offsetsAndElementLayouts} -> case Seq.lookup fieldIndex offsetsAndElementLayouts of
+        Nothing -> panic $ "trying to access out-of-bounds index " <> number fieldIndex <> " on product layout with " <> pretty (length offsetsAndElementLayouts) <> " fields."
+        Just value -> value
+    _ -> panic $ "trying to access productOffsetAndLayout on non-product layout " <> showHeadConstructor layout.details
 
 sumOffsetAndLayout :: Int -> Layout -> (Int, Layout)
 sumOffsetAndLayout constructorIndex layout = undefined
