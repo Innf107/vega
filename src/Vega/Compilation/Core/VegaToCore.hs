@@ -277,7 +277,7 @@ compileStatements ::
     Seq (Vega.Statement Typed) ->
     Eff es (Seq Core.Statement, Core.Expr, Core.Representation)
 compileStatements = \case
-    Empty -> pure ([], Core.Value unitLiteral, Core.PrimitiveRep Vega.UnitRep)
+    Empty -> pure ([], Core.Value unitLiteral, Core.ProductRep [])
     [Vega.Run _ expr] -> compileExpr expr
     (Vega.Run _ expr :<| rest) -> do
         local <- newLocal

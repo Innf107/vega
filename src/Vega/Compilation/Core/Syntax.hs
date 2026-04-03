@@ -202,4 +202,4 @@ functionRepresentation :: Representation
 functionRepresentation = PrimitiveRep Vega.BoxedRep
 
 boolRepresentation :: Representation
-boolRepresentation = SumRep [PrimitiveRep Vega.UnitRep, PrimitiveRep Vega.UnitRep]
+boolRepresentation = SumRep [ProductRep [], ProductRep []]

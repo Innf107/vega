@@ -334,8 +334,8 @@ type_ =
                         let constructor = case name of
                                 "Effect" -> EffectS loc
                                 "Rep" -> RepS loc
-                                "Unit" -> PrimitiveRepS loc UnitRep
-                                "Empty" -> PrimitiveRepS loc EmptyRep
+                                "Unit" -> ProductRepS loc mempty
+                                "Empty" -> SumRepS loc mempty
                                 "Boxed" -> PrimitiveRepS loc BoxedRep
                                 "IntRep" -> PrimitiveRepS loc IntRep
                                 "Kind" -> KindS loc

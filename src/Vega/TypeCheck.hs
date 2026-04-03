@@ -231,12 +231,10 @@ computeAndCacheKind declaration = withTrace KindCheck ("computeAndCacheKind: " <
                         False -> repOfDifferentSCC component
                 component -> repOfDifferentSCC component
             case components of
-                [] -> pure (PrimitiveRep UnitRep)
                 [r] -> pure r
                 _ -> pure (ProductRep components)
 
         let bodyRepresentation = case constructorRepresentations of
-                [] -> PrimitiveRep EmptyRep
                 [r] -> r
                 _ -> SumRep constructorRepresentations
 

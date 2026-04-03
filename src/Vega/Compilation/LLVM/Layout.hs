@@ -140,44 +140,48 @@ representationLayout = \case
 
 productLayout :: (?context :: LLVM.Context) => Seq Layout -> Layout
 productLayout elementLayouts = do
-    let go currentSize currentAlignment offsetsAndLayouts = \case
-            Empty -> (currentSize, currentAlignment, offsetsAndLayouts)
-            nextLayout :<| rest -> do
-                let offset = Alignment.align nextLayout.alignment currentSize
+    case elementLayouts of
+        Empty -> MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = ZeroSized, details = Primitive}
+        _ -> do
+            let go currentSize currentAlignment offsetsAndLayouts = \case
+                    Empty -> (currentSize, currentAlignment, offsetsAndLayouts)
+                    nextLayout :<| rest -> do
+                        let offset = Alignment.align nextLayout.alignment currentSize
 
-                go (offset + nextLayout.size) (max currentAlignment nextLayout.alignment) (offsetsAndLayouts :|> (offset, nextLayout)) rest
-    let (size, alignment, offsetsAndElementLayouts) = go 0 (Alignment.fromExponent 1) [] elementLayouts
+                        go (offset + nextLayout.size) (max currentAlignment nextLayout.alignment) (offsetsAndLayouts :|> (offset, nextLayout)) rest
+            let (size, alignment, offsetsAndElementLayouts) = go 0 (Alignment.fromExponent 1) [] elementLayouts
 
-    MkLayout{size, alignment, kind = AggregatePointer, details = ProductLayout{offsetsAndElementLayouts}}
+            MkLayout{size, alignment, kind = AggregatePointer, details = ProductLayout{offsetsAndElementLayouts}}
 
 -- TODO: make sure the tag is *last* element
 sumLayout :: (?context :: LLVM.Context) => Seq Layout -> Layout
 sumLayout payloads = do
-    let tagSizeInBits = smallestPowerOfTwoFitting (length payloads)
-    -- TODO: it would be nice to pack the bits into niches when possible but for now it's easier to
-    -- pad it to full byte boundaries (I'm not sure if it even makes sense to support variants with > 256 fields tbh)
-    let tagSizeInBytes = Alignment.align (Alignment.fromExponent 3) tagSizeInBits `div` 8
-    let tagAlignment = Alignment.fromValue tagSizeInBytes
+    case payloads of
+        Empty -> (MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = ZeroSized, details = Primitive})
+        _ -> do
+            let tagSizeInBits = smallestPowerOfTwoFitting (length payloads)
+            -- TODO: it would be nice to pack the bits into niches when possible but for now it's easier to
+            -- pad it to full byte boundaries (I'm not sure if it even makes sense to support variants with > 256 fields tbh)
+            let tagSizeInBytes = Alignment.align (Alignment.fromExponent 3) tagSizeInBits `div` 8
+            let tagAlignment = Alignment.fromValue tagSizeInBytes
 
-    let sumAlignment = maximum (tagAlignment :| (map alignment (toList payloads)))
+            let sumAlignment = maximum (tagAlignment :| (map alignment (toList payloads)))
 
-    let size = maximum (tagSizeInBytes :| [Alignment.align payload.alignment tagSizeInBytes + payload.size | payload <- toList payloads])
+            let size = maximum (tagSizeInBytes :| [Alignment.align payload.alignment tagSizeInBytes + payload.size | payload <- toList payloads])
 
-    MkLayout
-        { size
-        , alignment = sumAlignment
-        , kind = AggregatePointer
-        , details =
-            SumLayout
-                { tagSizeInBytes
-                , constructorLayouts = payloads
+            MkLayout
+                { size
+                , alignment = sumAlignment
+                , kind = AggregatePointer
+                , details =
+                    SumLayout
+                        { tagSizeInBytes
+                        , constructorLayouts = payloads
+                        }
                 }
-        }
 
 primitiveLayout :: (?context :: LLVM.Context) => Vega.PrimitiveRep -> Eff es Layout
 primitiveLayout = \case
-    Vega.UnitRep -> pure (MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = ZeroSized, details = Primitive})
-    Vega.EmptyRep -> pure (MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = ZeroSized, details = Primitive})
     Vega.BoxedRep -> pure boxedLayout
     Vega.IntRep -> pure intLayout
     Vega.DoubleRep -> pure $ MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.doubleType, details = Primitive}

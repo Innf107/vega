@@ -4,35 +4,36 @@
 module Vega.Syntax where
 
 import Data.Unique (Unique)
-import Relude
-    ( otherwise,
-      ($),
-      Eq((==)),
-      Functor(fmap),
-      Ord(compare),
-      Show,
-      Applicative(pure),
-      Foldable(toList),
-      Generic,
-      Semigroup((<>)),
-      Monoid(mempty),
-      Bool,
-      Int,
-      Integer,
-      Maybe(..),
-      Rational,
-      HashMap,
-      Seq,
-      Text,
-      HasCallStack,
-      Hashable(..),
-      HashSet,
-      show,
-      find,
-      (&&),
-      error,
-      readIORef,
-      IORef )
+import Relude (
+    Applicative (pure),
+    Bool,
+    Eq ((==)),
+    Foldable (toList),
+    Functor (fmap),
+    Generic,
+    HasCallStack,
+    HashMap,
+    HashSet,
+    Hashable (..),
+    IORef,
+    Int,
+    Integer,
+    Maybe (..),
+    Monoid (mempty),
+    Ord (compare),
+    Rational,
+    Semigroup ((<>)),
+    Seq,
+    Show,
+    Text,
+    error,
+    find,
+    otherwise,
+    readIORef,
+    show,
+    ($),
+    (&&),
+ )
 import Vega.Loc (HasLoc, Loc)
 
 import Data.HashMap.Strict qualified as HashMap
@@ -464,19 +465,14 @@ data Type
     | PrimitiveRep PrimitiveRep
     deriving (Generic)
 
--- TODO: Why do we have UnitRep and EmptyRep here? Shouldn't they just be `ProductRep []` and `SumRep []`?
 data PrimitiveRep
-    = UnitRep
-    | EmptyRep
-    | BoxedRep
+    = BoxedRep
     | IntRep
     | DoubleRep
     deriving (Generic, Eq, Ord)
 
 instance Pretty PrimitiveRep where
     pretty = \case
-        UnitRep -> keyword "Unit"
-        EmptyRep -> keyword "Empty"
         BoxedRep -> keyword "Boxed"
         IntRep -> keyword "IntRep"
         DoubleRep -> keyword "DoubleRep"
@@ -591,7 +587,9 @@ instance Pretty Type where
         Rep -> keyword "Rep"
         Type rep -> keyword "Type" <> prettyArguments @[] [rep]
         Effect -> keyword "Effect"
+        SumRep [] -> keyword "Empty"
         SumRep reps -> lparen "(" <> intercalateDoc (" " <> keyword "+" <> " ") (fmap pretty reps) <> rparen ")"
+        ProductRep [] -> keyword "Unit"
         ProductRep reps -> lparen "(" <> intercalateDoc (" " <> keyword "*" <> " ") (fmap pretty reps) <> rparen ")"
         ArrayRep inner -> keyword "ArrayRep" <> lparen "(" <> pretty inner <> rparen ")"
         PrimitiveRep rep -> pretty rep
@@ -698,7 +696,7 @@ functionRepresentation :: Type
 functionRepresentation = ClosureRep (PrimitiveRep BoxedRep)
 
 boolRepresentation :: Type
-boolRepresentation = SumRep [PrimitiveRep UnitRep, PrimitiveRep UnitRep]
+boolRepresentation = SumRep [ProductRep [], ProductRep []]
 
 {- NOTE: Ord instances
 -----------------------------------------------------
