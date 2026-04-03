@@ -278,7 +278,7 @@ compileInstruction builder = \case
 
         let (payloadOffset, payloadLayout) = Layout.productOffsetAndLayout 1 closureLayout
         pointerToPayload <- buildGEPOffset builder closureValue payloadOffset ""
-        payload <- buildLoadOrKeepPointer builder payloadLayout pointerToPayload ""
+        payload <- buildLoadOrKeepPointer builder payloadLayout pointerToPayload "payload"
 
         argumentValuesWithoutPayload <- for arguments \argument -> do
             (value, _) <- lookupVar argument

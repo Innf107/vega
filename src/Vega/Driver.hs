@@ -276,7 +276,7 @@ compileBackend = do
                     errors -> for_ errors \error -> do
                         -- TODO: make this more configurable than logging straight to stderr
                         let ?config = Pretty.defaultPrettyANSIIConfig
-                        Pretty.eprintANSII (keyword "MIR VERIFICATION ERROR: " <> error)
+                        Pretty.eprintANSII (Pretty.errorText "MIR VERIFICATION ERROR: " <> error)
 
             llvmModule <- MIRToLLVM.compile mirProgram
             debugEmit llvmModule
