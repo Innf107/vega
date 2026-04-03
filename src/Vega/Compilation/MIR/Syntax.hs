@@ -62,7 +62,7 @@ data Instruction
     | LoadIntLiteral {var :: Variable, literal :: Int}
     | LoadSumTag {var :: Variable, sum :: Variable, sumRepresentation :: Representation}
     | CallDirect {var :: Variable, functionName :: Vega.GlobalName, arguments :: (Seq Variable)}
-    | CallClosure {var :: Variable, closure :: Variable, arguments :: (Seq Variable)}
+    | CallClosure {var :: Variable, closure :: Variable, arguments :: (Seq Variable), returnRepresentation :: Representation}
     deriving (Generic)
 
 data Terminator
@@ -70,7 +70,7 @@ data Terminator
     | Jump BlockDescriptor
     | SwitchInt {var :: Variable, cases :: Seq (Int, BlockDescriptor)}
     | TailCallDirect {functionName :: Vega.GlobalName, arguments :: Seq Variable}
-    | TailCallClosure {closure :: Variable, arguments :: Seq Variable}
+    | TailCallClosure {closure :: Variable, arguments :: Seq Variable, returnRepresentation :: Representation}
     deriving (Generic)
 
 instance Pretty Declaration where
@@ -155,8 +155,8 @@ instance Pretty Terminator where
                 <> rparen "]"
         TailCallDirect functionName callArguments ->
             keyword "tailcallDirect" <+> Vega.prettyGlobal Vega.VarKind functionName <> arguments callArguments
-        TailCallClosure closure callArguments ->
-            keyword "tailcallClosure" <+> pretty closure <> arguments callArguments
+        TailCallClosure closure callArguments representation ->
+            keyword "tailcallClosure" <+> pretty closure <> arguments callArguments <+> keyword ":" <+> pretty representation
 
 instance Pretty BlockDescriptor where
     pretty (MkBlockDescriptor unique) = number (hashUnique unique)

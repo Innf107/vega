@@ -63,19 +63,15 @@ compile program = do
         evalState initialState $ compileDeclaration declaration
     pure module_
 
-functionLLVMType :: (?context :: LLVM.Context) => Seq (MIR.Variable, Representation) -> Representation -> Eff es (LLVM.FunctionType, "sretParameter" ? Maybe (Int, Layout))
-functionLLVMType parameters returnRepresentation = do
-    returnLayout <- Layout.representationLayout returnRepresentation
-
-    baseParameterTypes <-
-        for parameters \(_, representation) ->
-            Layout.llvmParameterType <$> Layout.representationLayout representation
+functionLLVMType :: (?context :: LLVM.Context) => Seq Layout -> Layout -> Eff es (LLVM.FunctionType, "sretParameter" ? Maybe (Int, Layout))
+functionLLVMType parameters returnLayout = do
+    let baseParameterTypes = fmap Layout.llvmParameterType parameters
 
     (parameterTypes, returnType, usesSRet) <- case Layout.kind returnLayout of
         Layout.AggregatePointer -> do
             -- If we return a complex (AggregatePointer) value, we can't return it directly
             -- but instead we need to assign it to an sret parameter. By convention, this is
-            -- always our *last* parameter
+            -- always our *last* parameter (not including closure payloads)
             --
             -- TODO: add an sret attribute (and alignment??)
             pure (baseParameterTypes :|> LLVM.pointerType, LLVM.voidType, True)
@@ -89,7 +85,10 @@ forwardDeclareDeclaration ::
     (?context :: LLVM.Context, ?module_ :: LLVM.Module, IOE :> es) => MIR.Declaration -> Eff es ()
 forwardDeclareDeclaration = \case
     MIR.DefineFunction{name, parameters, returnRepresentation} -> do
-        (llvmType, _) <- functionLLVMType parameters returnRepresentation
+        parameterLayouts <- for parameters \(_, representation) -> Layout.representationLayout representation
+        returnLayout <- Layout.representationLayout returnRepresentation
+
+        (llvmType, _) <- functionLLVMType parameterLayouts returnLayout
         function <- LLVM.addFunction ?module_ (renderLLVMName name) llvmType
 
         -- We also generate a wrapper function for closures. See Note: [Closure Representation]
@@ -116,7 +115,9 @@ compileDeclaration = \case
         , blocks
         } -> do
             -- TODO: we don't actually need to re-compute this twice now
-            (_functionType, sretParameter) <- functionLLVMType parameters returnRepresentation
+            parameterLayouts <- for parameters \(_, representation) -> Layout.representationLayout representation
+            returnLayout <- Layout.representationLayout returnRepresentation
+            (_functionType, sretParameter) <- functionLLVMType parameterLayouts returnLayout
 
             function <-
                 LLVM.getNamedFunction ?module_ (renderLLVMName name) >>= \case
@@ -227,7 +228,7 @@ compileInstruction builder = \case
         insertVarMapping var (LLVM.constInt LLVM.int64Type (fromIntegral literal) True) Layout.intLayout
     MIR.LoadSumTag{var, sum, sumRepresentation} -> undefined
     MIR.CallDirect{var, functionName, arguments} -> undefined
-    MIR.CallClosure{var, closure, arguments} -> do
+    MIR.CallClosure{var, closure, arguments, returnRepresentation} -> do
         (closureValue, closureLayout) <- lookupVar closure
         let (functionPointerOffset, _functionPointerLayout) = Layout.productOffsetAndLayout 0 closureLayout
         pointerToFunctionPointer <- buildGEPOffset builder closureValue functionPointerOffset ""
@@ -236,15 +237,20 @@ compileInstruction builder = \case
         pointerToPayload <- buildGEPOffset builder closureValue payloadOffset ""
         payload <- buildLoadOrKeepPointer builder payloadLayout pointerToPayload ""
 
-        argumentValues <- for arguments \argument -> do
+        argumentValuesWithoutPayload <- for arguments \argument -> do
             (value, _) <- lookupVar argument
             pure value
+        let argumentValues = viaList $ argumentValuesWithoutPayload <> [payload]
 
-        let argumentsWithPayload = viaList (argumentValues <> [payload])
+        argumentLayoutsWithoutPayload <- for arguments \argument -> do
+            (_, layout) <- lookupVar argument
+            pure layout
+        let argumentLayouts = viaList $ argumentLayoutsWithoutPayload <> [Layout.boxedLayout]
 
-        let closureFunctionType = undefined
+        returnLayout <- Layout.representationLayout returnRepresentation
+        (closureFunctionType, _) <- functionLLVMType argumentLayouts returnLayout
 
-        asVar_ var undefined (LLVMBuilder.buildCall builder closureFunctionType pointerToFunctionPointer argumentsWithPayload)
+        asVar_ var returnLayout (LLVMBuilder.buildCall builder closureFunctionType pointerToFunctionPointer argumentValues)
 
 compileTerminator :: (Compile es) => LLVMBuilder.Builder -> MIR.Terminator -> Eff es ()
 compileTerminator builder = \case

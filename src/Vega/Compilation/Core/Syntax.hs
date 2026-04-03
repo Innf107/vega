@@ -33,7 +33,7 @@ data Declaration
 
 data Expr
     = Value Value
-    | Application CoreName (Seq Value)
+    | Application {function :: CoreName, arguments :: Seq Value, resultRepresentation :: Representation}
     | -- INVARIANT: JumpJoin never occurs in a let
       JumpJoin LocalCoreName (Seq Value)
     | Lambda (Seq (LocalCoreName, Representation)) (Seq Statement) Expr
@@ -132,7 +132,7 @@ instance Pretty Statement where
 instance Pretty Expr where
     pretty = \case
         Value value -> pretty value
-        Application funValue argValues -> pretty funValue <> arguments argValues
+        Application funValue argValues representation -> pretty funValue <> arguments argValues <+> keyword ":" <+> pretty representation
         JumpJoin name jumpArguments -> keyword "join" <+> pretty name <> arguments jumpArguments
         Lambda parameters bodyStatements bodyExpr -> keyword "\\" <> typedParameters parameters <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
         TupleAccess tupleValue index -> do

@@ -147,7 +147,7 @@ compileExpr expr = do
                 value -> panic $ "function compiled to non-variable value: " <> pretty value <> ". this should have been a type error"
 
             returnRepresentation <- convertRepresentation returnRepresentation
-            pure (functionStatements <> fold argumentStatements, Core.Application functionVar arguments, returnRepresentation)
+            pure (functionStatements <> fold argumentStatements, Core.Application functionVar arguments returnRepresentation, returnRepresentation)
         Vega.PartialApplication{loc = _, functionExpr, partialArguments} -> do
             (functionStatements, function, _) <- compileExprToValue functionExpr
             functionName <- case function of
@@ -162,7 +162,7 @@ compileExpr expr = do
                     Just vegaExpr -> do
                         (exprStatements, value) <- compileExprToValue_ vegaExpr
                         pure ([], exprStatements, value)
-            pure (functionStatements <> fold argumentStatements, Core.Lambda (fold locals) [] (Core.Application functionName arguments), undefined)
+            pure (functionStatements <> fold argumentStatements, Core.Lambda (fold locals) [] (Core.Application functionName arguments undefined), undefined)
         Vega.VisibleTypeApplication{} -> deferToValue
         Vega.Lambda{parameters, body} -> do
             let caseTree = PatternMatching.serializeSubPatterns parameters ()
@@ -572,14 +572,14 @@ coalesceStatements substitution = \case
 coalesceExpr :: Substitution -> Core.Expr -> Eff es (Substitution, Substitution -> Core.Expr)
 coalesceExpr substitution = \case
     Core.Value value -> pure (substitution, \substitution -> Core.Value (applySubst substitution value))
-    Core.Application functionName argValues ->
+    Core.Application functionName argValues representation ->
         pure
             ( substitution
             , \substitution -> do
                 let name = case functionName of
                         Core.Local localName -> Core.Local (getFinalName substitution localName)
                         Core.Global globalName -> Core.Global globalName
-                Core.Application name (fmap (applySubst substitution) argValues)
+                Core.Application name (fmap (applySubst substitution) argValues) representation
             )
     Core.JumpJoin joinPoint arguments ->
         pure

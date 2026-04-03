@@ -118,12 +118,12 @@ compileBody block statements returnExpr = case statements of
 compileLet :: (Compile es) => BlockBuilder -> MIR.Variable -> Core.Expr -> Eff es BlockBuilder
 compileLet block local = \case
     Core.Value value -> undefined
-    Core.Application function arguments -> do
+    Core.Application function arguments returnRepresentation -> do
         -- TODO: If 'function' refers to a top-level function, we can immediately emit a direct call here rather
         -- than relying on (future) optimizations to remove the unnecessary closure
         (block, closure) <- compileValue block (Core.Var function)
         (block, arguments) <- compileValues block arguments
-        block <- addInstruction block (MIR.CallClosure{var = local, closure, arguments})
+        block <- addInstruction block (MIR.CallClosure{var = local, closure, arguments, returnRepresentation})
         pure block
     Core.JumpJoin joinPoint _arguments -> do
         panic $ "JumpJoin for join point " <> pretty joinPoint <> " in non-tail position"
@@ -140,11 +140,11 @@ compileReturn block = \case
     Core.Value value -> do
         (block, value) <- compileValue block value
         finish block (MIR.Return value)
-    Core.Application function arguments -> do
+    Core.Application function arguments returnRepresentation -> do
         -- TODO: We can also directly emit a direct tail call here if 'function' refers to a global function
         (block, closure) <- compileValue block (Core.Var function)
         (block, arguments) <- compileValues block arguments
-        finish block (TailCallClosure{closure, arguments})
+        finish block (TailCallClosure{closure, arguments, returnRepresentation})
     Core.JumpJoin joinPoint arguments -> do
         (block, arguments) <- compileValues block arguments
 
