@@ -156,7 +156,7 @@ compileReturn block = \case
     Core.ConstructorCase scrutinee scrutineeRepresentation cases -> do
         (block, scrutinee) <- compileValue block scrutinee
         tag <- newVar
-        block <- addInstruction block (MIR.LoadSumTag tag scrutinee scrutineeRepresentation)
+        block <- addInstruction block (MIR.LoadSumTag tag scrutinee)
 
         targetBlocks <- for (HashMap.toList cases) \(constructorName, (parameters, bodyStatements, bodyExpr)) -> do
             index <-

@@ -218,7 +218,7 @@ compileInstruction builder = \case
 
         pointer <- buildGEPOffset builder targetValue offset ""
         asVar_ var fieldLayout $ buildLoadOrKeepPointer builder fieldLayout pointer
-    MIR.Box{var, target, targetRepresentation} -> undefined
+    MIR.Box{var, target} -> undefined
     MIR.Unbox{var, boxedTarget, representation} -> undefined
     MIR.ProductConstructor{var, values, representation} -> do
         llvmValues <- for values lookupVarValue
@@ -260,7 +260,7 @@ compileInstruction builder = \case
     MIR.LoadGlobal{var, globalName, representation} -> undefined
     MIR.LoadIntLiteral{var, literal} -> do
         insertVarMapping var (LLVM.constInt LLVM.int64Type (fromIntegral literal) True) Layout.intLayout
-    MIR.LoadSumTag{var, sum, sumRepresentation} -> do
+    MIR.LoadSumTag{var, sum} -> do
         (sumValue, sumLayout) <- lookupVar sum
         let tagLayout = Layout.sizedIntLayoutInBytes (Layout.sumTagSizeInBytes sumLayout)
 

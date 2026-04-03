@@ -2,14 +2,14 @@ module Vega.Compilation.MIR.Syntax where
 
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
+import Data.Sequence qualified as Seq
 import Data.Unique (Unique, hashUnique)
 import GHC.Generics (Generically (..))
 import Relude
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation (..))
+import Vega.Panic (panic)
 import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, localIdentText, lparen, number, pretty, rparen, (<+>))
 import Vega.Syntax qualified as Vega
-import qualified Data.Sequence as Seq
-import Vega.Panic (panic)
 
 data Program = MkProgram
     { declarations :: Seq Declaration
@@ -54,7 +54,6 @@ data Instruction
     | Box
         { var :: Variable
         , target :: Variable
-        , targetRepresentation :: Representation
         }
     | Unbox {var :: Variable, boxedTarget :: Variable, representation :: Representation}
     | ProductConstructor {var :: Variable, values :: Seq Variable, representation :: Representation}
@@ -63,8 +62,8 @@ data Instruction
     | LoadGlobalClosure {var :: Variable, functionName :: Vega.GlobalName}
     | LoadGlobal {var :: Variable, globalName :: Vega.GlobalName, representation :: Representation}
     | LoadIntLiteral {var :: Variable, literal :: Int}
-    | LoadSumTag {var :: Variable, sum :: Variable, sumRepresentation :: Representation}
-    | CallDirect {var :: Variable, functionName :: Vega.GlobalName, arguments :: (Seq Variable)}
+    | LoadSumTag {var :: Variable, sum :: Variable}
+    | CallDirect {var :: Variable, functionName :: Vega.GlobalName, arguments :: (Seq Variable), returnRepresentation :: Representation}
     | CallClosure {var :: Variable, closure :: Variable, arguments :: (Seq Variable), returnRepresentation :: Representation}
     deriving (Generic)
 
@@ -72,7 +71,7 @@ data Terminator
     = Return Variable
     | Jump BlockDescriptor
     | SwitchInt {var :: Variable, cases :: Seq (Int, BlockDescriptor)}
-    | TailCallDirect {functionName :: Vega.GlobalName, arguments :: Seq Variable}
+    | TailCallDirect {functionName :: Vega.GlobalName, arguments :: Seq Variable, returnRepresentation :: Representation}
     | TailCallClosure {closure :: Variable, arguments :: Seq Variable, returnRepresentation :: Representation}
     deriving (Generic)
 
@@ -143,8 +142,7 @@ instance Pretty Instruction where
         Box
             { var
             , target
-            , targetRepresentation
-            } -> keywordInstruction "box" var [pretty target, pretty targetRepresentation]
+            } -> keywordInstruction "box" var [pretty target]
         Unbox{var, boxedTarget, representation} -> keywordInstruction "unbox" var [pretty boxedTarget, pretty representation]
         ProductConstructor{var, values, representation} ->
             pretty var <+> keyword "=" <+> keyword "product" <+> arguments values <+> pretty representation
@@ -157,7 +155,7 @@ instance Pretty Instruction where
             keywordInstruction "loadGlobal" var [Vega.prettyGlobal Vega.VarKind globalName, pretty representation]
         LoadIntLiteral var int ->
             keywordInstruction "int" var [number int]
-        LoadSumTag{var, sum, sumRepresentation} -> keywordInstruction "loadSumTag" var [pretty sum, pretty sumRepresentation]
+        LoadSumTag{var, sum} -> keywordInstruction "loadSumTag" var [pretty sum]
         CallDirect{var, functionName, arguments = callArguments} -> keywordInstruction "callDirect" var [Vega.prettyGlobal Vega.VarKind functionName] <> arguments callArguments
         CallClosure{var, closure, arguments = callArguments} -> keywordInstruction "callClosure" var [pretty closure] <> arguments callArguments
 
@@ -175,8 +173,8 @@ instance Pretty Terminator where
                 <> align (intercalateDoc "\n" (fmap (\(value, target) -> number value <+> keyword "->" <+> pretty target) targets))
                 <> "\n"
                 <> rparen "]"
-        TailCallDirect functionName callArguments ->
-            keyword "tailcallDirect" <+> Vega.prettyGlobal Vega.VarKind functionName <> arguments callArguments
+        TailCallDirect functionName callArguments returnRepresentation ->
+            keyword "tailcallDirect" <+> Vega.prettyGlobal Vega.VarKind functionName <> arguments callArguments <+> keyword ":" <+> pretty returnRepresentation
         TailCallClosure closure callArguments representation ->
             keyword "tailcallClosure" <+> pretty closure <> arguments callArguments <+> keyword ":" <+> pretty representation
 
