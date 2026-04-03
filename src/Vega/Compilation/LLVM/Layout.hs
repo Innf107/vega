@@ -6,6 +6,7 @@ module Vega.Compilation.LLVM.Layout (
     -- * Specific Layouts
     boxedLayout,
     intLayout,
+    sizedIntLayoutInBytes,
     functionPointerLayout,
     closureLayout,
 
@@ -172,7 +173,10 @@ primitiveLayout = \case
     Vega.DoubleRep -> pure $ MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.doubleType, details = Primitive}
 
 intLayout :: (?context :: LLVM.Context) => Layout
-intLayout = MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.int64Type, details = Primitive}
+intLayout = sizedIntLayoutInBytes 8
+
+sizedIntLayoutInBytes :: (?context :: LLVM.Context) => Int -> Layout
+sizedIntLayoutInBytes size = MkLayout{size, alignment = Alignment.fromValue size, kind = LLVMScalar (LLVM.intType (size * 8)), details = Primitive}
 
 -- TODO: we might be able to give heap pointers a different address space from unmanaged pointers?
 boxedLayout :: (?context :: LLVM.Context) => Layout

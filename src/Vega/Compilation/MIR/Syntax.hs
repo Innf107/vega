@@ -74,6 +74,7 @@ data Terminator
     deriving (Generic)
 
 instance Pretty Declaration where
+    pretty :: Declaration -> Doc Ann
     pretty = \case
         DefineFunction{name, parameters, init, blocks} -> do
             pretty name

@@ -25,6 +25,7 @@ import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.LLVM.Layout (Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
 import Vega.Compilation.MIR.Syntax qualified as MIR
+import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
 import Vega.Pretty (pretty)
 import Vega.Syntax (renderPackageName)
@@ -226,7 +227,12 @@ compileInstruction builder = \case
     MIR.LoadGlobal{var, globalName, representation} -> undefined
     MIR.LoadIntLiteral{var, literal} -> do
         insertVarMapping var (LLVM.constInt LLVM.int64Type (fromIntegral literal) True) Layout.intLayout
-    MIR.LoadSumTag{var, sum, sumRepresentation} -> undefined
+    MIR.LoadSumTag{var, sum, sumRepresentation} -> do
+        (sumValue, sumLayout) <- lookupVar sum
+        let tagLayout = Layout.sizedIntLayoutInBytes (Layout.sumTagSizeInBytes sumLayout)
+
+        tagPointer <- buildGEPOffset builder sumValue (Layout.sumTagOffset sumLayout) "tagptr"
+        asVar_ var tagLayout $ LLVMBuilder.buildLoad builder (Layout.llvmType tagLayout) tagPointer
     MIR.CallDirect{var, functionName, arguments} -> undefined
     MIR.CallClosure{var, closure, arguments, returnRepresentation} -> do
         (closureValue, closureLayout) <- lookupVar closure
@@ -266,6 +272,18 @@ compileTerminator builder = \case
                 _ <- LLVMBuilder.buildMemCpy builder target 0 value 0 (LLVM.constInt LLVM.int64Type (fromIntegral (Layout.size returnLayout)) False)
                 _ <- LLVMBuilder.buildRetVoid builder
                 pure ()
+    MIR.SwitchInt scrutinee alternatives -> do
+        (scrutineeValue, layout) <- lookupVar scrutinee
+        let llvmType = Layout.llvmType layout
+
+        cases <- viaList <$> for alternatives \(int, target) -> do
+            targetLLVMBlock <- registerNewBlock target
+            pure (LLVM.constInt llvmType (fromIntegral int) False, targetLLVMBlock)
+        
+        defaultBlock <- newUnreachableBlock
+        
+        _ <- LLVMBuilder.buildSwitch builder scrutineeValue cases defaultBlock
+        pure ()
     _ -> undefined
 
 buildClosure :: (Compile es) => LLVMBuilder.Builder -> Vega.GlobalName -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
@@ -330,6 +348,16 @@ registerNewBlock descriptor = do
                     }
                 )
             pure llvmBlock
+
+-- TODO: we might want to be able to swap this out to panic in debug builds instead of using unreachable
+newUnreachableBlock :: Compile es => Eff es LLVM.BasicBlock
+newUnreachableBlock = do
+    -- TODO: it would be nice if we could reuse the existing builder here instead of allocating a new one
+    builder <- LLVMBuilder.createBuilder
+    llvmBlock <- LLVM.appendBasicBlock ?function "unreachable"
+    LLVMBuilder.positionBuilderAtEnd builder llvmBlock
+    _ <- LLVMBuilder.buildUnreachable builder
+    pure llvmBlock
 
 asVar :: (Compile es) => MIR.Variable -> Layout -> (Text -> Eff es LLVM.Value) -> Eff es LLVM.Value
 asVar var layout cont = do
