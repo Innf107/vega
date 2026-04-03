@@ -99,13 +99,25 @@ forwardDeclareDeclaration = \case
         let returnType = LLVM.getReturnType llvmType
         -- We add a single "Boxed" (i.e. ptr for LLVM) argument
         let wrapperType = LLVM.functionType (parameters <> [LLVM.pointerType]) returnType False
-        _ <- LLVM.addFunction ?module_ (closureWrapperNameForFunction name) wrapperType
+        closureWrapper <- LLVM.addFunction ?module_ (closureWrapperNameForFunction name) wrapperType
+
+        block <- LLVM.appendBasicBlock closureWrapper ""
         builder <- LLVMBuilder.createBuilder
+        LLVMBuilder.positionBuilderAtEnd builder block
 
         let arguments = Storable.generate (Storable.length parameters) \i -> LLVM.getParam function i
         result <- LLVMBuilder.buildCall builder llvmType function arguments ""
-        _ <- LLVMBuilder.buildRet builder result
-        pure ()
+        case Layout.kind returnLayout of
+            Layout.LLVMScalar _ -> do
+                _ <- LLVMBuilder.buildRet builder result
+                pure ()
+            -- AggregatePointers are returned in sret parameters anyway so we are already passing that along correctly anyway
+            Layout.AggregatePointer -> do
+                _ <- LLVMBuilder.buildRetVoid builder
+                pure ()
+            Layout.ZeroSized -> do
+                _ <- LLVMBuilder.buildRetVoid builder
+                pure ()
 
 compileDeclaration ::
     (?context :: LLVM.Context, ?module_ :: LLVM.Module, IOE :> es, State DeclarationState :> es) => MIR.Declaration -> Eff es ()
