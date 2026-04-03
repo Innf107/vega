@@ -38,8 +38,12 @@ data Block = MkBlock
     }
     deriving (Generic)
 
-newtype Variable = MkVariable Int
-    deriving newtype (Eq, Hashable)
+data Variable = MkVariable Text Int
+instance Eq Variable where
+    MkVariable _ index1 == MkVariable _ index2 = index1 == index2
+
+instance Hashable Variable where
+    hashWithSalt salt (MkVariable _ index) = hashWithSalt salt index
 
 data PathSegment
     = SumConstructorPath Int
@@ -182,7 +186,7 @@ instance Pretty BlockDescriptor where
     pretty (MkBlockDescriptor unique) = number (hashUnique unique)
 
 instance Pretty Variable where
-    pretty (MkVariable name) = localIdentText ("x" <> show name)
+    pretty (MkVariable name index) = localIdentText (name <> "_" <> show index)
 
 arguments :: (Pretty a, Foldable f) => f a -> Doc Ann
 arguments elements = lparen "(" <> intercalateDoc (keyword ", ") (map pretty (toList elements)) <> rparen ")"

@@ -201,7 +201,10 @@ compilePhis builder (MIR.MkPhis phis) = do
 
 compileInstruction :: (Compile es) => LLVMBuilder.Builder -> MIR.Instruction -> Eff es ()
 compileInstruction builder = \case
-    MIR.Add out in1 in2 -> undefined
+    MIR.Add var arg1 arg2 -> do
+        arg1Value <- lookupVarValue arg1
+        arg2Value <- lookupVarValue arg2
+        asVar_ var Layout.intLayout $ LLVMBuilder.buildAdd builder arg1Value arg2Value
     MIR.AccessField{var, path, target, fieldRepresentation} -> do
         (targetValue, targetLayout) <- lookupVar target
         fieldLayout <- Layout.representationLayout fieldRepresentation
@@ -459,7 +462,7 @@ lookupBlock block = do
         Just value -> pure value
 
 renderVariable :: MIR.Variable -> Text
-renderVariable (MIR.MkVariable var) = "x" <> show var
+renderVariable (MIR.MkVariable name index) = name <> "_" <> show index
 
 -- TODO: consider using more standard name mangling i guess
 renderLLVMName :: Core.CoreName -> Text

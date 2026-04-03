@@ -24,6 +24,7 @@ import Vega.Pretty (pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Syntax qualified as Vega
 import Vega.Util (assert, forFoldLM, forIndexed_, indexed, mapAccumLM)
+import qualified Data.Unique as Unique
 
 type Compile es = (GraphPersistence :> es, Trace :> es, NewUnique :> es, State CurrentDeclarationState :> es)
 
@@ -76,7 +77,7 @@ compileFunction ::
 compileFunction functionName parameters returnRepresentation statements returnExpr = do
     ((initDescriptor, mirParameters), finalDeclarationState) <- runState initialDeclarationState $ do
         mirParameters <- for parameters \(parameterName, representation) -> do
-            var <- newVar
+            var <- newVarFromName parameterName
             registerVariable parameterName var representation
             pure (var, representation)
 
@@ -97,7 +98,7 @@ compileBody :: (Compile es) => BlockBuilder -> Seq Core.Statement -> Core.Expr -
 compileBody block statements returnExpr = case statements of
     Empty -> compileReturn block returnExpr
     Core.Let name representation expr :<| rest -> do
-        var <- newVar
+        var <- newVarFromName name
         registerVariable name var representation
         block <- compileLet block var expr
         compileBody block rest returnExpr
@@ -155,7 +156,7 @@ compileReturn block = \case
         undefined
     Core.ConstructorCase scrutinee scrutineeRepresentation cases -> do
         (block, scrutinee) <- compileValue block scrutinee
-        tag <- newVar
+        tag <- newVar "tag"
         block <- addInstruction block (MIR.LoadSumTag tag scrutinee)
 
         targetBlocks <- for (HashMap.toList cases) \(constructorName, (parameters, bodyStatements, bodyExpr)) -> do
@@ -168,7 +169,7 @@ compileReturn block = \case
 
             targetBlockBuilder <- execState targetBlockBuilder $ forIndexed_ parameters \name productIndex -> do
                 targetBlockBuilder <- get
-                parameterVariable <- newVar
+                parameterVariable <- newVarFromName name
 
                 let path = [MIR.SumConstructorPath index, MIR.ProductFieldPath productIndex]
                 let fieldRepresentation = MIR.representationAtPath scrutineeRepresentation path
@@ -208,7 +209,7 @@ compileValue block = \case
             pure (block, var)
         Core.Global globalName -> do
             -- TODO: detect if name is a function and return MIR.LoadGlobalClosure in that case instead
-            var <- newVar
+            var <- newVar globalName.name
             GraphPersistence.getGlobalRepresentation globalName >>= \case
                 GlobalVar representation -> do
                     block <- addInstruction block (MIR.LoadGlobal{var, globalName, representation})
@@ -217,7 +218,7 @@ compileValue block = \case
                     block <- addInstruction block (MIR.LoadGlobalClosure{var, functionName = globalName})
                     pure (block, var)
     Core.Literal literal -> do
-        variable <- newVar
+        variable <- newVar ""
         case literal of
             Core.IntLiteral value -> do
                 -- TODO: check the size properly etc.
@@ -226,7 +227,7 @@ compileValue block = \case
             _ -> undefined
     Core.DataConstructorApplication constructor arguments representation -> do
         (block, arguments) <- compileValues block arguments
-        variable <- newVar
+        variable <- newVar ""
         builder <- case constructor of
             Core.TupleConstructor size -> do
                 assert (size == length arguments)
@@ -238,7 +239,7 @@ compileValue block = \case
                         case arguments of
                             [singleArgument] -> addInstruction block (MIR.SumConstructor{var = variable, tag, payload = singleArgument, representation})
                             _ -> do
-                                product <- newVar
+                                product <- newVar ""
                                 let payloadRepresentation = case representation of
                                         Core.SumRep inner -> case Seq.lookup tag inner of
                                             Just payloadRep -> payloadRep
@@ -271,12 +272,17 @@ joinPointBlockFor name = do
         Nothing -> panic $ "JumpJoin to join point without a block descriptor: " <> pretty name
         Just descriptor -> pure descriptor
 
-newVar :: (Compile es) => Eff es MIR.Variable
-newVar = do
+newVar :: (Compile es) => Text -> Eff es MIR.Variable
+newVar text = do
     state <- get
-    let variable = MIR.MkVariable state.varCount
+    let variable = MIR.MkVariable text state.varCount
     put (state{varCount = state.varCount + 1})
     pure variable
+
+newVarFromName :: Compile es => LocalCoreName -> Eff es MIR.Variable
+newVarFromName = \case
+    Core.UserProvided localName -> newVar localName.name
+    Core.Generated i -> newVar ("x" <> show (Unique.hashUnique i))
 
 data BlockBuilder = MkBlockBuilder
     { descriptor :: MIR.BlockDescriptor
