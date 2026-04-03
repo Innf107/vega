@@ -1,4 +1,4 @@
-module Vega.Alignment (Alignment, fromExponent, fromValue, align) where
+module Vega.Alignment (Alignment, fromExponent, fromValue, align, toInt) where
 
 import Data.Bits (complement, shiftL, (.&.))
 import Data.Bits qualified as Bits
@@ -23,4 +23,7 @@ align MkAlignment{exponent} value = do
         else (value .&. complement mask) + alignment
 
 instance Pretty Alignment where
-    pretty MkAlignment{exponent} = number (1 `shiftL` exponent :: Int)
+    pretty alignment = number (toInt alignment)
+
+toInt :: Alignment -> Int
+toInt MkAlignment{exponent} = 1 `shiftL` exponent :: Int

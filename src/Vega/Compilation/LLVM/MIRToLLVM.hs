@@ -14,10 +14,12 @@ import Data.HashSet qualified as HashSet
 import Data.Sequence (Seq (..))
 import Data.Text qualified as Text
 import Data.Traversable (for)
+import Data.Vector.Storable qualified as Storable
 import Effectful (Eff, IOE, (:>))
 import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import LLVM.Core qualified as LLVM
 import LLVM.InstructionBuilder qualified as LLVMBuilder
+import Vega.Alignment qualified as Alignment
 import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.LLVM.Layout (Layout)
@@ -28,6 +30,7 @@ import Vega.Pretty (pretty)
 import Vega.Syntax (renderPackageName)
 import Vega.Syntax qualified as Vega
 import Vega.Util (forIndexed_, viaList, type (?))
+import Vega.Util qualified as Util
 
 data DeclarationState = MkDeclarationState
     { registeredBlocks :: HashMap MIR.BlockDescriptor LLVM.BasicBlock
@@ -87,7 +90,19 @@ forwardDeclareDeclaration ::
 forwardDeclareDeclaration = \case
     MIR.DefineFunction{name, parameters, returnRepresentation} -> do
         (llvmType, _) <- functionLLVMType parameters returnRepresentation
-        _ <- LLVM.addFunction ?module_ (renderLLVMName name) llvmType
+        function <- LLVM.addFunction ?module_ (renderLLVMName name) llvmType
+
+        -- We also generate a wrapper function for closures. See Note: [Closure Representation]
+        parameters <- LLVM.getParamTypes llvmType
+        let returnType = LLVM.getReturnType llvmType
+        -- We add a single "Boxed" (i.e. ptr for LLVM) argument
+        let wrapperType = LLVM.functionType (parameters <> [LLVM.pointerType]) returnType False
+        _ <- LLVM.addFunction ?module_ (closureWrapperNameForFunction name) wrapperType
+        builder <- LLVMBuilder.createBuilder
+
+        let arguments = Storable.generate (Storable.length parameters) \i -> LLVM.getParam function i
+        result <- LLVMBuilder.buildCall builder llvmType function arguments ""
+        _ <- LLVMBuilder.buildRet builder result
         pure ()
 
 compileDeclaration ::
@@ -116,6 +131,10 @@ compileDeclaration = \case
                                 Just (position, returnLayout) -> Just (LLVM.getParam function position, returnLayout)
                                 Nothing -> Nothing
                         }
+
+            forIndexed_ parameters \(variable, _) index -> do
+                print (pretty variable)
+                insertVarMapping variable (LLVM.getParam function index)
 
             builder <- LLVMBuilder.createBuilder
 
@@ -175,16 +194,31 @@ compileInstruction builder = \case
         layout <- Layout.representationLayout representation
 
         productPointer <- asVar var (LLVMBuilder.buildAlloca builder (Layout.llvmType layout))
-
         forIndexed_ llvmValues \value index -> do
             let (offset, _subLayout) = Layout.productOffsetAndLayout index layout
             pointer <- case offset of
                 0 -> pure productPointer
-                _ -> do
-                    LLVMBuilder.buildGetElementPtr builder LLVM.int8Type productPointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] ""
-            _ <- LLVMBuilder.buildStore builder pointer value
+                _ -> buildGEPOffset builder productPointer offset ""
+            _ <- LLVMBuilder.buildStore builder value pointer
             pure ()
-    MIR.SumConstructor{var, tag, values, representation} -> undefined
+    MIR.SumConstructor{var, tag, payload, representation} -> do
+        value <- lookupVar payload
+        layout <- Layout.representationLayout representation
+
+        sumPointer <- asVar var (LLVMBuilder.buildAlloca builder (Layout.llvmType layout))
+
+        -- Store the tag
+        let tagLLVMType = LLVM.intType (Layout.sumTagSizeInBytes layout * 8)
+        tagPointer <- buildGEPOffset builder sumPointer (Layout.sumTagOffset layout) ""
+        _ <- LLVMBuilder.buildStore builder (LLVM.constInt tagLLVMType (fromIntegral tag) False) tagPointer
+
+        -- Storing the payload currently involves a single contiguous copy. This may change in the future
+        -- if we add support for non-contiguous payloads.
+        -- See NOTE: [Sum tags] in Vega.Compilation.LLVM.Layout for details.
+        let (payloadOffset, payloadLayout) = Layout.sumOffsetAndLayout tag layout
+
+        payloadPointer <- buildGEPOffset builder sumPointer payloadOffset ""
+        buildComplexStore builder payloadLayout value payloadPointer
     MIR.AllocClosure{var, closedValues, representation} -> undefined
     MIR.LoadGlobalClosure{var, functionName} -> do
         asVar_ var $ buildClosure builder functionName Layout.boxedLayout LLVM.constNullPointer
@@ -193,7 +227,23 @@ compileInstruction builder = \case
         insertVarMapping var (LLVM.constInt LLVM.int64Type (fromIntegral literal) True)
     MIR.LoadSumTag{var, sum, sumRepresentation} -> undefined
     MIR.CallDirect{var, functionName, arguments} -> undefined
-    MIR.CallClosure{var, closure, arguments} -> undefined
+    MIR.CallClosure{var, closure, arguments} -> do
+        closureValue <- lookupVar closure
+        let layout = undefined
+        let (functionPointerOffset, _functionPointerLayout) = Layout.productOffsetAndLayout 0 layout
+        pointerToFunctionPointer <- buildGEPOffset builder closureValue functionPointerOffset ""
+
+        let (payloadOffset, payloadLayout) = Layout.productOffsetAndLayout 1 layout
+        pointerToPayload <- buildGEPOffset builder closureValue payloadOffset ""
+        payload <- buildLoadOrKeepPointer builder payloadLayout pointerToPayload ""
+
+        argumentValues <- for arguments lookupVar
+
+        let argumentsWithPayload = viaList (argumentValues <> [payload])
+
+        let closureFunctionType = undefined
+
+        asVar_ var (LLVMBuilder.buildCall builder closureFunctionType pointerToFunctionPointer argumentsWithPayload)
 
 compileTerminator :: (Compile es) => LLVMBuilder.Builder -> MIR.Terminator -> Eff es ()
 compileTerminator builder = \case
@@ -214,7 +264,8 @@ compileTerminator builder = \case
 buildClosure :: (Compile es) => LLVMBuilder.Builder -> Vega.GlobalName -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
 buildClosure builder functionName closureLayout closureValue varName = do
     functionPointer <-
-        LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
+        -- We need to use the closure wrapper instead of the actual function here. See Note: [Closure Representation].
+        LLVM.getNamedFunction ?module_ (closureWrapperNameForFunction (Core.Global functionName)) >>= \case
             Nothing -> panic $ "Trying to create closure for non-existent top-level function: " <> Vega.prettyGlobal Vega.VarKind functionName
             Just function_ -> pure function_
     let combinedLayout = Layout.productLayout [Layout.functionPointerLayout, closureLayout]
@@ -225,15 +276,38 @@ buildProduct builder values layout varName = do
     productPointer <- LLVMBuilder.buildAlloca builder (Layout.llvmType layout) varName
 
     forIndexed_ values \value index -> do
-        let (offset, _subLayout) = Layout.productOffsetAndLayout index layout
+        let (offset, subLayout) = Layout.productOffsetAndLayout index layout
         pointer <- case offset of
             0 -> pure productPointer
-            _ -> do
-                LLVMBuilder.buildGetElementPtr builder LLVM.int8Type productPointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] ""
-        _ <- LLVMBuilder.buildStore builder pointer value
-        pure ()
+            _ -> buildGEPOffset builder productPointer offset ""
+        buildComplexStore builder subLayout value pointer
 
     pure productPointer
+
+buildComplexStore :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> LLVM.Value -> Eff es ()
+buildComplexStore builder layout value pointer = do
+    case Layout.kind layout of
+        Layout.LLVMScalar _scalar -> do
+            _ <- LLVMBuilder.buildStore builder value pointer
+            pure ()
+        Layout.AggregatePointer -> do
+            let alignment = Alignment.toInt (Layout.alignment layout)
+            let size = LLVM.constInt LLVM.int64Type (fromIntegral (Layout.size layout)) False
+            _ <- LLVMBuilder.buildMemCpy builder pointer alignment value alignment size
+            pure ()
+
+buildLoadOrKeepPointer :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
+buildLoadOrKeepPointer builder layout value varName = case Layout.kind layout of
+    Layout.LLVMScalar scalar -> LLVMBuilder.buildLoad builder scalar value varName
+    Layout.AggregatePointer -> pure value
+
+{- | Build a @getelementptr@ instruction pointing at a constant offset given in bytes.
+The offset is assumed to be in-bounds.
+-}
+buildGEPOffset :: (Compile es) => LLVMBuilder.Builder -> LLVM.Value -> Int -> Text -> Eff es LLVM.Value
+buildGEPOffset builder pointer offset name = do
+    result <- LLVMBuilder.buildInBoundsGetElementPtr builder LLVM.int8Type pointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] name
+    pure result
 
 registerNewBlock :: (Compile es) => MIR.BlockDescriptor -> Eff es LLVM.BasicBlock
 registerNewBlock descriptor = do
@@ -264,6 +338,9 @@ asVar_ var cont = do
     _ <- asVar var cont
     pure ()
 
+closureWrapperNameForFunction :: Core.CoreName -> Text
+closureWrapperNameForFunction coreName = renderLLVMName coreName <> "__closure"
+
 lookupVar :: (HasCallStack, Compile es) => MIR.Variable -> Eff es LLVM.Value
 lookupVar variable = do
     MkDeclarationState{variableMappings} <- get
@@ -286,3 +363,16 @@ renderLLVMName :: Core.CoreName -> Text
 renderLLVMName = \case
     Core.Global name -> "_vega_" <> renderPackageName name.moduleName.package <> ":" <> Text.intercalate "/" (toList (name.moduleName.subModules)) <> ":" <> name.name
     Core.Local _ -> undefined
+
+{- NOTE [Closure Representation]:
+Closures with payload representation `r` are *always* represented as products (FunctionPointer * r).
+
+This means that functions operating on them can assume a simple 2-element product layout.
+
+However, since every closure contains a payload, we need to do something slightly more clever for closures referring to top-level functions.
+Currently, all closures have payloads of representation `Boxed` (although this will change), but in particular that means
+that top-level closures have a non-empty (but unused) closure payload.
+This means that we cannot use the actual function as the function pointer for the closure.
+Instead, for every top-level function `f` we generate a wrapper function `f_closure` that takes an additional payload argument,
+discards it and calls `f` with the remaining arguments.
+-}

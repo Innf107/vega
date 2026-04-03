@@ -1,17 +1,30 @@
 module Vega.Compilation.LLVM.Layout (
+    -- * Layout Generation
     Layout,
     representationLayout,
+
+    -- * Specific Layouts
     boxedLayout,
     functionPointerLayout,
-    productLayout,
+
+    -- * Layout Properties
     size,
-    kind,
-    LayoutKind (..),
     alignment,
     llvmParameterType,
     llvmType,
+
+    -- ** Products
+    productLayout,
     productOffsetAndLayout,
+
+    -- ** Sums
     sumOffsetAndLayout,
+    sumTagOffset,
+    sumTagSizeInBytes,
+
+    -- ** Low level details
+    kind,
+    LayoutKind (..),
 ) where
 
 import Data.Bits qualified as Bits
@@ -75,8 +88,25 @@ productOffsetAndLayout fieldIndex layout = case layout.details of
         Just value -> value
     _ -> panic $ "trying to access productOffsetAndLayout on non-product layout " <> showHeadConstructor layout.details
 
+{- | Return the layout of the given constructor, as well as the offset from which it starts.
+Because the sum tag is currently the last element of the product, this is always zero,
+but that might change in the future. See NOTE: [Sum tags] for details
+-}
 sumOffsetAndLayout :: Int -> Layout -> (Int, Layout)
-sumOffsetAndLayout constructorIndex layout = undefined
+sumOffsetAndLayout constructorIndex layout = case layout.details of
+    SumLayout{constructorLayouts} -> case Seq.lookup constructorIndex constructorLayouts of
+        Nothing -> panic $ "trying to access out-of-bounds constructor " <> number constructorIndex <> " on sum layout with " <> pretty (length constructorLayouts) <> " constructors."
+        Just value -> (0, value)
+    _ -> panic $ "trying to access sumOffsetAndLayout on non-sum layout " <> showHeadConstructor layout.details
+
+-- | The offset at which the sum tag is stored. See NOTE: [Sum tags]
+sumTagOffset :: Layout -> Int
+sumTagOffset layout = layout.size - sumTagSizeInBytes layout
+
+sumTagSizeInBytes :: Layout -> Int
+sumTagSizeInBytes layout = case layout.details of
+    SumLayout{tagSizeInBytes} -> tagSizeInBytes
+    _ -> panic $ "trying to access sum tag size on non-sum layout " <> showHeadConstructor layout.details
 
 type LayoutGen es = (?context :: LLVM.Context) :: Constraint
 
@@ -107,6 +137,7 @@ productLayout elementLayouts = do
 
     MkLayout{size, alignment, kind = AggregatePointer, details = ProductLayout{offsetsAndElementLayouts}}
 
+-- TODO: make sure the tag is *last* element
 sumLayout :: (?context :: LLVM.Context) => Seq Layout -> Layout
 sumLayout payloads = do
     let tagSizeInBits = smallestPowerOfTwoFitting (length payloads)
@@ -148,3 +179,20 @@ functionPointerLayout = MkLayout{size = 8, alignment = Alignment.fromExponent 3,
 
 smallestPowerOfTwoFitting :: Int -> Int
 smallestPowerOfTwoFitting n = Bits.finiteBitSize n - Bits.countLeadingZeros (n - 1)
+
+{- NOTE [Sum tags]:
+For now, the tag of a sum is always the last element in the layout.
+
+In the common case where the tag fits in a single byte, this means it is exactly the last byte
+(exactly one after the size of the largest constructor), although if it needs two bytes,
+it may be offset by one to satisfy its natural alignment.
+
+Doing this is beneficial for two reasons:
+1) Sum payloads are kept contiguous, meaning we can load and store them in one go.
+2) We don't need to introduce unnecessary padding into the payload and since the tag is almost always
+only a single byte (and even if not, only two bytes), we don't add any (or at most one byte of) additional padding.
+
+However, we may want to lift this restriction in the future since if the payload contains unused bytes, we might be
+able to squeeze the tag into it without using any space for it. In order to support this, we will first need
+support for both non-contiguous payloads and padding/niche tracking, neither of which we have just yet.
+-}

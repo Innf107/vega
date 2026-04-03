@@ -8,6 +8,7 @@ import Effectful.State.Static.Local (State, execState, get, modify, put, runStat
 import Data.Foldable (foldrM)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
+import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Data.Vector.Generic qualified as Vector
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation)
@@ -20,6 +21,7 @@ import Vega.Effect.Trace (Trace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique)
 import Vega.Panic (panic)
 import Vega.Pretty (pretty)
+import Vega.Pretty qualified as Pretty
 import Vega.Syntax qualified as Vega
 import Vega.Util (assert, forFoldLM, forIndexed_, indexed, mapAccumLM)
 
@@ -130,7 +132,7 @@ compileLet block local = \case
         compileLambda block local parameters returnRepresentation statements returnExpr
     Core.TupleAccess tupleValue index -> do
         undefined
-    Core.ConstructorCase {scrutinee, scrutineeRepresentation, cases} -> do
+    Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases} -> do
         undefined
 
 compileReturn :: (Compile es) => BlockBuilder -> Core.Expr -> Eff es ()
@@ -204,10 +206,10 @@ compileValue block = \case
             var <- newVar
             GraphPersistence.getGlobalRepresentation globalName >>= \case
                 GlobalVar representation -> do
-                    block <- addInstruction block (MIR.LoadGlobal {var, globalName, representation})
+                    block <- addInstruction block (MIR.LoadGlobal{var, globalName, representation})
                     pure (block, var)
                 GlobalClosure -> do
-                    block <- addInstruction block (MIR.LoadGlobalClosure {var, functionName=globalName})
+                    block <- addInstruction block (MIR.LoadGlobalClosure{var, functionName = globalName})
                     pure (block, var)
     Core.Literal literal -> do
         variable <- newVar
@@ -227,7 +229,19 @@ compileValue block = \case
             Core.UserDefinedConstructor constructorName -> do
                 GraphPersistence.getDataConstructorIndex constructorName >>= \case
                     OnlyConstructor -> addInstruction block (MIR.ProductConstructor{var = variable, values = arguments, representation = representation})
-                    MultiConstructor tag -> addInstruction block (MIR.SumConstructor{var = variable, tag, values = arguments, representation})
+                    MultiConstructor tag ->
+                        case arguments of
+                            [singleArgument] -> addInstruction block (MIR.SumConstructor{var = variable, tag, payload = singleArgument, representation})
+                            _ -> do
+                                product <- newVar
+                                let payloadRepresentation = case representation of
+                                        Core.SumRep inner -> case Seq.lookup tag inner of
+                                            Just payloadRep -> payloadRep
+                                            Nothing -> panic $ "Tag " <> Pretty.number tag <> " out of bounds for sum with " <> Pretty.number (length inner) <> " constructors"
+                                        _ -> panic "Trying to compile constructor application with non-sum representation"
+
+                                block <- addInstruction block (MIR.ProductConstructor{var = product, values = arguments, representation = payloadRepresentation})
+                                addInstruction block (MIR.SumConstructor{var = variable, tag, payload = product, representation})
         pure (builder, variable)
 
 compileLambda :: (Compile es) => BlockBuilder -> MIR.Variable -> Seq (LocalCoreName, Core.Representation) -> Core.Representation -> Seq Core.Statement -> Core.Expr -> Eff es BlockBuilder

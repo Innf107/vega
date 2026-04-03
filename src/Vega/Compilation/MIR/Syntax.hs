@@ -55,7 +55,7 @@ data Instruction
         }
     | Unbox {var :: Variable, boxedTarget :: Variable, representation :: Representation}
     | ProductConstructor {var :: Variable, values :: Seq Variable, representation :: Representation}
-    | SumConstructor {var :: Variable, tag :: Int, values :: Seq Variable, representation :: Representation}
+    | SumConstructor {var :: Variable, tag :: Int, payload :: Variable, representation :: Representation}
     | AllocClosure {var :: Variable, closedValues :: Seq Variable, representation :: Representation}
     | LoadGlobalClosure {var :: Variable, functionName :: Vega.GlobalName}
     | LoadGlobal {var :: Variable, globalName :: Vega.GlobalName, representation :: Representation}
@@ -126,8 +126,8 @@ instance Pretty Instruction where
         Unbox{var, boxedTarget, representation} -> keywordInstruction "unbox" var [pretty boxedTarget, pretty representation]
         ProductConstructor{var, values, representation} ->
             pretty var <+> keyword "=" <+> keyword "product" <+> arguments values <+> pretty representation
-        SumConstructor{var, tag, values, representation} ->
-            pretty var <+> keyword "=" <+> keyword "sum" <+> lparen "[" <> number tag <> rparen "]" <> arguments values <+> pretty representation
+        SumConstructor{var, tag, payload, representation} ->
+            pretty var <+> keyword "=" <+> keyword "sum" <+> lparen "[" <> number tag <> rparen "]" <> lparen "(" <> pretty payload <> rparen ")" <+> pretty representation
         AllocClosure{var, closedValues, representation} -> keywordInstruction "allocClosure" var (fmap pretty closedValues <> [pretty representation])
         LoadGlobalClosure{var, functionName} ->
             keywordInstruction "loadGlobalClosure" var [Vega.prettyGlobal Vega.VarKind functionName]
