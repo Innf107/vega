@@ -8,7 +8,7 @@ import Vega.Pretty (Pretty, number, pretty)
 import Vega.Pretty qualified as Pretty
 
 newtype Alignment = MkAlignment {alignment :: Int}
-    deriving (Eq, Ord)
+    deriving (Eq, Ord, Show)
 
 fromExponent :: Int -> Alignment
 fromExponent exponent = MkAlignment (1 `shiftL` exponent)

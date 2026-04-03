@@ -19,6 +19,7 @@ import Effectful (Eff, IOE, (:>))
 import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import LLVM.Core qualified as LLVM
 import LLVM.InstructionBuilder qualified as LLVMBuilder
+import System.IO.Unsafe (unsafePerformIO)
 import Vega.Alignment qualified as Alignment
 import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
@@ -77,6 +78,7 @@ functionLLVMType parameters returnLayout = do
             -- TODO: add an sret attribute (and alignment??)
             pure (baseParameterTypes :|> LLVM.pointerType, LLVM.voidType, True)
         Layout.LLVMScalar scalar -> pure (baseParameterTypes, scalar, False)
+        Layout.ZeroSized -> pure (baseParameterTypes, LLVM.voidType, False)
 
     -- The sret parameter is always the last one
     let sretParameter = if usesSRet then Just (length parameterTypes - 1, returnLayout) else Nothing
@@ -188,21 +190,40 @@ compilePhis builder (MIR.MkPhis phis) = do
 compileInstruction :: (Compile es) => LLVMBuilder.Builder -> MIR.Instruction -> Eff es ()
 compileInstruction builder = \case
     MIR.Add out in1 in2 -> undefined
-    MIR.AccessField var path target -> undefined
+    MIR.AccessField{var, path, target, fieldRepresentation} -> do
+        (targetValue, targetLayout) <- lookupVar target
+        fieldLayout <- Layout.representationLayout fieldRepresentation
+
+        let go currentOffset layout = \case
+                Empty -> currentOffset
+                MIR.ProductFieldPath index :<| rest -> do
+                    let (offset, innerLayout) = Layout.productOffsetAndLayout index layout
+                    go (currentOffset + offset) innerLayout rest
+                MIR.SumConstructorPath index :<| rest -> do
+                    let (offset, innerLayout) = Layout.sumOffsetAndLayout index layout
+                    go (currentOffset + offset) innerLayout rest
+        let offset = go 0 targetLayout path
+
+        pointer <- buildGEPOffset builder targetValue offset ""
+        asVar_ var fieldLayout $ buildLoadOrKeepPointer builder fieldLayout pointer
     MIR.Box{var, target, targetRepresentation} -> undefined
     MIR.Unbox{var, boxedTarget, representation} -> undefined
     MIR.ProductConstructor{var, values, representation} -> do
         llvmValues <- for values lookupVarValue
         layout <- Layout.representationLayout representation
 
-        productPointer <- asVar var layout (LLVMBuilder.buildAlloca builder (Layout.llvmType layout))
-        forIndexed_ llvmValues \value index -> do
-            let (offset, _subLayout) = Layout.productOffsetAndLayout index layout
-            pointer <- case offset of
-                0 -> pure productPointer
-                _ -> buildGEPOffset builder productPointer offset ""
-            _ <- LLVMBuilder.buildStore builder value pointer
-            pure ()
+        case Layout.kind layout of
+            Layout.ZeroSized -> insertVarMapping var zeroSizedDummyValue layout
+            Layout.LLVMScalar{} -> undefined
+            Layout.AggregatePointer -> do
+                productPointer <- asVar var layout (LLVMBuilder.buildAlloca builder (Layout.llvmType layout))
+                forIndexed_ llvmValues \value index -> do
+                    let (offset, _subLayout) = Layout.productOffsetAndLayout index layout
+                    pointer <- case offset of
+                        0 -> pure productPointer
+                        _ -> buildGEPOffset builder productPointer offset ""
+                    _ <- LLVMBuilder.buildStore builder value pointer
+                    pure ()
     MIR.SumConstructor{var, tag, payload, representation} -> do
         (value, _) <- lookupVar payload
         layout <- Layout.representationLayout representation
@@ -238,6 +259,7 @@ compileInstruction builder = \case
         (closureValue, closureLayout) <- lookupVar closure
         let (functionPointerOffset, _functionPointerLayout) = Layout.productOffsetAndLayout 0 closureLayout
         pointerToFunctionPointer <- buildGEPOffset builder closureValue functionPointerOffset ""
+        functionPointer <- LLVMBuilder.buildLoad builder LLVM.pointerType pointerToFunctionPointer ""
 
         let (payloadOffset, payloadLayout) = Layout.productOffsetAndLayout 1 closureLayout
         pointerToPayload <- buildGEPOffset builder closureValue payloadOffset ""
@@ -246,7 +268,6 @@ compileInstruction builder = \case
         argumentValuesWithoutPayload <- for arguments \argument -> do
             (value, _) <- lookupVar argument
             pure value
-        let argumentValues = viaList $ argumentValuesWithoutPayload <> [payload]
 
         argumentLayoutsWithoutPayload <- for arguments \argument -> do
             (_, layout) <- lookupVar argument
@@ -254,9 +275,36 @@ compileInstruction builder = \case
         let argumentLayouts = viaList $ argumentLayoutsWithoutPayload <> [Layout.boxedLayout]
 
         returnLayout <- Layout.representationLayout returnRepresentation
+
         (closureFunctionType, _) <- functionLLVMType argumentLayouts returnLayout
 
-        asVar_ var returnLayout (LLVMBuilder.buildCall builder closureFunctionType pointerToFunctionPointer argumentValues)
+        case Layout.kind returnLayout of
+            Layout.ZeroSized -> do
+                _ <-
+                    LLVMBuilder.buildCall
+                        builder
+                        closureFunctionType
+                        functionPointer
+                        (viaList $ argumentValuesWithoutPayload <> [payload])
+                        ""
+                insertVarMapping var zeroSizedDummyValue returnLayout
+            Layout.LLVMScalar _ ->
+                asVar_ var returnLayout $
+                    LLVMBuilder.buildCall
+                        builder
+                        closureFunctionType
+                        functionPointer
+                        (viaList $ argumentValuesWithoutPayload <> [payload])
+            Layout.AggregatePointer -> do
+                returnPointer <- asVar var returnLayout $ LLVMBuilder.buildAlloca builder (Layout.llvmType returnLayout)
+                _ <-
+                    LLVMBuilder.buildCall
+                        builder
+                        closureFunctionType
+                        functionPointer
+                        (viaList $ argumentValuesWithoutPayload <> [returnPointer, payload])
+                        ""
+                pure ()
 
 compileTerminator :: (Compile es) => LLVMBuilder.Builder -> MIR.Terminator -> Eff es ()
 compileTerminator builder = \case
@@ -276,12 +324,13 @@ compileTerminator builder = \case
         (scrutineeValue, layout) <- lookupVar scrutinee
         let llvmType = Layout.llvmType layout
 
-        cases <- viaList <$> for alternatives \(int, target) -> do
-            targetLLVMBlock <- registerNewBlock target
-            pure (LLVM.constInt llvmType (fromIntegral int) False, targetLLVMBlock)
-        
+        cases <-
+            viaList <$> for alternatives \(int, target) -> do
+                targetLLVMBlock <- registerNewBlock target
+                pure (LLVM.constInt llvmType (fromIntegral int) False, targetLLVMBlock)
+
         defaultBlock <- newUnreachableBlock
-        
+
         _ <- LLVMBuilder.buildSwitch builder scrutineeValue cases defaultBlock
         pure ()
     _ -> undefined
@@ -320,11 +369,13 @@ buildComplexStore builder layout value pointer = do
             let size = LLVM.constInt LLVM.int64Type (fromIntegral (Layout.size layout)) False
             _ <- LLVMBuilder.buildMemCpy builder pointer alignment value alignment size
             pure ()
+        Layout.ZeroSized -> pure ()
 
 buildLoadOrKeepPointer :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
 buildLoadOrKeepPointer builder layout value varName = case Layout.kind layout of
     Layout.LLVMScalar scalar -> LLVMBuilder.buildLoad builder scalar value varName
     Layout.AggregatePointer -> pure value
+    Layout.ZeroSized -> pure value
 
 {- | Build a @getelementptr@ instruction pointing at a constant offset given in bytes.
 The offset is assumed to be in-bounds.
@@ -350,7 +401,7 @@ registerNewBlock descriptor = do
             pure llvmBlock
 
 -- TODO: we might want to be able to swap this out to panic in debug builds instead of using unreachable
-newUnreachableBlock :: Compile es => Eff es LLVM.BasicBlock
+newUnreachableBlock :: (Compile es) => Eff es LLVM.BasicBlock
 newUnreachableBlock = do
     -- TODO: it would be nice if we could reuse the existing builder here instead of allocating a new one
     builder <- LLVMBuilder.createBuilder
@@ -403,6 +454,14 @@ renderLLVMName :: Core.CoreName -> Text
 renderLLVMName = \case
     Core.Global name -> "_vega_" <> renderPackageName name.moduleName.package <> ":" <> Text.intercalate "/" (toList (name.moduleName.subModules)) <> ":" <> name.name
     Core.Local _ -> undefined
+
+{- | Zero sized values should never appear in the generated LLVM code, but
+we sometimes still need to register a value for a MIR variable, so we
+use this dummy value that will be very visible if it does end up in the generated code
+-}
+zeroSizedDummyValue :: (?context :: LLVM.Context) => LLVM.Value
+zeroSizedDummyValue = unsafePerformIO $ do
+    LLVM.constString "USE_OF_ZERO_SIZED_VALUE" LLVM.Don'tNullTerminate
 
 {- NOTE [Closure Representation]:
 Closures with payload representation `r` are *always* represented as products (FunctionPointer * r).

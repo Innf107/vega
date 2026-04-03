@@ -28,6 +28,7 @@ emitAllToFile renderValue filePath eff = runFileSystem do
             eff & interpret_ \case
                 DebugEmit value -> do
                     liftIO $ ByteString.hPut handle (renderValue value <> "\n\n")
+                    hFlush handle
 
 emitToStderr :: (?config :: PrettyANSIIConfig, IOE :> es) => (a -> Doc Ann) -> Eff (DebugEmit a : es) b -> Eff es b
 emitToStderr prettyValue = do

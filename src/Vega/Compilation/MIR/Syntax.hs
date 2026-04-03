@@ -1,12 +1,15 @@
 module Vega.Compilation.MIR.Syntax where
 
 import Data.HashMap.Strict qualified as HashMap
+import Data.Sequence (Seq (..))
 import Data.Unique (Unique, hashUnique)
 import GHC.Generics (Generically (..))
 import Relude
-import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation)
+import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation (..))
 import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, localIdentText, lparen, number, pretty, rparen, (<+>))
 import Vega.Syntax qualified as Vega
+import qualified Data.Sequence as Seq
+import Vega.Panic (panic)
 
 data Program = MkProgram
     { declarations :: Seq Declaration
@@ -47,7 +50,7 @@ type Path = Seq PathSegment
 
 data Instruction
     = Add Variable Variable Variable
-    | AccessField Variable Path Variable -- TODO: representation?
+    | AccessField {var :: Variable, path :: Path, target :: Variable, fieldRepresentation :: Representation}
     | Box
         { var :: Variable
         , target :: Variable
@@ -72,6 +75,24 @@ data Terminator
     | TailCallDirect {functionName :: Vega.GlobalName, arguments :: Seq Variable}
     | TailCallClosure {closure :: Variable, arguments :: Seq Variable, returnRepresentation :: Representation}
     deriving (Generic)
+
+representationAtPath :: Representation -> Path -> Representation
+representationAtPath baseRepresentation fullPath = go baseRepresentation fullPath
+  where
+    go representation = \case
+        Empty -> representation
+        segment@(ProductFieldPath index) :<| rest -> case representation of
+            ProductRep inner -> case Seq.lookup index inner of
+                Nothing -> outOfBounds "product field" index
+                Just innerRepresentation -> go innerRepresentation rest
+            actual -> invalid segment actual
+        segment@(SumConstructorPath index) :<| rest -> case representation of
+            SumRep cases -> case Seq.lookup index cases of
+                Nothing -> outOfBounds "sum constructor" index
+                Just innerRepresentation -> go innerRepresentation rest
+            actual -> invalid segment actual
+    invalid segment actual = panic $ "Trying to acess path segment" <+> pretty segment <+> "on incompatible representation" <+> pretty actual <+> "while trying to access path" <+> prettyPath fullPath
+    outOfBounds kind index = panic $ "Trying to access out-of-bounds" <+> kind <+> "at index" <+> number index <+> "while trying to access path" <+> prettyPath fullPath
 
 instance Pretty Declaration where
     pretty :: Declaration -> Doc Ann
@@ -118,7 +139,7 @@ prettyPath path = lparen "[" <> intercalateDoc (keyword "->") (fmap pretty path)
 instance Pretty Instruction where
     pretty = \case
         Add var arg1 arg2 -> keywordInstruction "add" var [pretty arg1, pretty arg2]
-        AccessField var path value -> keywordInstruction "accessField" var [prettyPath path, pretty value]
+        AccessField{var, path, target, fieldRepresentation} -> keywordInstruction "accessField" var [prettyPath path, pretty target] <+> keyword ":" <+> pretty fieldRepresentation
         Box
             { var
             , target

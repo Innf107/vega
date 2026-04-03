@@ -38,6 +38,7 @@ import Data.Traversable (for)
 import Effectful (Eff)
 import LLVM.Core qualified as LLVM
 import Relude
+import Text.Show (Show (..))
 import Vega.Alignment (Alignment)
 import Vega.Alignment qualified as Alignment
 import Vega.Alignment qualified as Vega
@@ -54,16 +55,23 @@ data Layout = MkLayout
     , kind :: LayoutKind
     , details :: LayoutDetails
     }
+    deriving (Show)
 
 data LayoutKind
     = LLVMScalar LLVM.Type
     | AggregatePointer
+    | ZeroSized
+
+instance Show LayoutKind where
+    show AggregatePointer = "AggregatePointer"
+    show (LLVMScalar _) = "LLVMScalar _"
+    show ZeroSized = "ZeroSized"
 
 data LayoutDetails
     = ProductLayout {offsetsAndElementLayouts :: Seq (Int, Layout)}
     | SumLayout {tagSizeInBytes :: Int, constructorLayouts :: Seq Layout}
     | Primitive
-    deriving (Generic)
+    deriving (Generic, Show)
 
 size :: Layout -> Int
 size layout = layout.size
@@ -71,15 +79,17 @@ size layout = layout.size
 alignment :: Layout -> Vega.Alignment
 alignment layout = layout.alignment
 
-llvmParameterType :: (?context :: LLVM.Context) => Layout -> LLVM.Type
+llvmParameterType :: (?context :: LLVM.Context, HasCallStack) => Layout -> LLVM.Type
 llvmParameterType layout = case layout.kind of
     LLVMScalar type_ -> type_
     AggregatePointer -> LLVM.pointerType -- TODO: byval?? alignment??
+    ZeroSized -> panic "Trying to access LLVM type of zero-sized layout"
 
-llvmType :: (?context :: LLVM.Context) => Layout -> LLVM.Type
+llvmType :: (?context :: LLVM.Context, HasCallStack) => Layout -> LLVM.Type
 llvmType layout = case layout.kind of
     LLVMScalar type_ -> type_
     AggregatePointer -> LLVM.arrayType LLVM.int8Type layout.size
+    ZeroSized -> panic "Trying to access LLVM type of zero-sized layout"
 
 kind :: Layout -> LayoutKind
 kind layout = layout.kind
@@ -166,8 +176,8 @@ sumLayout payloads = do
 
 primitiveLayout :: (?context :: LLVM.Context) => Vega.PrimitiveRep -> Eff es Layout
 primitiveLayout = \case
-    Vega.UnitRep -> pure (MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = AggregatePointer, details = Primitive})
-    Vega.EmptyRep -> pure (MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = LLVMScalar LLVM.voidType, details = Primitive})
+    Vega.UnitRep -> pure (MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = ZeroSized, details = Primitive})
+    Vega.EmptyRep -> pure (MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = ZeroSized, details = Primitive})
     Vega.BoxedRep -> pure boxedLayout
     Vega.IntRep -> pure intLayout
     Vega.DoubleRep -> pure $ MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.doubleType, details = Primitive}

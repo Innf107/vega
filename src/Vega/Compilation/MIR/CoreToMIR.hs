@@ -169,14 +169,19 @@ compileReturn block = \case
             targetBlockBuilder <- execState targetBlockBuilder $ forIndexed_ parameters \name productIndex -> do
                 targetBlockBuilder <- get
                 parameterVariable <- newVar
-                registerVariable name parameterVariable undefined
+
+                let path = [MIR.SumConstructorPath index, MIR.ProductFieldPath productIndex]
+                let fieldRepresentation = MIR.representationAtPath scrutineeRepresentation path
+                registerVariable name parameterVariable fieldRepresentation
                 targetBlockBuilder <-
                     addInstruction
                         targetBlockBuilder
                         ( MIR.AccessField
-                            parameterVariable
-                            [MIR.SumConstructorPath index, MIR.ProductFieldPath productIndex]
-                            scrutinee
+                            { var = parameterVariable
+                            , path
+                            , target = scrutinee
+                            , fieldRepresentation
+                            }
                         )
                 put targetBlockBuilder
 
