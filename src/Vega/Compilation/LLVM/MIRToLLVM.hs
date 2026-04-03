@@ -35,7 +35,7 @@ import Vega.Util qualified as Util
 data DeclarationState = MkDeclarationState
     { registeredBlocks :: HashMap MIR.BlockDescriptor LLVM.BasicBlock
     , outstandingBlocks :: Seq MIR.BlockDescriptor
-    , variableMappings :: HashMap MIR.Variable LLVM.Value
+    , variableMappings :: HashMap MIR.Variable (LLVM.Value, Layout)
     }
 
 data FunctionEnv = MkFunctionEnv
@@ -132,9 +132,9 @@ compileDeclaration = \case
                                 Nothing -> Nothing
                         }
 
-            forIndexed_ parameters \(variable, _) index -> do
-                print (pretty variable)
-                insertVarMapping variable (LLVM.getParam function index)
+            forIndexed_ parameters \(variable, representation) index -> do
+                layout <- Layout.representationLayout representation
+                insertVarMapping variable (LLVM.getParam function index) layout
 
             builder <- LLVMBuilder.createBuilder
 
@@ -178,10 +178,10 @@ compilePhis builder (MIR.MkPhis phis) = do
     for_ (HashMap.toList phis) \(targetVar, incoming) -> do
         incomingValues <-
             fromList <$> for (HashMap.toList incoming) \(block, variable) -> do
-                value <- lookupVar variable
+                (value, _) <- lookupVar variable
                 block <- lookupBlock block
                 pure (value, block)
-        asVar_ targetVar $ LLVMBuilder.buildPhi builder undefined incomingValues
+        asVar_ targetVar undefined $ LLVMBuilder.buildPhi builder undefined incomingValues
 
 compileInstruction :: (Compile es) => LLVMBuilder.Builder -> MIR.Instruction -> Eff es ()
 compileInstruction builder = \case
@@ -190,10 +190,10 @@ compileInstruction builder = \case
     MIR.Box{var, target, targetRepresentation} -> undefined
     MIR.Unbox{var, boxedTarget, representation} -> undefined
     MIR.ProductConstructor{var, values, representation} -> do
-        llvmValues <- for values lookupVar
+        llvmValues <- for values lookupVarValue
         layout <- Layout.representationLayout representation
 
-        productPointer <- asVar var (LLVMBuilder.buildAlloca builder (Layout.llvmType layout))
+        productPointer <- asVar var layout (LLVMBuilder.buildAlloca builder (Layout.llvmType layout))
         forIndexed_ llvmValues \value index -> do
             let (offset, _subLayout) = Layout.productOffsetAndLayout index layout
             pointer <- case offset of
@@ -202,10 +202,10 @@ compileInstruction builder = \case
             _ <- LLVMBuilder.buildStore builder value pointer
             pure ()
     MIR.SumConstructor{var, tag, payload, representation} -> do
-        value <- lookupVar payload
+        (value, _) <- lookupVar payload
         layout <- Layout.representationLayout representation
 
-        sumPointer <- asVar var (LLVMBuilder.buildAlloca builder (Layout.llvmType layout))
+        sumPointer <- asVar var layout (LLVMBuilder.buildAlloca builder (Layout.llvmType layout))
 
         -- Store the tag
         let tagLLVMType = LLVM.intType (Layout.sumTagSizeInBytes layout * 8)
@@ -221,34 +221,35 @@ compileInstruction builder = \case
         buildComplexStore builder payloadLayout value payloadPointer
     MIR.AllocClosure{var, closedValues, representation} -> undefined
     MIR.LoadGlobalClosure{var, functionName} -> do
-        asVar_ var $ buildClosure builder functionName Layout.boxedLayout LLVM.constNullPointer
+        asVar_ var (Layout.closureLayout Layout.boxedLayout) $ buildClosure builder functionName Layout.boxedLayout LLVM.constNullPointer
     MIR.LoadGlobal{var, globalName, representation} -> undefined
     MIR.LoadIntLiteral{var, literal} -> do
-        insertVarMapping var (LLVM.constInt LLVM.int64Type (fromIntegral literal) True)
+        insertVarMapping var (LLVM.constInt LLVM.int64Type (fromIntegral literal) True) Layout.intLayout
     MIR.LoadSumTag{var, sum, sumRepresentation} -> undefined
     MIR.CallDirect{var, functionName, arguments} -> undefined
     MIR.CallClosure{var, closure, arguments} -> do
-        closureValue <- lookupVar closure
-        let layout = undefined
-        let (functionPointerOffset, _functionPointerLayout) = Layout.productOffsetAndLayout 0 layout
+        (closureValue, closureLayout) <- lookupVar closure
+        let (functionPointerOffset, _functionPointerLayout) = Layout.productOffsetAndLayout 0 closureLayout
         pointerToFunctionPointer <- buildGEPOffset builder closureValue functionPointerOffset ""
 
-        let (payloadOffset, payloadLayout) = Layout.productOffsetAndLayout 1 layout
+        let (payloadOffset, payloadLayout) = Layout.productOffsetAndLayout 1 closureLayout
         pointerToPayload <- buildGEPOffset builder closureValue payloadOffset ""
         payload <- buildLoadOrKeepPointer builder payloadLayout pointerToPayload ""
 
-        argumentValues <- for arguments lookupVar
+        argumentValues <- for arguments \argument -> do
+            (value, _) <- lookupVar argument
+            pure value
 
         let argumentsWithPayload = viaList (argumentValues <> [payload])
 
         let closureFunctionType = undefined
 
-        asVar_ var (LLVMBuilder.buildCall builder closureFunctionType pointerToFunctionPointer argumentsWithPayload)
+        asVar_ var undefined (LLVMBuilder.buildCall builder closureFunctionType pointerToFunctionPointer argumentsWithPayload)
 
 compileTerminator :: (Compile es) => LLVMBuilder.Builder -> MIR.Terminator -> Eff es ()
 compileTerminator builder = \case
     MIR.Return variable -> do
-        value <- lookupVar variable
+        (value, _layout) <- lookupVar variable
 
         case ?functionEnv.sretVariable of
             Nothing -> do
@@ -324,29 +325,34 @@ registerNewBlock descriptor = do
                 )
             pure llvmBlock
 
-asVar :: (Compile es) => MIR.Variable -> (Text -> Eff es LLVM.Value) -> Eff es LLVM.Value
-asVar var cont = do
+asVar :: (Compile es) => MIR.Variable -> Layout -> (Text -> Eff es LLVM.Value) -> Eff es LLVM.Value
+asVar var layout cont = do
     llvmValue <- cont (renderVariable var)
-    insertVarMapping var llvmValue
+    insertVarMapping var llvmValue layout
     pure llvmValue
 
-insertVarMapping :: (Compile es) => MIR.Variable -> LLVM.Value -> Eff es ()
-insertVarMapping var llvmValue = modify (\state -> state{variableMappings = HashMap.insert var llvmValue state.variableMappings})
+insertVarMapping :: (Compile es) => MIR.Variable -> LLVM.Value -> Layout -> Eff es ()
+insertVarMapping var llvmValue layout = modify (\state -> state{variableMappings = HashMap.insert var (llvmValue, layout) state.variableMappings})
 
-asVar_ :: (Compile es) => MIR.Variable -> (Text -> Eff es LLVM.Value) -> Eff es ()
-asVar_ var cont = do
-    _ <- asVar var cont
+asVar_ :: (Compile es) => MIR.Variable -> Layout -> (Text -> Eff es LLVM.Value) -> Eff es ()
+asVar_ var layout cont = do
+    _ <- asVar var layout cont
     pure ()
 
 closureWrapperNameForFunction :: Core.CoreName -> Text
 closureWrapperNameForFunction coreName = renderLLVMName coreName <> "__closure"
 
-lookupVar :: (HasCallStack, Compile es) => MIR.Variable -> Eff es LLVM.Value
+lookupVar :: (HasCallStack, Compile es) => MIR.Variable -> Eff es (LLVM.Value, Layout)
 lookupVar variable = do
     MkDeclarationState{variableMappings} <- get
     case HashMap.lookup variable variableMappings of
         Nothing -> panic $ "Trying to use MIR variable without associated LLVM value: " <> pretty variable
         Just value -> pure value
+
+lookupVarValue :: (HasCallStack, Compile es) => MIR.Variable -> Eff es LLVM.Value
+lookupVarValue variable = do
+    (value, _) <- lookupVar variable
+    pure value
 
 lookupBlock :: (HasCallStack, Compile es) => MIR.BlockDescriptor -> Eff es LLVM.BasicBlock
 lookupBlock block = do

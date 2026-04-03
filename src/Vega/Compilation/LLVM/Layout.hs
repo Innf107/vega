@@ -5,7 +5,9 @@ module Vega.Compilation.LLVM.Layout (
 
     -- * Specific Layouts
     boxedLayout,
+    intLayout,
     functionPointerLayout,
+    closureLayout,
 
     -- * Layout Properties
     size,
@@ -166,8 +168,11 @@ primitiveLayout = \case
     Vega.UnitRep -> pure (MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = AggregatePointer, details = Primitive})
     Vega.EmptyRep -> pure (MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = LLVMScalar LLVM.voidType, details = Primitive})
     Vega.BoxedRep -> pure boxedLayout
-    Vega.IntRep -> pure $ MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.int64Type, details = Primitive}
+    Vega.IntRep -> pure intLayout
     Vega.DoubleRep -> pure $ MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.doubleType, details = Primitive}
+
+intLayout :: (?context :: LLVM.Context) => Layout
+intLayout = MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.int64Type, details = Primitive}
 
 -- TODO: we might be able to give heap pointers a different address space from unmanaged pointers?
 boxedLayout :: (?context :: LLVM.Context) => Layout
@@ -176,6 +181,9 @@ boxedLayout = MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LL
 -- TODO: This pointer should not count as boxed since it doesn't need to be followed by the GC
 functionPointerLayout :: (?context :: LLVM.Context) => Layout
 functionPointerLayout = MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.pointerType, details = Primitive}
+
+closureLayout :: (?context :: LLVM.Context) => Layout -> Layout
+closureLayout payloadLayout = productLayout [functionPointerLayout, payloadLayout]
 
 smallestPowerOfTwoFitting :: Int -> Int
 smallestPowerOfTwoFitting n = Bits.finiteBitSize n - Bits.countLeadingZeros (n - 1)
