@@ -228,9 +228,10 @@ compileExprToValue expr = do
         Vega.Application _ returnRepresentation (Vega.DataConstructor _ _representation name) argumentExprs -> do
             (argumentStatements, arguments) <- Seq.unzip <$> for argumentExprs compileExprToValue_
             returnRepresentation <- convertRepresentation returnRepresentation
+            (constructorStatements, constructorExpr) <- userDefinedDataConstructorApplication name arguments returnRepresentation
             pure
-                ( fold argumentStatements
-                , Core.DataConstructorApplication (Core.UserDefinedConstructor name) arguments returnRepresentation
+                ( fold argumentStatements <> constructorStatements
+                , constructorExpr
                 , returnRepresentation
                 )
         Vega.Application{} -> deferToLet
@@ -262,6 +263,26 @@ compileExprToValue expr = do
         Vega.If{} -> deferToLet
         Vega.SequenceBlock{} -> deferToLet
         Vega.Match{} -> deferToLet
+
+-- | Compile a user-defined data constructor application, including auto-boxing
+userDefinedDataConstructorApplication :: (Compile es) => Vega.Name -> Seq Core.Value -> Core.Representation -> Eff es (Seq Core.Statement, Core.Value)
+userDefinedDataConstructorApplication name arguments representation = do
+    autoBoxingFlags <- case name of
+        Vega.Local{} -> undefined
+        Vega.Global globalName -> GraphPersistence.getAutoBoxing globalName
+
+    (statements, newArguments) <- Util.forAccumLM [] (Seq.zip arguments autoBoxingFlags) \statements (argument, shouldBeBoxed) -> do
+        if shouldBeBoxed
+            then do
+                boxedVar <- newLocal
+                pure
+                    ( statements :|> Core.Let boxedVar (Core.PrimitiveRep Vega.BoxedRep) (Core.Box argument)
+                    , Core.Var (Core.Local boxedVar)
+                    )
+            else
+                pure (statements, argument)
+
+    pure (statements, Core.DataConstructorApplication (Core.UserDefinedConstructor name) newArguments representation)
 
 -- | Like 'compileStatements' but discards the representation
 compileStatements_ ::
@@ -599,6 +620,7 @@ coalesceExpr substitution = \case
                     (makeExpr substitution)
             )
     Core.TupleAccess value index -> pure (substitution, \substitution -> Core.TupleAccess (applySubst substitution value) index)
+    Core.Box value -> pure (substitution, \substitution -> Core.Box (applySubst substitution value))
     Core.ConstructorCase scrutinee scrutineeRepresentation cases -> do
         let coalesceCase substitution (parameters, statements, expr) = do
                 (substitution, makeStatements) <- coalesceStatements substitution statements

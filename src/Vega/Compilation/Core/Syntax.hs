@@ -38,6 +38,7 @@ data Expr
       JumpJoin LocalCoreName (Seq Value)
     | Lambda (Seq (LocalCoreName, Representation)) (Seq Statement) Expr
     | TupleAccess Value Int
+    | Box Value
     | ConstructorCase {scrutinee :: Value, scrutineeRepresentation :: Representation, cases :: (HashMap Vega.Name (Seq LocalCoreName, Seq Statement, Expr))}
 
 data Statement
@@ -137,6 +138,7 @@ instance Pretty Expr where
         Lambda parameters bodyStatements bodyExpr -> keyword "\\" <> typedParameters parameters <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
         TupleAccess tupleValue index -> do
             pretty tupleValue <> lparen "[" <> number index <> rparen "]"
+        Box value -> keyword "box" <+> pretty value
         ConstructorCase scrutinee representation cases -> do
             let prettyCase (constructor, (locals, bodyStatements, bodyExpr)) =
                     Vega.prettyName Vega.DataConstructorKind constructor <> arguments locals <+> keyword "->" <+> prettyBody bodyStatements bodyExpr

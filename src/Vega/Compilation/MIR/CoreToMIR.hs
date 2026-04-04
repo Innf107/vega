@@ -133,6 +133,10 @@ compileLet block local = \case
         compileLambda block local parameters returnRepresentation statements returnExpr
     Core.TupleAccess tupleValue index -> do
         undefined
+    Core.Box value -> do
+        (block, mirValue) <- compileValue block value
+        block <- addInstruction block (MIR.Box {var=local, target = mirValue})
+        pure block
     Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases} -> do
         undefined
 
@@ -154,6 +158,11 @@ compileReturn block = \case
     -- finish block (MIR.Jump joinPointBlock arguments)
     Core.TupleAccess tupleValue index -> do
         undefined
+    Core.Box value -> do
+        (block, value) <- compileValue block value
+        var <- newVar "box"
+        block <- addInstruction block (MIR.Box {var, target = value})
+        finish block (MIR.Return var)
     Core.ConstructorCase scrutinee scrutineeRepresentation cases -> do
         (block, scrutinee) <- compileValue block scrutinee
         tag <- newVar "tag"
