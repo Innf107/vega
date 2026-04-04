@@ -10,6 +10,7 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
+import Data.Unique qualified as Unique
 import Data.Vector.Generic qualified as Vector
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
@@ -24,7 +25,6 @@ import Vega.Pretty (pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Syntax qualified as Vega
 import Vega.Util (assert, forFoldLM, forIndexed_, indexed, mapAccumLM)
-import qualified Data.Unique as Unique
 
 type Compile es = (GraphPersistence :> es, Trace :> es, NewUnique :> es, State CurrentDeclarationState :> es)
 
@@ -119,13 +119,21 @@ compileBody block statements returnExpr = case statements of
 compileLet :: (Compile es) => BlockBuilder -> MIR.Variable -> Core.Expr -> Eff es BlockBuilder
 compileLet block local = \case
     Core.Value value -> undefined
-    Core.Application function arguments returnRepresentation -> do
-        -- TODO: If 'function' refers to a top-level function, we can immediately emit a direct call here rather
-        -- than relying on (future) optimizations to remove the unnecessary closure
-        (block, closure) <- compileValue block (Core.Var function)
-        (block, arguments) <- compileValues block arguments
-        block <- addInstruction block (MIR.CallClosure{var = local, closure, arguments, returnRepresentation})
-        pure block
+    Core.Application functionName arguments returnRepresentation -> case functionName of
+        Core.Local localName -> do
+            (closure, _) <- getLocal localName
+            (block, arguments) <- compileValues block arguments
+            addInstruction block (MIR.CallClosure{var = local, closure, arguments, returnRepresentation})
+        Core.Global functionName -> do
+            GraphPersistence.getGlobalRepresentation functionName >>= \case
+                GlobalVar representation -> do
+                    closure <- newVar "closure"
+                    block <- addInstruction block (MIR.LoadGlobal{var = closure, globalName = functionName, representation})
+                    (block, arguments) <- compileValues block arguments
+                    addInstruction block (MIR.CallClosure{var = local, closure, arguments, returnRepresentation})
+                GlobalClosure -> do
+                    (block, arguments) <- compileValues block arguments
+                    addInstruction block (MIR.CallDirect{var = local, functionName, arguments, returnRepresentation})
     Core.JumpJoin joinPoint _arguments -> do
         panic $ "JumpJoin for join point " <> pretty joinPoint <> " in non-tail position"
     Core.Lambda parameters statements returnExpr -> do
@@ -135,7 +143,7 @@ compileLet block local = \case
         undefined
     Core.Box value -> do
         (block, mirValue) <- compileValue block value
-        block <- addInstruction block (MIR.Box {var=local, target = mirValue})
+        block <- addInstruction block (MIR.Box{var = local, target = mirValue})
         pure block
     Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases} -> do
         undefined
@@ -145,11 +153,21 @@ compileReturn block = \case
     Core.Value value -> do
         (block, value) <- compileValue block value
         finish block (MIR.Return value)
-    Core.Application function arguments returnRepresentation -> do
-        -- TODO: We can also directly emit a direct tail call here if 'function' refers to a global function
-        (block, closure) <- compileValue block (Core.Var function)
-        (block, arguments) <- compileValues block arguments
-        finish block (TailCallClosure{closure, arguments, returnRepresentation})
+    Core.Application functionName arguments returnRepresentation -> case functionName of
+        Core.Local localName -> do
+            (closure, _) <- getLocal localName
+            (block, arguments) <- compileValues block arguments
+            finish block (MIR.TailCallClosure{closure, arguments, returnRepresentation})
+        Core.Global functionName -> do
+            GraphPersistence.getGlobalRepresentation functionName >>= \case
+                GlobalVar representation -> do
+                    closure <- newVar "closure"
+                    block <- addInstruction block (MIR.LoadGlobal{var = closure, globalName = functionName, representation})
+                    (block, arguments) <- compileValues block arguments
+                    finish block (TailCallClosure{closure, arguments, returnRepresentation})
+                GlobalClosure -> do
+                    (block, arguments) <- compileValues block arguments
+                    finish block (TailCallDirect{functionName, arguments, returnRepresentation})
     Core.JumpJoin joinPoint arguments -> do
         (block, arguments) <- compileValues block arguments
 
@@ -161,7 +179,7 @@ compileReturn block = \case
     Core.Box value -> do
         (block, value) <- compileValue block value
         var <- newVar "box"
-        block <- addInstruction block (MIR.Box {var, target = value})
+        block <- addInstruction block (MIR.Box{var, target = value})
         finish block (MIR.Return var)
     Core.ConstructorCase scrutinee scrutineeRepresentation cases -> do
         (block, scrutinee) <- compileValue block scrutinee
@@ -288,7 +306,7 @@ newVar text = do
     put (state{varCount = state.varCount + 1})
     pure variable
 
-newVarFromName :: Compile es => LocalCoreName -> Eff es MIR.Variable
+newVarFromName :: (Compile es) => LocalCoreName -> Eff es MIR.Variable
 newVarFromName = \case
     Core.UserProvided localName -> newVar localName.name
     Core.Generated i -> newVar ("x" <> show (Unique.hashUnique i))

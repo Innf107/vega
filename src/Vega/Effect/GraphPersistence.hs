@@ -118,6 +118,7 @@ reachableFrom name = hoist (evalState (mempty :: HashSet DeclarationName)) $ go 
                 lift $ modify (HashSet.insert dependency)
                 go dependency
 
+-- TODO: we should allow some types to act as cycle breakers that stop auto-boxing (in particular Box)
 getAutoBoxing :: GraphPersistence :> es => GlobalName -> Eff es (Seq Bool)
 getAutoBoxing dataConstructorName = getDefiningDeclaration dataConstructorName >>= \case
     Nothing -> panic $ "Trying to access auto-boxing of data constructor with missing declaration: " <> prettyGlobal DataConstructorKind dataConstructorName
