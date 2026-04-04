@@ -7,6 +7,10 @@ pub struct HeapObject {
 impl HeapObject {
     pub const HEADER_SIZE_IN_BYTES: usize = size_of::<HeapObject>();
 
+    pub fn from_data(object: *const u8) -> *const HeapObject {
+        unsafe { object.byte_sub(HeapObject::HEADER_SIZE_IN_BYTES) as *const HeapObject }
+    }
+
     pub fn data(object: *const HeapObject) -> *mut u8 {
         unsafe { object.byte_add(HeapObject::HEADER_SIZE_IN_BYTES) as *mut u8 }
     }
@@ -30,7 +34,7 @@ pub struct BoxedLayout {
     /// The full size of the object data including boxed pointers
     size_in_bytes: usize,
     /// The number of boxed pointers in the layout. These are always the first elements
-    boxed_count: usize
+    boxed_count: usize,
 }
 impl BoxedLayout {
     /// The size of the unboxed part of the layout, i.e. the size of everything that is not a boxed pointer
@@ -39,13 +43,12 @@ impl BoxedLayout {
     }
 }
 
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ArrayLayout {
     size_in_elements: usize,
     element_stride_in_bytes: usize,
-    element_boxed_count: usize
+    element_boxed_count: usize,
 }
 
 #[repr(C)]
@@ -54,13 +57,14 @@ pub enum ObjectType {
     Array,
 }
 
+/// Allocate a box for the given info table and return a pointer to the (uninitialized) *data*.
+/// To access the heap object header, use [HeapObject::from_data].
 // TODO: eventually we will want to inline this directly into the generated code but
 // it's simpler to keep it as a rust function for now
 // SAFETY: this assumes that info_table points to an immutable heap object
-pub unsafe fn allocate_boxed(info_table: *const InfoTable) -> *mut HeapObject {
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vega_allocate_boxed(info_table: *const InfoTable) -> *mut u8 {
     let layout = unsafe { (*info_table).layout.boxed };
 
-    unsafe {
-        libc::malloc(HeapObject::HEADER_SIZE_IN_BYTES + layout.size_in_bytes) as *mut HeapObject
-    }
+    unsafe { libc::malloc(HeapObject::HEADER_SIZE_IN_BYTES + layout.size_in_bytes) as *mut u8 }
 }

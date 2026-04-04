@@ -1,5 +1,7 @@
 {-# LANGUAGE GHC2024 #-}
 {-# LANGUAGE ImplicitParams #-}
+{-# LANGUAGE RequiredTypeArguments #-}
+{-# LANGUAGE TypeAbstractions #-}
 -- Workaround for https://gitlab.haskell.org/ghc/ghc/-/issues/20630 since we use
 -- ImplicitParams with do blocks quite a lot here and we don't actually need ApplicativeDo
 {-# LANGUAGE NoApplicativeDo #-}
@@ -17,6 +19,8 @@ import Data.Traversable (for)
 import Data.Vector.Storable qualified as Storable
 import Effectful (Eff, IOE, (:>))
 import Effectful.State.Static.Local (State, evalState, get, modify, put)
+import GHC.Records (HasField, getField)
+import GHC.TypeLits (Symbol)
 import LLVM.Core qualified as LLVM
 import LLVM.InstructionBuilder qualified as LLVMBuilder
 import System.IO.Unsafe (unsafePerformIO)
@@ -25,6 +29,7 @@ import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.LLVM.Layout (Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
+import Vega.Compilation.LLVM.Runtime (RuntimeDefinitions (..), declareRuntimeDefinitions)
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
@@ -44,14 +49,24 @@ data FunctionEnv = MkFunctionEnv
     { sretVariable :: Maybe (LLVM.Value, Layout)
     }
 
-type Compile es = (?context :: LLVM.Context, ?module_ :: LLVM.Module, IOE :> es, ?function :: LLVM.Value, ?functionEnv :: FunctionEnv, State DeclarationState :> es)
+type Compile es =
+    ( ?context :: LLVM.Context
+    , ?module_ :: LLVM.Module
+    , ?runtimeDefinitions :: RuntimeDefinitions
+    , IOE :> es
+    , ?function :: LLVM.Value
+    , ?functionEnv :: FunctionEnv
+    , State DeclarationState :> es
+    )
 
 compile :: (IOE :> es) => MIR.Program -> Eff es LLVM.Module
 compile program = do
     context <- liftIO LLVM.contextCreate
     let ?context = context
     module_ <- LLVM.moduleCreateWithName "idkwhattoputhereyet"
+    runtimeDefinitions <- declareRuntimeDefinitions module_
     let ?module_ = module_
+    let ?runtimeDefinitions = runtimeDefinitions
     for_ program.declarations \declaration -> do
         forwardDeclareDeclaration declaration
 
@@ -85,7 +100,12 @@ functionLLVMType parameters returnLayout = do
     pure (LLVM.functionType (viaList parameterTypes) returnType False, sretParameter)
 
 forwardDeclareDeclaration ::
-    (?context :: LLVM.Context, ?module_ :: LLVM.Module, IOE :> es) => MIR.Declaration -> Eff es ()
+    ( ?context :: LLVM.Context
+    , ?module_ :: LLVM.Module
+    , ?runtimeDefinitions :: RuntimeDefinitions
+    , IOE :> es
+    ) =>
+    MIR.Declaration -> Eff es ()
 forwardDeclareDeclaration = \case
     MIR.DefineFunction{name, parameters, returnRepresentation} -> do
         parameterLayouts <- for parameters \(_, representation) -> Layout.representationLayout representation
@@ -120,7 +140,13 @@ forwardDeclareDeclaration = \case
                 pure ()
 
 compileDeclaration ::
-    (?context :: LLVM.Context, ?module_ :: LLVM.Module, IOE :> es, State DeclarationState :> es) => MIR.Declaration -> Eff es ()
+    ( ?context :: LLVM.Context
+    , ?module_ :: LLVM.Module
+    , ?runtimeDefinitions :: RuntimeDefinitions
+    , IOE :> es
+    , State DeclarationState :> es
+    ) =>
+    MIR.Declaration -> Eff es ()
 compileDeclaration = \case
     MIR.DefineFunction
         { name
@@ -221,8 +247,19 @@ compileInstruction builder = \case
 
         pointer <- buildGEPOffset builder targetValue offset ""
         asVar_ var fieldLayout $ buildLoadOrKeepPointer builder fieldLayout pointer
-    MIR.Box{var, target} -> undefined
-    MIR.Unbox{var, boxedTarget, representation} -> undefined
+    MIR.Box{var, target} -> do
+        -- TODO: we should probably inline the fast path for minor heap allocations here
+        (targetValue, targetLayout) <- lookupVar target
+
+        layoutInfoTablePointer <- getOrCreateLayoutInfoTablePointer targetLayout
+
+        memoryPointer <- asVar var Layout.boxedLayout $ buildRuntimeCall builder "vega_allocate_boxed" [layoutInfoTablePointer]
+        buildComplexStore builder targetLayout targetValue memoryPointer
+    MIR.Unbox{var, boxedTarget, representation} -> do
+        (targetValue, _) <- lookupVar boxedTarget
+        layout <- Layout.representationLayout representation
+
+        asVar_ var layout $ buildComplexLoad builder layout targetValue
     MIR.ProductConstructor{var, values, representation} -> do
         llvmValues <- for values lookupVarValue
         layout <- Layout.representationLayout representation
@@ -350,6 +387,22 @@ compileTerminator builder = \case
         pure ()
     _ -> undefined
 
+getOrCreateLayoutInfoTablePointer :: Compile es => Layout -> Eff es LLVM.Value
+getOrCreateLayoutInfoTablePointer layout = do
+    undefined
+
+buildRuntimeCall ::
+    (Compile es) =>
+    LLVMBuilder.Builder ->
+    forall (name :: Symbol) ->
+    (HasField name RuntimeDefinitions (LLVM.Value, LLVM.FunctionType)) =>
+    Storable.Vector LLVM.Value ->
+    Text ->
+    Eff es LLVM.Value
+buildRuntimeCall builder name arguments varName = do
+    let (function, functionType) = getField @name ?runtimeDefinitions
+    LLVMBuilder.buildCall builder functionType function arguments varName
+
 buildClosure :: (Compile es) => LLVMBuilder.Builder -> Vega.GlobalName -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
 buildClosure builder functionName closureLayout closureValue varName = do
     functionPointer <-
@@ -391,6 +444,17 @@ buildLoadOrKeepPointer builder layout value varName = case Layout.kind layout of
     Layout.LLVMScalar scalar -> LLVMBuilder.buildLoad builder scalar value varName
     Layout.AggregatePointer -> pure value
     Layout.ZeroSized -> pure value
+
+buildComplexLoad :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
+buildComplexLoad builder layout pointer varName = case Layout.kind layout of
+    Layout.LLVMScalar scalar -> LLVMBuilder.buildLoad builder scalar pointer varName
+    Layout.AggregatePointer -> do
+        localMemory <- LLVMBuilder.buildAlloca builder (Layout.llvmType layout) ""
+        let alignment = Alignment.toInt (Layout.alignment layout)
+        let size = LLVM.constInt LLVM.int64Type (fromIntegral (Layout.size layout)) False
+        _ <- LLVMBuilder.buildMemCpy builder localMemory alignment pointer alignment size
+        pure localMemory
+    Layout.ZeroSized -> pure zeroSizedDummyValue
 
 {- | Build a @getelementptr@ instruction pointing at a constant offset given in bytes.
 The offset is assumed to be in-bounds.
