@@ -4,36 +4,8 @@
 module Vega.Syntax where
 
 import Data.Unique (Unique)
-import Relude (
-    Applicative (pure),
-    Bool,
-    Eq ((==)),
-    Foldable (toList),
-    Functor (fmap),
-    Generic,
-    HasCallStack,
-    HashMap,
-    HashSet,
-    Hashable (..),
-    IORef,
-    Int,
-    Integer,
-    Maybe (..),
-    Monoid (mempty),
-    Ord (compare),
-    Rational,
-    Semigroup ((<>)),
-    Seq,
-    Show,
-    Text,
-    error,
-    find,
-    otherwise,
-    readIORef,
-    show,
-    ($),
-    (&&),
- )
+import Relude hiding (NonEmpty, Type)
+import Relude qualified
 import Vega.Loc (HasLoc, Loc)
 
 import Data.HashMap.Strict qualified as HashMap
@@ -697,6 +669,61 @@ functionRepresentation = ClosureRep (PrimitiveRep BoxedRep)
 
 boolRepresentation :: Type
 boolRepresentation = SumRep [ProductRep [], ProductRep []]
+
+-- | Lazily return all type constructors occuring in a type (syntax) in no particular order.
+-- This is important for the auto-boxing implementation in 'Vega.Effect.GraphPersistence.getAutoBoxing'
+typeConstructorsS :: forall p. TypeSyntax p -> [(Loc, XName p)]
+typeConstructorsS type_ = flip execState [] $ go type_
+    where
+        go :: TypeSyntax p -> Relude.State [(Loc, XName p)] ()
+        go = \case
+            -- The interesting case
+            TypeConstructorS loc name-> modify ((loc, name) :)
+            -- Recursive cases
+            TypeApplicationS _ function arguments -> do
+                go function
+                for_ arguments go
+            ForallS _ binders body -> do
+                for_ binders \case
+                    UnspecifiedBinderS{} -> pure ()
+                    TypeVarBinderS{kind} -> go kind
+                go body
+            ExistsS _ binders body -> do
+                for_ binders \(_, kind) -> go kind
+                go body
+            TypeFunctionS _ parameters body -> do
+                for_ parameters go
+                go body
+            PureFunctionS _ parameters body -> do
+                for_ parameters go
+                go body
+            FunctionS _ parameters effect body -> do
+                for_ parameters go
+                go effect
+                go body
+            TupleS _ elements -> do
+                for_ elements go
+            RecordS _ fields -> do
+                for_ fields \(_, type_) -> go type_
+            TypeOperator _ left _ right -> do
+                go left
+                go right
+            TypeLiteralMultiply _ _ type_ -> go type_
+            TypeS _ rep -> go rep
+            SumRepS _ constructors -> for_ constructors go
+            ProductRepS _ fields -> for_ fields go
+            ArrayRepS _ inner -> go inner
+            ClosureRepS _ inner -> go inner
+
+            -- Uninteresting Leaves
+            TypeVarS{} -> pure ()
+            TypeIntLiteral{} -> pure ()
+            RepS{} -> pure ()
+            EffectS{} -> pure ()
+            PrimitiveRepS{} -> pure ()
+            KindS{} -> pure ()
+            IntegerS{} -> pure ()
+            
 
 {- NOTE: Ord instances
 -----------------------------------------------------

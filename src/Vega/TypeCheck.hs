@@ -219,20 +219,16 @@ computeAndCacheKind declaration = withTrace KindCheck ("computeAndCacheKind: " <
                 (representation, _, _) <- inferTypeRep env typeSyntax
                 pure representation
 
-        constructorRepresentations <- for constructors \(_loc, _name, components) -> do
-            components <- for components \case
-                component@(TypeConstructorS _ name) ->
-                    inSameSCC name >>= \case
-                        True -> pure (PrimitiveRep BoxedRep)
-                        False -> repOfDifferentSCC component
-                component@(TypeApplicationS _ (TypeConstructorS _loc name) _) ->
-                    inSameSCC name >>= \case
-                        True -> pure (PrimitiveRep BoxedRep)
-                        False -> repOfDifferentSCC component
-                component -> repOfDifferentSCC component
-            case components of
+        constructorRepresentations <- for constructors \(_loc, name, components) -> do
+            autoboxing <- GraphPersistence.getAutoBoxing name
+            realComponents <- for (Seq.zip components autoboxing) \(component, isAutoBoxed) -> 
+                if isAutoBoxed then
+                    pure (PrimitiveRep BoxedRep)
+                else
+                    repOfDifferentSCC component
+            case realComponents of
                 [r] -> pure r
-                _ -> pure (ProductRep components)
+                _ -> pure (ProductRep realComponents)
 
         let bodyRepresentation = case constructorRepresentations of
                 [r] -> r
@@ -249,6 +245,7 @@ computeAndCacheKind declaration = withTrace KindCheck ("computeAndCacheKind: " <
         GraphPersistence.cacheGlobalKind name computedKind
         pure computedKind
     DefineExternalFunction{} -> error "trying to compute kind of an (external) function"
+
 
 checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
 checkDeclarationSyntax loc = \case

@@ -3,12 +3,12 @@
 
 module Vega.Effect.GraphPersistence where
 
-import Relude hiding (State, Type, evalState, get, modify, put)
+import Relude hiding (State, execState, Type, evalState, get, modify, put)
 
 import Vega.Syntax hiding (Effect)
 
 import Effectful
-import Effectful.State.Static.Local (State, evalState, get, modify)
+import Effectful.State.Static.Local (State, evalState, execState, get, modify, put)
 import Effectful.TH (makeEffect)
 
 import Data.HashSet qualified as HashSet
@@ -20,6 +20,9 @@ import Vega.Error (CompilationError, RenameErrorSet, TypeErrorSet)
 import Vega.Pretty (Pretty, keyword, pretty, (<+>))
 import Vega.SCC (SCCId)
 import Vega.Syntax qualified as Vega
+import Vega.Panic (panic)
+import Vega.Debug (showHeadConstructor)
+import Data.Traversable (for)
 
 data GraphData error a
     = Ok a
@@ -114,3 +117,32 @@ reachableFrom name = hoist (evalState (mempty :: HashSet DeclarationName)) $ go 
             when (not (HashSet.member dependency seenSoFar)) do
                 lift $ modify (HashSet.insert dependency)
                 go dependency
+
+getAutoBoxing :: GraphPersistence :> es => GlobalName -> Eff es (Seq Bool)
+getAutoBoxing dataConstructorName = getDefiningDeclaration dataConstructorName >>= \case
+    Nothing -> panic $ "Trying to access auto-boxing of data constructor with missing declaration: " <> prettyGlobal DataConstructorKind dataConstructorName
+    Just declaration -> getRenamed declaration >>= \case
+        Missing{} -> undefined
+        Failed{} -> undefined
+        Ok (MkDeclaration{syntax = DefineVariantType _ _ constructors}) -> do
+            -- TODO: cache the results for all constructors
+            result <- execState Nothing $ for_ constructors \(_, name, parameters) -> do
+                autoBoxingFlags <- for parameters \type_ -> do
+                    ownSCC <- getSCC declaration
+                    flip anyM (typeConstructorsS type_) \(_loc, name) -> case name of
+                        Global globalName -> getDefiningDeclaration globalName >>= \case
+                            -- If the type is primitive, it is obviously not in the same SCC as us
+                            Nothing -> pure False
+                            Just typeDeclaration -> do
+                                otherSCC <- getSCC typeDeclaration
+                                pure (ownSCC == otherSCC)
+                        Local{} -> undefined
+                -- TODO: cache autoBoxingFlags
+                when (name == dataConstructorName) do
+                    put (Just autoBoxingFlags)
+            case result of
+                Just autoBoxingFlags -> pure autoBoxingFlags
+                Nothing -> panic $ "Definition of data constructor " <> prettyGlobal DataConstructorKind dataConstructorName <> " doesn't define it"
+        Ok declaration -> panic $ "Data constructor " <> prettyGlobal DataConstructorKind dataConstructorName <> " refers to non-DefineVariantType declaration: " <> showHeadConstructor declaration.syntax
+
+
