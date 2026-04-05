@@ -10,6 +10,7 @@ module Vega.Compilation.LLVM.MIRToLLVM where
 
 import Relude hiding (State, evalState, get, modify, put)
 
+import Data.ByteString qualified as ByteString
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashSet (HashSet)
 import Data.HashSet qualified as HashSet
@@ -30,6 +31,8 @@ import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.LLVM.Layout (Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
 import Vega.Compilation.LLVM.Runtime (RuntimeDefinitions (..), declareRuntimeDefinitions)
+import Vega.Compilation.LLVM.Runtime.Heap qualified as Heap
+import Vega.Compilation.LLVM.Runtime.Serialize (serialize)
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
@@ -387,9 +390,29 @@ compileTerminator builder = \case
         pure ()
     _ -> undefined
 
-getOrCreateLayoutInfoTablePointer :: Compile es => Layout -> Eff es LLVM.Value
+getOrCreateLayoutInfoTablePointer :: (Compile es) => Layout -> Eff es LLVM.Value
 getOrCreateLayoutInfoTablePointer layout = do
-    undefined
+    let identifier = Layout.identifier layout
+    LLVM.getNamedGlobal ?module_ identifier >>= \case
+        Just global -> pure (LLVM.globalAsValue global)
+        Nothing -> do
+            let infoTable =
+                    Heap.MkInfoTable
+                        { objectType = Heap.Boxed
+                        , layout =
+                            Heap.BoxedLayout
+                                ( Heap.MkBoxedLayout
+                                    { sizeInBytes = fromIntegral (Layout.size layout)
+                                    , -- TODO: fill this in properly
+                                      boxedCount = 0
+                                    }
+                                )
+                        }
+            let infoTableBytes = serialize infoTable
+
+            llvmInfoTableGlobal <- LLVM.addGlobal ?module_ (LLVM.arrayType LLVM.int8Type (ByteString.length infoTableBytes)) identifier
+            LLVM.setInitializer llvmInfoTableGlobal (LLVM.constDataArray LLVM.int8Type infoTableBytes)
+            pure (LLVM.globalAsValue llvmInfoTableGlobal)
 
 buildRuntimeCall ::
     (Compile es) =>
@@ -539,8 +562,7 @@ we sometimes still need to register a value for a MIR variable, so we
 use this dummy value that will be very visible if it does end up in the generated code
 -}
 zeroSizedDummyValue :: (?context :: LLVM.Context) => LLVM.Value
-zeroSizedDummyValue = unsafePerformIO $ do
-    LLVM.constString "USE_OF_ZERO_SIZED_VALUE" LLVM.Don'tNullTerminate
+zeroSizedDummyValue = LLVM.constString "USE_OF_ZERO_SIZED_VALUE" LLVM.Don'tNullTerminate
 
 {- NOTE [Closure Representation]:
 Closures with payload representation `r` are *always* represented as products (FunctionPointer * r).

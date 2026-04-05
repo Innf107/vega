@@ -15,6 +15,7 @@ module Vega.Compilation.LLVM.Layout (
     alignment,
     llvmParameterType,
     llvmType,
+    identifier,
 
     -- ** Products
     productLayout,
@@ -205,6 +206,12 @@ closureLayout payloadLayout = productLayout [functionPointerLayout, payloadLayou
 
 smallestPowerOfTwoFitting :: Int -> Int
 smallestPowerOfTwoFitting n = Bits.finiteBitSize n - Bits.countLeadingZeros (n - 1)
+
+-- | Return a 'Text' identifier that uniquely identifies this layout for the purposes of info-table generation
+identifier :: Layout -> Text
+identifier layout = do
+    -- TODO: include information about pointers
+    "layout[" <> Relude.show layout.size <> "," <> Relude.show layout.alignment <> "]"
 
 {- NOTE [Sum tags]:
 For now, the tag of a sum is always the last element in the layout.

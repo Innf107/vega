@@ -18,11 +18,12 @@ import Data.ByteString.Unsafe qualified as ByteString.Unsafe
 import Foreign (Ptr, Storable (pokeByteOff), malloc, mallocBytes, mallocForeignPtrBytes, withForeignPtr)
 import Foreign.C (CSize)
 import GHC.Generics (Generic (from), K1 (..), M1 (..), Rep, U1, V1, to, (:*:) (..), (:+:) (..))
+import System.IO.Unsafe (unsafePerformIO)
 import Vega.Alignment (Alignment)
 import Vega.Alignment qualified as Alignment
 
-serialize :: forall a. (Serialize a) => a -> IO ByteString
-serialize x = do
+serialize :: forall a. (Serialize a) => a -> ByteString
+serialize x = unsafePerformIO do
     pointer <- mallocBytes (size @a)
 
     serializeUnsafe 0 x pointer
