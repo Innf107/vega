@@ -36,6 +36,8 @@ library
       Vega.Compilation.LLVM.Layout
       Vega.Compilation.LLVM.MIRToLLVM
       Vega.Compilation.LLVM.Runtime
+      Vega.Compilation.LLVM.Runtime.Heap
+      Vega.Compilation.LLVM.Runtime.Serialize
       Vega.Compilation.MIR.CoreToMIR
       Vega.Compilation.MIR.Syntax
       Vega.Compilation.MIR.Verify
@@ -101,6 +103,7 @@ library
   build-depends:
       aeson
     , base >=4.7 && <5
+    , bytestring
     , containers
     , effectful
     , effectful-th
@@ -156,6 +159,7 @@ executable vega
   build-depends:
       aeson
     , base >=4.7 && <5
+    , bytestring
     , containers
     , effectful
     , effectful-th
@@ -213,6 +217,7 @@ test-suite vega-test
   build-depends:
       aeson
     , base >=4.7 && <5
+    , bytestring
     , containers
     , effectful
     , effectful-th
