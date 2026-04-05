@@ -15,6 +15,7 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.HashSet (HashSet)
 import Data.HashSet qualified as HashSet
 import Data.Sequence (Seq (..))
+import Data.Sequence qualified as Seq
 import Data.Text qualified as Text
 import Data.Traversable (for)
 import Data.Vector.Storable qualified as Storable
@@ -309,7 +310,28 @@ compileInstruction builder = \case
 
         tagPointer <- buildGEPOffset builder sumValue (Layout.sumTagOffset sumLayout) "tagptr"
         asVar_ var tagLayout $ LLVMBuilder.buildLoad builder (Layout.llvmType tagLayout) tagPointer
-    MIR.CallDirect{var, functionName, arguments} -> undefined
+    MIR.CallDirect{var, functionName, arguments, returnRepresentation} -> do
+        (argumentValues, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
+        returnLayout <- Layout.representationLayout returnRepresentation
+
+        function <-
+            LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
+                Nothing -> panic $ "Trying to generate call to non-existent function" <> pretty (Core.Global functionName)
+                Just function -> pure function
+
+        (functionType, _) <- functionLLVMType argumentLayouts returnLayout
+
+        case Layout.kind returnLayout of
+            Layout.ZeroSized -> do
+                _ <- LLVMBuilder.buildCall builder functionType function (viaList argumentValues) ""
+                insertVarMapping var zeroSizedDummyValue returnLayout
+            Layout.LLVMScalar _ -> do
+                asVar_ var returnLayout $ LLVMBuilder.buildCall builder functionType function (viaList argumentValues)
+            Layout.AggregatePointer -> do
+                returnPointer <- asVar var returnLayout $ LLVMBuilder.buildAlloca builder (Layout.llvmType returnLayout)
+                _ <- LLVMBuilder.buildCall builder functionType function (viaList argumentValues <> [returnPointer]) ""
+                pure ()
+
     MIR.CallClosure{var, closure, arguments, returnRepresentation} -> do
         (closureValue, closureLayout) <- lookupVar closure
         let (functionPointerOffset, _functionPointerLayout) = Layout.productOffsetAndLayout 0 closureLayout
@@ -320,13 +342,8 @@ compileInstruction builder = \case
         pointerToPayload <- buildGEPOffset builder closureValue payloadOffset ""
         payload <- buildLoadOrKeepPointer builder payloadLayout pointerToPayload "payload"
 
-        argumentValuesWithoutPayload <- for arguments \argument -> do
-            (value, _) <- lookupVar argument
-            pure value
+        (argumentValuesWithoutPayload, argumentLayoutsWithoutPayload) <- Seq.unzip <$> for arguments lookupVar
 
-        argumentLayoutsWithoutPayload <- for arguments \argument -> do
-            (_, layout) <- lookupVar argument
-            pure layout
         let argumentLayouts = viaList $ argumentLayoutsWithoutPayload <> [Layout.boxedLayout]
 
         returnLayout <- Layout.representationLayout returnRepresentation
@@ -392,7 +409,7 @@ compileTerminator builder = \case
 
 getOrCreateLayoutInfoTablePointer :: (Compile es) => Layout -> Eff es LLVM.Value
 getOrCreateLayoutInfoTablePointer layout = do
-    let identifier = Layout.identifier layout
+    let identifier = "info_" <> Layout.identifier layout
     LLVM.getNamedGlobal ?module_ identifier >>= \case
         Just global -> pure (LLVM.globalAsValue global)
         Nothing -> do

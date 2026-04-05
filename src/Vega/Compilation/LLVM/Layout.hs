@@ -211,7 +211,7 @@ smallestPowerOfTwoFitting n = Bits.finiteBitSize n - Bits.countLeadingZeros (n -
 identifier :: Layout -> Text
 identifier layout = do
     -- TODO: include information about pointers
-    "layout[" <> Relude.show layout.size <> "," <> Relude.show layout.alignment <> "]"
+    "layout[" <> Relude.show layout.size <> "," <> Relude.show (Alignment.toInt layout.alignment) <> "]"
 
 {- NOTE [Sum tags]:
 For now, the tag of a sum is always the last element in the layout.
