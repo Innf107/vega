@@ -381,17 +381,22 @@ compileInstruction builder = \case
 compileTerminator :: (Compile es) => LLVMBuilder.Builder -> MIR.Terminator -> Eff es ()
 compileTerminator builder = \case
     MIR.Return variable -> do
-        (value, _layout) <- lookupVar variable
+        (value, layout) <- lookupVar variable
 
-        case ?functionEnv.sretVariable of
-            Nothing -> do
-                _ <- LLVMBuilder.buildRet builder value
-                pure ()
-            Just (target, returnLayout) -> do
-                -- The sret parameter is always the last parameter
-                _ <- LLVMBuilder.buildMemCpy builder target 0 value 0 (LLVM.constInt LLVM.int64Type (fromIntegral (Layout.size returnLayout)) False)
+        case Layout.kind layout of
+            Layout.ZeroSized -> do
                 _ <- LLVMBuilder.buildRetVoid builder
                 pure ()
+            Layout.LLVMScalar _ -> do
+                _ <- LLVMBuilder.buildRet builder value
+                pure ()
+            Layout.AggregatePointer -> do
+                case ?functionEnv.sretVariable of
+                    Nothing -> panic $ "Returning AggregatePointer layout from a function without sret variable: " <> show layout
+                    Just (sretVariable, _) -> do
+                        buildComplexStore builder layout sretVariable value
+                        _ <- LLVMBuilder.buildRetVoid builder
+                        pure ()
     MIR.SwitchInt scrutinee alternatives -> do
         (scrutineeValue, layout) <- lookupVar scrutinee
         let llvmType = Layout.llvmType layout
