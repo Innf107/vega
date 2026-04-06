@@ -1,4 +1,4 @@
-module Vega.Alignment (Alignment, fromExponent, fromValue, align, toInt) where
+module Vega.Alignment (Alignment, fromValue, align, toInt) where
 
 import Data.Bits (complement, shiftL, (.&.))
 import Data.Bits qualified as Bits
@@ -9,9 +9,6 @@ import Vega.Pretty qualified as Pretty
 
 newtype Alignment = MkAlignment {alignment :: Int}
     deriving (Eq, Ord, Show)
-
-fromExponent :: Int -> Alignment
-fromExponent exponent = MkAlignment (1 `shiftL` exponent)
 
 fromValue :: Int -> Alignment
 fromValue value

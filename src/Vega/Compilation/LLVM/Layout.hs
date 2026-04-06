@@ -136,13 +136,13 @@ representationLayout = \case
     Core.ArrayRep elements -> do
         undefined
     Core.FunctionPointerRep ->
-        pure (MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.pointerType, details = Primitive})
+        pure (MkLayout{size = 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive})
     rep@Core.ParameterRep{} -> panic $ "Non-monomorphized parameter representation in layout generation: " <> pretty rep
 
 productLayout :: (?context :: LLVM.Context) => Seq Layout -> Layout
 productLayout elementLayouts = do
     case elementLayouts of
-        Empty -> MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = ZeroSized, details = Primitive}
+        Empty -> MkLayout{size = 0, alignment = Alignment.fromValue 1, kind = ZeroSized, details = Primitive}
         _ -> do
             let go currentSize currentAlignment offsetsAndLayouts = \case
                     Empty -> (currentSize, currentAlignment, offsetsAndLayouts)
@@ -150,7 +150,7 @@ productLayout elementLayouts = do
                         let offset = Alignment.align nextLayout.alignment currentSize
 
                         go (offset + nextLayout.size) (max currentAlignment nextLayout.alignment) (offsetsAndLayouts :|> (offset, nextLayout)) rest
-            let (size, alignment, offsetsAndElementLayouts) = go 0 (Alignment.fromExponent 1) [] elementLayouts
+            let (size, alignment, offsetsAndElementLayouts) = go 0 (Alignment.fromValue 1) [] elementLayouts
 
             MkLayout{size, alignment, kind = AggregatePointer, details = ProductLayout{offsetsAndElementLayouts}}
 
@@ -158,12 +158,12 @@ productLayout elementLayouts = do
 sumLayout :: (?context :: LLVM.Context) => Seq Layout -> Layout
 sumLayout payloads = do
     case payloads of
-        Empty -> (MkLayout{size = 0, alignment = Alignment.fromExponent 1, kind = ZeroSized, details = Primitive})
+        Empty -> (MkLayout{size = 0, alignment = Alignment.fromValue 1, kind = ZeroSized, details = Primitive})
         _ -> do
             let tagSizeInBits = smallestPowerOfTwoFitting (length payloads)
             -- TODO: it would be nice to pack the bits into niches when possible but for now it's easier to
             -- pad it to full byte boundaries (I'm not sure if it even makes sense to support variants with > 256 fields tbh)
-            let tagSizeInBytes = Alignment.align (Alignment.fromExponent 3) tagSizeInBits `div` 8
+            let tagSizeInBytes = Alignment.align (Alignment.fromValue 8) tagSizeInBits `div` 8
             let tagAlignment = Alignment.fromValue tagSizeInBytes
 
             let sumAlignment = maximum (tagAlignment :| (map alignment (toList payloads)))
@@ -185,7 +185,7 @@ primitiveLayout :: (?context :: LLVM.Context) => Vega.PrimitiveRep -> Eff es Lay
 primitiveLayout = \case
     Vega.BoxedRep -> pure boxedLayout
     Vega.IntRep -> pure intLayout
-    Vega.DoubleRep -> pure $ MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.doubleType, details = Primitive}
+    Vega.DoubleRep -> pure $ MkLayout{size = 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.doubleType, details = Primitive}
 
 intLayout :: (?context :: LLVM.Context) => Layout
 intLayout = sizedIntLayoutInBytes 8
@@ -195,11 +195,11 @@ sizedIntLayoutInBytes size = MkLayout{size, alignment = Alignment.fromValue size
 
 -- TODO: we might be able to give heap pointers a different address space from unmanaged pointers?
 boxedLayout :: (?context :: LLVM.Context) => Layout
-boxedLayout = MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.pointerType, details = Primitive}
+boxedLayout = MkLayout{size = 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive}
 
 -- TODO: This pointer should not count as boxed since it doesn't need to be followed by the GC
 functionPointerLayout :: (?context :: LLVM.Context) => Layout
-functionPointerLayout = MkLayout{size = 8, alignment = Alignment.fromExponent 3, kind = LLVMScalar LLVM.pointerType, details = Primitive}
+functionPointerLayout = MkLayout{size = 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive}
 
 closureLayout :: (?context :: LLVM.Context) => Layout -> Layout
 closureLayout payloadLayout = productLayout [functionPointerLayout, payloadLayout]
