@@ -297,7 +297,12 @@ type family XVarPattern p where
 type family XConstructorPattern p where
     XConstructorPattern Parsed = ()
     XConstructorPattern Renamed = ()
-    XConstructorPattern Typed = Type -- Representation
+    XConstructorPattern Typed = TypedConstructorPatternExt
+    
+data TypedConstructorPatternExt = MkTypedConstructorPatternExt {
+    parameterRepresentations :: Seq Type,
+    returnRepresentation :: Type
+}
 
 type family XAsPattern p where
     XAsPattern Parsed = ()

@@ -100,7 +100,7 @@ compileBody block statements returnExpr = case statements of
     Core.Let name representation expr :<| rest -> do
         var <- newVarFromName name
         registerVariable name var representation
-        block <- compileLet block var expr
+        block <- compileLet block var representation expr
         compileBody block rest returnExpr
     Core.LetJoin name parameters statements returnExpr :<| rest -> do
         undefined
@@ -116,8 +116,8 @@ compileBody block statements returnExpr = case statements of
     -}
     Core.LetFunction{} :<| rest -> undefined
 
-compileLet :: (Compile es) => BlockBuilder -> MIR.Variable -> Core.Expr -> Eff es BlockBuilder
-compileLet block local = \case
+compileLet :: (Compile es) => BlockBuilder -> MIR.Variable -> Representation -> Core.Expr -> Eff es BlockBuilder
+compileLet block local representation = \case
     Core.Value value -> undefined
     Core.Application functionName arguments returnRepresentation -> case functionName of
         Core.Local localName -> do
@@ -145,6 +145,10 @@ compileLet block local = \case
         (block, mirValue) <- compileValue block value
         block <- addInstruction block (MIR.Box{var = local, target = mirValue})
         pure block
+    Core.Unbox value -> do
+        (block, mirValue) <- compileValue block value
+        block <- addInstruction block (MIR.Unbox{var = local, boxedTarget=mirValue, representation})
+        undefined
     Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases} -> do
         undefined
 
@@ -181,16 +185,17 @@ compileReturn block = \case
         var <- newVar "box"
         block <- addInstruction block (MIR.Box{var, target = value})
         finish block (MIR.Return var)
+    Core.Unbox value -> do
+        (block, value) <- compileValue block value
+        var <- newVar "unbox"
+        block <- addInstruction block (MIR.Unbox{var, boxedTarget=value, representation=undefined})
+        finish block (MIR.Return var)
     Core.ConstructorCase scrutinee scrutineeRepresentation cases -> do
         (block, scrutinee) <- compileValue block scrutinee
         tag <- newVar "tag"
         block <- addInstruction block (MIR.LoadSumTag tag scrutinee)
 
-        targetBlocks <- for (HashMap.toList cases) \(constructorName, (parameters, bodyStatements, bodyExpr)) -> do
-            index <-
-                GraphPersistence.getDataConstructorIndex constructorName >>= \case
-                    OnlyConstructor -> panic $ "Constructor case on type with only data constructor " <> Vega.prettyName Vega.VarKind constructorName
-                    MultiConstructor index -> pure index
+        targetBlocks <- for (HashMap.toList cases) \(index, (parameters, bodyStatements, bodyExpr)) -> do
             targetBlockBuilder <- newBlock (MkPhis mempty)
             let targetBlockDescriptor = targetBlockBuilder.descriptor
 

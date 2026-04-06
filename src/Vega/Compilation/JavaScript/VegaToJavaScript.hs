@@ -26,8 +26,8 @@ import Vega.Effect.Trace (Trace)
 import Vega.Panic (panic)
 import Vega.Pretty (localIdentText)
 import Vega.Seq.NonEmpty (NonEmpty (..), pattern NonEmpty)
+import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax
-import qualified Vega.Seq.NonEmpty as NonEmpty
 
 type Compile es =
     ( Trace :> es
@@ -203,11 +203,11 @@ compileCaseTree compileGoal scrutinees caseTree = go scrutinees caseTree
         ConstructorCase{constructors, default_} -> do
             let (scrutinee, rest) = consume scrutinees
             cases <-
-                fromList <$> for (Map.toList constructors) \(constructor, (parameterCount, continuation)) -> case parameterCount of
+                fromList <$> for (Map.toList constructors) \(constructor, (parameterRepresentations, continuation)) -> case length parameterRepresentations of
                     0 -> do
                         statements <- go rest continuation
                         pure (JS.compileName constructor, statements)
-                    _ -> do
+                    parameterCount -> do
                         payloadVariables <- Seq.replicateM parameterCount (freshVar "p")
                         statements <- go (payloadVariables <> rest) continuation
                         pure

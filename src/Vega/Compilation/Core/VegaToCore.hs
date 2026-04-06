@@ -189,8 +189,8 @@ compileExpr expr = do
                     { scrutinee = conditionValue
                     , scrutineeRepresentation = Core.boolRepresentation
                     , cases =
-                        [ (booleanConstructorName True, ([], thenStatements, thenExpr))
-                        , (booleanConstructorName False, ([], elseStatements, elseExpr))
+                        [ (1, ([], thenStatements, thenExpr))
+                        , (0, ([], elseStatements, elseExpr))
                         ]
                     }
                 , thenRepresentation
@@ -405,11 +405,33 @@ compileCaseTree compileGoal caseTree scrutinees = do
             PatternMatching.ConstructorCase{constructors, scrutineeRepresentation} -> do
                 let (scrutinee, rest) = consume scrutinees
                 cases <-
-                    fromList <$> for (Map.toList constructors) \(constructor, (argumentCount, subTree)) -> do
-                        locals <- Seq.replicateA argumentCount newLocal
-                        (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local) locals <> rest) boundValues subTree
+                    fromList <$> for (Map.toList constructors) \(constructor, (argumentRepresentations, subTree)) -> do
+                        locals <- for argumentRepresentations \representation -> do
+                            local <- newLocal
+                            pure (representation, local)
+                        index <-
+                            GraphPersistence.getDataConstructorIndex constructor >>= \case
+                                GraphPersistence.OnlyConstructor -> undefined
+                                GraphPersistence.MultiConstructor index -> pure index
 
-                        pure (constructor, (locals, subTreeStatements, subTreeExpr))
+                        autoBoxingFlags <- case constructor of
+                            Vega.Global globalName -> GraphPersistence.getAutoBoxing globalName
+                            Vega.Local{} -> undefined
+
+                        assert (length locals == length autoBoxingFlags)
+
+                        (possiblyUnboxedLocals, boxingStatements) <-
+                            Seq.unzip <$> for (Seq.zip locals autoBoxingFlags) \((vegaRepresentation, local), isAutoBoxed) -> do
+                                if isAutoBoxed
+                                    then do
+                                        representation <- convertRepresentation vegaRepresentation
+                                        unboxedLocal <- newLocal
+                                        pure (unboxedLocal, [Core.Let unboxedLocal representation (Core.Unbox (Core.Var (Core.Local local)))])
+                                    else
+                                        pure (local, [])
+
+                        (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local) possiblyUnboxedLocals <> rest) boundValues subTree
+                        pure (index, (possiblyUnboxedLocals, fold boxingStatements <> subTreeStatements, subTreeExpr))
                 scrutineeRepresentation <- convertRepresentation scrutineeRepresentation
                 pure ([], Core.ConstructorCase{scrutinee = scrutinee, scrutineeRepresentation, cases})
             PatternMatching.TupleCase count subTree -> do
@@ -621,6 +643,7 @@ coalesceExpr substitution = \case
             )
     Core.TupleAccess value index -> pure (substitution, \substitution -> Core.TupleAccess (applySubst substitution value) index)
     Core.Box value -> pure (substitution, \substitution -> Core.Box (applySubst substitution value))
+    Core.Unbox value -> pure (substitution, \substitution -> Core.Unbox (applySubst substitution value))
     Core.ConstructorCase scrutinee scrutineeRepresentation cases -> do
         let coalesceCase substitution (parameters, statements, expr) = do
                 (substitution, makeStatements) <- coalesceStatements substitution statements

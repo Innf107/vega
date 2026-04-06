@@ -39,7 +39,8 @@ data Expr
     | Lambda (Seq (LocalCoreName, Representation)) (Seq Statement) Expr
     | TupleAccess Value Int
     | Box Value
-    | ConstructorCase {scrutinee :: Value, scrutineeRepresentation :: Representation, cases :: (HashMap Vega.Name (Seq LocalCoreName, Seq Statement, Expr))}
+    | Unbox Value
+    | ConstructorCase {scrutinee :: Value, scrutineeRepresentation :: Representation, cases :: (HashMap Int (Seq LocalCoreName, Seq Statement, Expr))}
 
 data Statement
     = Let LocalCoreName Representation Expr
@@ -139,9 +140,10 @@ instance Pretty Expr where
         TupleAccess tupleValue index -> do
             pretty tupleValue <> lparen "[" <> number index <> rparen "]"
         Box value -> keyword "box" <+> pretty value
+        Unbox value -> keyword "unbox" <+> pretty value
         ConstructorCase scrutinee representation cases -> do
             let prettyCase (constructor, (locals, bodyStatements, bodyExpr)) =
-                    Vega.prettyName Vega.DataConstructorKind constructor <> arguments locals <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
+                    lparen "[" <> number constructor <> rparen "]" <+> arguments locals <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
 
             keyword "match" <+> pretty scrutinee <+> keyword ":" <+> pretty representation <+> lparen "{"
                 <> "\n"

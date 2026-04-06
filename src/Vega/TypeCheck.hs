@@ -221,11 +221,12 @@ computeAndCacheKind declaration = withTrace KindCheck ("computeAndCacheKind: " <
 
         constructorRepresentations <- for constructors \(_loc, name, components) -> do
             autoboxing <- GraphPersistence.getAutoBoxing name
-            realComponents <- for (Seq.zip components autoboxing) \(component, isAutoBoxed) -> 
-                if isAutoBoxed then
-                    pure (PrimitiveRep BoxedRep)
-                else
-                    repOfDifferentSCC component
+            realComponents <- for (Seq.zip components autoboxing) \(component, isAutoBoxed) ->
+                if isAutoBoxed
+                    then
+                        pure (PrimitiveRep BoxedRep)
+                    else
+                        repOfDifferentSCC component
             case realComponents of
                 [r] -> pure r
                 _ -> pure (ProductRep realComponents)
@@ -245,7 +246,6 @@ computeAndCacheKind declaration = withTrace KindCheck ("computeAndCacheKind: " <
         GraphPersistence.cacheGlobalKind name computedKind
         pure computedKind
     DefineExternalFunction{} -> error "trying to compute kind of an (external) function"
-
 
 checkDeclarationSyntax :: (TypeCheck es) => Loc -> DeclarationSyntax Renamed -> Eff es (DeclarationSyntax Typed)
 checkDeclarationSyntax loc = \case
@@ -415,19 +415,30 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
                             }
                         )
                     -- We still infer sub-patterns to catch type errors and bind any spurious variables
-                    (subPatterns, _subPatternTypes, envTransformers) <-
+                    (subPatterns, subPatternTypes, envTransformers) <-
                         unzip3Seq <$> for subPatterns \pattern_ -> do
                             inferPattern env pattern_
-                    representation <- representationOfType loc env constructorType
+                    returnRepresentation <- representationOfType loc env constructorType
+                    parameterRepresentations <- for subPatternTypes $ representationOfType loc env
+                    let constructorExt =
+                            MkTypedConstructorPatternExt
+                                { returnRepresentation
+                                , parameterRepresentations
+                                }
                     pure
-                        ( ConstructorPattern{loc, constructor, constructorExt = representation, subPatterns}
+                        ( ConstructorPattern{loc, constructor, constructorExt, subPatterns}
                         , constructorType
                         , Util.compose envTransformers
                         )
                 Empty -> do
-                    representation <- representationOfType loc env constructorType
+                    returnRepresentation <- representationOfType loc env constructorType
+                    let constructorExt =
+                            MkTypedConstructorPatternExt
+                                { returnRepresentation
+                                , parameterRepresentations = []
+                                }
                     pure
-                        ( ConstructorPattern{loc, constructor, constructorExt = representation, subPatterns = []}
+                        ( ConstructorPattern{loc, constructor, constructorExt, subPatterns = []}
                         , constructorType
                         , id
                         )
@@ -450,9 +461,15 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
                 (subPatterns, envTransformers) <- for2 parameterTypes subPatterns \type_ pattern_ -> do
                     checkPattern env type_ pattern_
 
-                representation <- representationOfType loc env resultType
+                returnRepresentation <- representationOfType loc env resultType
+                parameterRepresentations <- for parameterTypes (representationOfType loc env)
+                let constructorExt =
+                        MkTypedConstructorPatternExt
+                            { parameterRepresentations
+                            , returnRepresentation
+                            }
                 pure
-                    ( ConstructorPattern{loc, constructor, constructorExt = representation, subPatterns}
+                    ( ConstructorPattern{loc, constructor, constructorExt, subPatterns}
                     , resultType
                     , Util.compose envTransformers
                     )

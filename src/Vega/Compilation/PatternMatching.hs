@@ -5,13 +5,14 @@ module Vega.Compilation.PatternMatching (
     traverseLeavesWithBoundVars,
 ) where
 
+import Control.Exception (assert)
 import Data.Map qualified as Map
 import Data.Sequence (Seq (..))
 import Relude hiding (NonEmpty, Type)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
-import Vega.Pretty (Ann, Doc, Pretty, align, indent, keyword, lparen, number, pretty, rparen, vsep, (<+>))
+import Vega.Pretty (Ann, Doc, Pretty, align, indent, keyword, lparen, number, pretty, rparen, vsep, (<+>), intercalateDoc)
 import Vega.Seq.NonEmpty
 import Vega.Syntax
 
@@ -20,7 +21,7 @@ data CaseTree goal
     | ConstructorCase
         -- We use Map instead of HashMap to get a faster unionWith operation
         -- (with HashMap, merging would have been quadratic in the number of constructors)
-        { constructors :: Map Name (Int, CaseTree goal)
+        { constructors :: Map Name (Seq Representation, CaseTree goal)
         , scrutineeRepresentation :: Type
         , default_ :: Maybe (CaseTree goal)
         }
@@ -39,13 +40,23 @@ merge tree1 tree2 = case (tree1, tree2) of
     (_, Leaf _) -> panic $ "trying to merge " <> showHeadConstructor (coerce @_ @(CaseTree (Identity goal)) tree1) <> " with leaf"
     (Ignore subTree1, Ignore subTree2) -> Ignore (merge subTree1 subTree2)
     (Ignore ignoreSubTree, ConstructorCase{scrutineeRepresentation, constructors, default_}) -> do
-        let mergedConstructors = fmap (\(count, subTree) -> (count, merge (replicateIgnore count ignoreSubTree) subTree)) constructors
+        let mergedConstructors =
+                fmap
+                    ( \(representations, subTree) ->
+                        (representations, merge (replicateIgnore (length representations) ignoreSubTree) subTree)
+                    )
+                    constructors
         let mergedDefault = case default_ of
                 Nothing -> Just ignoreSubTree
                 Just defaultSubTree -> Just (merge ignoreSubTree defaultSubTree)
         ConstructorCase{scrutineeRepresentation, constructors = mergedConstructors, default_ = mergedDefault}
     (ConstructorCase{scrutineeRepresentation, constructors, default_}, Ignore ignoreSubTree) -> do
-        let mergedConstructors = fmap (\(count, subTree) -> (count, merge subTree (replicateIgnore count ignoreSubTree))) constructors
+        let mergedConstructors =
+                fmap
+                    ( \(representations, subTree) ->
+                        (representations, merge subTree (replicateIgnore (length representations) ignoreSubTree))
+                    )
+                    constructors
         let mergedDefault = case default_ of
                 Nothing -> Just ignoreSubTree
                 Just defaultSubTree -> Just (merge defaultSubTree ignoreSubTree)
@@ -62,9 +73,22 @@ merge tree1 tree2 = case (tree1, tree2) of
     ( ConstructorCase{scrutineeRepresentation, constructors = constructors1, default_ = default1}
         , ConstructorCase{scrutineeRepresentation = _, constructors = constructors2, default_ = default2}
         ) -> do
-            let mergeConstructor constructorName (count1, subTree1) (count2, subTree2)
-                    | count1 /= count2 = panic $ "Data constructor " <> prettyName DataConstructorKind constructorName <> " applied to different argument counts (" <> number count1 <> " vs " <> number count2 <> ")"
-                    | otherwise = (count1, merge subTree1 subTree2)
+            let mergeConstructor constructorName (representations1, subTree1) (representations2, subTree2)
+                    -- we can't really check that the representations actually match here
+                    | length representations1 /= length representations2 =
+                        panic $
+                            "Data constructor "
+                                <> prettyName DataConstructorKind constructorName
+                                <> " applied to different argument  ("
+                                <> lparen "["
+                                <> intercalateDoc ", " (fmap pretty representations1)
+                                <> rparen "]"
+                                <> " vs "
+                                <> lparen "["
+                                <> intercalateDoc ", " (fmap pretty representations2)
+                                <> rparen "]"
+                                <> ")"
+                    | otherwise = (representations1, merge subTree1 subTree2)
             let mergedDefault = case (default1, default2) of
                     (_, Nothing) -> default1
                     (Nothing, _) -> default2
@@ -110,11 +134,11 @@ compileSinglePattern pattern_ leaf = case pattern_ of
     WildcardPattern{} -> Ignore leaf
     VarPattern{loc = _, ext = rep, name, isShadowed = _} -> BindVar{name = name, representation = rep, next = Ignore leaf}
     AsPattern _loc rep inner name -> BindVar{name = name, representation = rep, next = compileSinglePattern inner leaf}
-    ConstructorPattern{constructorExt = scrutineeRepresentation, constructor, subPatterns} -> do
+    ConstructorPattern{constructorExt, constructor, subPatterns} -> assert (length constructorExt.parameterRepresentations == length subPatterns) do
         let subTree = serializeSubPatternsWithLeaf subPatterns leaf
         ConstructorCase
-            { scrutineeRepresentation
-            , constructors = [(constructor, (length subPatterns, subTree))]
+            { scrutineeRepresentation = constructorExt.returnRepresentation
+            , constructors = [(constructor, (constructorExt.parameterRepresentations, subTree))]
             , default_ = Nothing
             }
     TuplePattern _ subPatterns -> do
@@ -145,7 +169,7 @@ traverseLeavesWithBoundVars tree onLeaf = go [] onLeaf tree
             for_ constructors \(_, subTree) -> do
                 go boundVars onLeaf subTree
         TupleCase _ subTree -> go boundVars onLeaf subTree
-        BindVar name rep subTree -> do
+        BindVar name _rep subTree -> do
             go (boundVars :|> name) onLeaf subTree
         Ignore subTree -> go boundVars onLeaf subTree
 
@@ -154,8 +178,8 @@ instance (Pretty goal) => Pretty (CaseTree goal) where
         Leaf goal -> keyword "Leaf" <+> pretty goal
         BindVar name rep subTree -> keyword "BindVar" <+> prettyLocal VarKind name <> pretty rep <> prettySubTree subTree
         ConstructorCase{constructors} -> do
-            let prettyCase (name, (count, subTree)) = do
-                    prettyName DataConstructorKind name <> lparen "(" <> number count <> rparen ")" <> prettySubTree subTree
+            let prettyCase (name, (representations, subTree)) = do
+                    prettyName DataConstructorKind name <> lparen "(" <> intercalateDoc ", " (fmap pretty representations) <> rparen ")" <> prettySubTree subTree
             keyword "ConstructorCase"
                 <> "\n"
                 <> indent 2 (align $ vsep (fmap prettyCase (Map.toList constructors)))
