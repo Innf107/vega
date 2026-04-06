@@ -15,9 +15,9 @@ import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Effect.Output.Static.Local (Output, output, runOutputSeq)
 import Vega.Panic (panic)
-import Vega.Pretty (Ann, Doc, keyword, pretty, (<+>), number)
+import Vega.Pretty (Ann, Doc, keyword, number, pretty, (<+>))
 import Vega.Syntax (PrimitiveRep (..))
-import qualified Vega.Syntax as Vega
+import Vega.Syntax qualified as Vega
 
 type FunctionSignatures = HashMap CoreName (Seq Representation, Representation)
 
@@ -173,8 +173,8 @@ verifyBlock block = do
 verifyInstruction :: (Verify es) => MIR.Instruction -> Eff es ()
 verifyInstruction = \case
     MIR.Add var arg1 arg2 -> do
-        checkVarRepresentation arg1 (PrimitiveRep IntRep)
-        checkVarRepresentation arg2 (PrimitiveRep IntRep)
+        checkVarRepresentation arg1 (PrimitiveRep IntRep) var
+        checkVarRepresentation arg2 (PrimitiveRep IntRep) var
         insertVarRepresentation var (PrimitiveRep IntRep)
     MIR.AccessField{var, path, target, fieldRepresentation} -> do
         targetRepresentation <- varRepresentation target
@@ -183,7 +183,7 @@ verifyInstruction = \case
     MIR.Box{var, target = _} -> do
         insertVarRepresentation var (PrimitiveRep BoxedRep)
     MIR.Unbox{var, boxedTarget, representation} -> do
-        checkVarRepresentation boxedTarget (PrimitiveRep BoxedRep)
+        checkVarRepresentation boxedTarget (PrimitiveRep BoxedRep) var
         insertVarRepresentation var representation
     MIR.ProductConstructor{var, values, representation} -> do
         insertVarRepresentation var representation
@@ -197,14 +197,14 @@ verifyInstruction = \case
                             <> pretty (length values)
                 | otherwise -> do
                     for_ (zip (toList values) (toList fields)) \(value, expectedRepresentation) -> do
-                        checkVarRepresentation value expectedRepresentation
+                        checkVarRepresentation value expectedRepresentation var
             _ -> verificationError $ "Invalid non-product representation for ProductConstructor: " <> pretty representation
     MIR.SumConstructor{var, tag, payload, representation} -> do
         insertVarRepresentation var representation
         case representation of
             SumRep constructors -> case Seq.lookup tag constructors of
                 Nothing -> verificationError $ "SumConstructor tag" <+> pretty tag <+> "is out of bounds for representation" <+> pretty representation
-                Just expectedRepresentation -> checkVarRepresentation payload expectedRepresentation
+                Just expectedRepresentation -> checkVarRepresentation payload expectedRepresentation var
             _ -> verificationError $ "Invalid non-sum representation for SumConstructor: " <> pretty representation
     MIR.AllocClosure{var, closedValues, representation} -> do
         undefined
@@ -222,10 +222,34 @@ verifyInstruction = \case
         -- it should be int8/int16/... depending on the number of constructors but we don't actually have that in MIR yet
         insertVarRepresentation var (PrimitiveRep IntRep)
     MIR.CallDirect{var, functionName, arguments, returnRepresentation} -> do
-        undefined
+        functionSignatures <- ask @FunctionSignatures
+        let (expectedArgumentRepresentations, expectedReturnRepresentation) = case HashMap.lookup (Core.Global functionName) functionSignatures of
+                Nothing -> panic $ "Missing signature for function" <+> pretty (Core.Global functionName)
+                Just signature -> signature
+
+        when (length arguments /= length expectedArgumentRepresentations) do
+            verificationError $
+                "Invalid number of arguments in call to "
+                    <> pretty (Core.Global functionName)
+                    <> "\n  Expected: "
+                    <> number (length expectedArgumentRepresentations)
+                    <> "\n    Actual: "
+                    <> number (length arguments)
+        for_ (Seq.zip arguments expectedArgumentRepresentations) \(argument, representation) -> do
+            checkVarRepresentation argument representation var
+
+        when (returnRepresentation /= expectedReturnRepresentation) do
+            verificationError $
+                "Invalid return representation expected from call to "
+                    <> pretty (Core.Global functionName)
+                    <> "  Called as: "
+                    <> pretty returnRepresentation
+                    <> "  Function defined as returning "
+                    <> pretty expectedReturnRepresentation
+        insertVarRepresentation var returnRepresentation
     MIR.CallClosure{var, closure, arguments = _, returnRepresentation} -> do
         -- We can't actually verify that the arguments are correct here
-        checkVarRepresentation closure Core.functionRepresentation
+        checkVarRepresentation closure Core.functionRepresentation var
         insertVarRepresentation var returnRepresentation
 
 verifyValidPath :: (Verify es) => MIR.Variable -> Representation -> MIR.Path -> Representation -> Eff es ()
@@ -247,11 +271,19 @@ verifyValidPath var fullInputRep path expectedRep = go fullInputRep path
                 Nothing -> verificationError $ "Out-of-bounds sum constructor access" <+> number index <+> "for representation" <+> pretty representation <> "\n  In path access for " <> pretty var <> " accessing " <> MIR.prettyPath path <> " on " <> pretty fullInputRep
             _ -> verificationError $ "Trying to access non-sum representation " <> pretty representation <> " with a SumConstructorPath.\n  In path access for " <> pretty var <> " accessing " <> MIR.prettyPath path <> " on " <> pretty fullInputRep
 
-checkVarRepresentation :: (Verify es) => MIR.Variable -> Representation -> Eff es ()
-checkVarRepresentation variable expectedRepresentation = do
+checkVarRepresentation :: (Verify es) => MIR.Variable -> Representation -> MIR.Variable -> Eff es ()
+checkVarRepresentation variable expectedRepresentation definitionVar = do
     actualRepresentation <- varRepresentation variable
     when (actualRepresentation /= expectedRepresentation) do
-        verificationError ("Mismatched representation for " <> pretty variable <> ".\n    Expected: " <> pretty expectedRepresentation <> "\n      Actual: " <> pretty actualRepresentation)
+        verificationError
+            ( pretty definitionVar
+                <> ": Mismatched representation for "
+                <> pretty variable
+                <> ".\n    Expected: "
+                <> pretty expectedRepresentation
+                <> "\n      Actual: "
+                <> pretty actualRepresentation
+            )
 
 insertVarRepresentation :: (Verify es) => MIR.Variable -> Representation -> Eff es ()
 insertVarRepresentation variable representation = do
@@ -270,21 +302,21 @@ varRepresentation variable = do
 
 verifyTerminator :: (Verify es) => MIR.Terminator -> Eff es ()
 verifyTerminator = \case
-    MIR.Return variable -> do
+    MIR.Return var -> do
         MkVerifyState{returnRepresentation} <- get
-        checkVarRepresentation variable returnRepresentation
+        checkVarRepresentation var returnRepresentation var
     MIR.Jump block -> undefined
-    MIR.SwitchInt{var, cases=_} -> do
+    MIR.SwitchInt{var, cases = _} -> do
         -- TODO: this also needs to work for other, smaller int representations
-        checkVarRepresentation var (PrimitiveRep IntRep)
-        -- TODO: verify that the targets actually exist
-    MIR.TailCallDirect{functionName, arguments=_, returnRepresentation} -> do
+        checkVarRepresentation var (PrimitiveRep IntRep) var
+    -- TODO: verify that the targets actually exist
+    MIR.TailCallDirect{functionName, arguments = _, returnRepresentation} -> do
         -- TODO: verify that the function exists and the arguments are correct
-        MkVerifyState{returnRepresentation=ownReturnRepresentation} <- get
+        MkVerifyState{returnRepresentation = ownReturnRepresentation} <- get
         when (ownReturnRepresentation /= returnRepresentation) do
             verificationError $ "Tail call into" <+> Vega.prettyGlobal Vega.VarKind functionName <+> "returns different representation.\n  Expected:" <+> pretty ownReturnRepresentation <+> "\n    Actual:" <+> pretty returnRepresentation
-    MIR.TailCallClosure{closure, arguments=_, returnRepresentation} -> do
-        MkVerifyState{returnRepresentation=ownReturnRepresentation} <- get
+    MIR.TailCallClosure{closure, arguments = _, returnRepresentation} -> do
+        MkVerifyState{returnRepresentation = ownReturnRepresentation} <- get
         when (ownReturnRepresentation /= returnRepresentation) do
             verificationError $ "Tail call into closure" <+> pretty closure <+> "returns different representation.\n  Expected:" <+> pretty ownReturnRepresentation <+> "\n    Actual:" <+> pretty returnRepresentation
 
