@@ -201,7 +201,7 @@ stringRepresentation = PrimitiveRep Vega.BoxedRep
 -- The representation of functions. This *will* probably change in the future so code
 -- should treat it abstractly instead of depending on its concrete value
 functionRepresentation :: Representation
-functionRepresentation = PrimitiveRep Vega.BoxedRep
+functionRepresentation = ProductRep [FunctionPointerRep, PrimitiveRep Vega.BoxedRep]
 
 boolRepresentation :: Representation
 boolRepresentation = SumRep [ProductRep [], ProductRep []]
