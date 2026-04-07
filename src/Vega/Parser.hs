@@ -581,7 +581,7 @@ expr = label "expression" exprLogical
                         typeArguments <- type_ `sepBy` (single Comma)
                         endLoc <- single RBracket
                         pure (VisibleTypeApplication (loc <> endLoc) name typeArguments)
-                    , pure (Var loc name)
+                    , pure (Var{loc, name, representation = ()})
                     ]
             , do
                 (name, loc) <- constructorWithLoc

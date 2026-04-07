@@ -352,9 +352,9 @@ renamePattern env = \case
 
 renameExpr :: (Rename es) => Env -> Expr Parsed -> Eff es (Expr Renamed)
 renameExpr env = \case
-    Var loc name -> do
+    Var {loc, name, representation=()} -> do
         name <- findVarName env loc name
-        pure (Var loc name)
+        pure (Var {loc, name, representation=()})
     DataConstructor loc () name -> do
         name <- findDataConstructorName env loc name
         pure (DataConstructor loc () name)

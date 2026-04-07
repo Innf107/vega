@@ -613,9 +613,10 @@ infer env ambientEffect expr = do
     pure (type_, expr)
   where
     go = case expr of
-        Var loc name -> do
+        Var {loc, name, representation=()} -> do
             type_ <- instantiate loc env =<< varType env name
-            pure (type_, Var loc name)
+            representation <- representationOfType loc env type_
+            pure (type_, Var {loc, name, representation})
         DataConstructor loc () name -> do
             type_ <- instantiate loc env =<< varType env name
             representation <- representationOfType loc env type_

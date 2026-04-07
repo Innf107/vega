@@ -263,7 +263,9 @@ compileExprToValue expr = do
             name <- newLocal
             pure (statements <> [Core.Let name representation expr], Core.Var (Core.Local name), representation)
     case expr of
-        Vega.Var _ name -> pure ([], Core.Var (nameToCoreName name), undefined)
+        Vega.Var{loc = _, name, representation = vegaRepresentation} -> do
+            representation <- convertRepresentation vegaRepresentation
+            pure ([], Core.Var (nameToCoreName name), representation)
         Vega.DataConstructor _ vegaRepresentation name -> do
             representation <- convertRepresentation vegaRepresentation
             arityOfDataConstructor name >>= \case
@@ -750,13 +752,6 @@ applySubstInPureOperatorExpr substitution = \case
         Core.NotEqual
             (applySubstInPureOperatorExpr substitution left)
             (applySubstInPureOperatorExpr substitution right)
-
-
-
-
-
-
-
 
 applySubst :: Substitution -> Core.Value -> Core.Value
 applySubst substitution = \case

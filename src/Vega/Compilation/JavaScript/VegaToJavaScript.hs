@@ -83,9 +83,9 @@ compileDeclarationSyntax = \case
 
 compileExpr :: (Compile es) => Expr Typed -> Eff es JS.Expr
 compileExpr = \case
-    Var _ (Global builtinName)
+    Var _ _ (Global builtinName)
         | isInternalName builtinName -> compileBuiltinVar builtinName.name
-    Var _ varName -> pure $ JS.Var (JS.compileName varName)
+    Var _ _ varName -> pure $ JS.Var (JS.compileName varName)
     DataConstructor{valueRepresentation = _, name} -> pure $ JS.Var (JS.compileName name)
     Application _ _representation funExpr argExprs -> do
         jsFunExpr <- compileExpr funExpr
