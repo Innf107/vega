@@ -231,6 +231,9 @@ compilePhis builder (MIR.MkPhis phis) = do
 
 compileInstruction :: (Compile es) => LLVMBuilder.Builder -> MIR.Instruction -> Eff es ()
 compileInstruction builder = \case
+    MIR.Identity var target -> do
+        (targetValue, targetLayout) <- lookupVar target
+        insertVarMapping var targetValue targetLayout
     MIR.Add var arg1 arg2 -> do
         arg1Value <- lookupVarValue arg1
         arg2Value <- lookupVarValue arg2
@@ -331,7 +334,6 @@ compileInstruction builder = \case
                 returnPointer <- asVar var returnLayout $ LLVMBuilder.buildAlloca builder (Layout.llvmType returnLayout)
                 _ <- LLVMBuilder.buildCall builder functionType function (viaList argumentValues <> [returnPointer]) ""
                 pure ()
-
     MIR.CallClosure{var, closure, arguments, returnRepresentation} -> do
         (closureValue, closureLayout) <- lookupVar closure
         let (functionPointerOffset, _functionPointerLayout) = Layout.productOffsetAndLayout 0 closureLayout

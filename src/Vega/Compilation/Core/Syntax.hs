@@ -40,7 +40,19 @@ data Expr
     | TupleAccess Value Int
     | Box Value
     | Unbox Value
+    | PureOperator PureOperatorExpr
     | ConstructorCase {scrutinee :: Value, scrutineeRepresentation :: Representation, cases :: (HashMap Int (Seq LocalCoreName, Seq Statement, Expr))}
+
+data PureOperatorExpr
+    = PureOperatorValue Value
+    | Add PureOperatorExpr PureOperatorExpr
+    | Subtract PureOperatorExpr PureOperatorExpr
+    | Multiply PureOperatorExpr PureOperatorExpr
+    | Divide PureOperatorExpr PureOperatorExpr
+    | Less PureOperatorExpr PureOperatorExpr
+    | LessEqual PureOperatorExpr PureOperatorExpr
+    | Equal PureOperatorExpr PureOperatorExpr
+    | NotEqual PureOperatorExpr PureOperatorExpr
 
 data Statement
     = Let LocalCoreName Representation Expr
@@ -150,6 +162,19 @@ instance Pretty Expr where
                 <> indent 2 (align (intercalateDoc "\n" (map prettyCase (HashMap.toList cases))))
                 <> "\n"
                 <> rparen "}"
+        PureOperator operator -> pretty operator
+
+instance Pretty PureOperatorExpr where
+    pretty = \case
+        PureOperatorValue value -> pretty value
+        Add left right -> lparen "(" <> pretty left <+> keyword "+" <+> pretty right <> rparen ")"
+        Subtract left right -> lparen "(" <> pretty left <+> keyword "-" <+> pretty right <> rparen ")"
+        Multiply left right -> lparen "(" <> pretty left <+> keyword "*" <+> pretty right <> rparen ")"
+        Divide left right -> lparen "(" <> pretty left <+> keyword "/" <+> pretty right <> rparen ")"
+        Less left right -> lparen "(" <> pretty left <+> keyword "<" <+> pretty right <> rparen ")"
+        LessEqual left right -> lparen "(" <> pretty left <+> keyword "<=" <+> pretty right <> rparen ")"
+        Equal left right -> lparen "(" <> pretty left <+> keyword "==" <+> pretty right <> rparen ")"
+        NotEqual left right -> lparen "(" <> pretty left <+> keyword "!=" <+> pretty right <> rparen ")"
 
 instance Pretty Value where
     pretty = \case
@@ -207,3 +232,19 @@ functionRepresentation = ProductRep [FunctionPointerRep, PrimitiveRep Vega.Boxed
 
 boolRepresentation :: Representation
 boolRepresentation = SumRep [ProductRep [], ProductRep []]
+
+trueValue :: Value
+trueValue =
+    DataConstructorApplication
+        { constructor = UserDefinedConstructor (Vega.Global (Vega.internalName "True"))
+        , arguments = []
+        , resultRepresentation = boolRepresentation
+        }
+
+falseValue :: Value
+falseValue =
+    DataConstructorApplication
+        { constructor = UserDefinedConstructor (Vega.Global (Vega.internalName "False"))
+        , arguments = []
+        , resultRepresentation = boolRepresentation
+        }

@@ -172,6 +172,9 @@ verifyBlock block = do
 
 verifyInstruction :: (Verify es) => MIR.Instruction -> Eff es ()
 verifyInstruction = \case
+    MIR.Identity var target -> do
+        representation <- varRepresentation target
+        insertVarRepresentation var representation
     MIR.Add var arg1 arg2 -> do
         checkVarRepresentation arg1 (PrimitiveRep IntRep) var
         checkVarRepresentation arg2 (PrimitiveRep IntRep) var

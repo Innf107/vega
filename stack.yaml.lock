@@ -31,8 +31,7 @@ packages:
     hackage: llvm-ffi-21.0.0.2@sha256:d898d53846373b86a6e34fc2c72cb79cbbe4398bd38e127c69367a933eba6e57,8424
 snapshots:
 - completed:
-    sha256: 473840099b95facf73ec72dcafe53a2487bfadeceb03a981a19e16469503a342
-    size: 726266
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/6.yaml
-  original:
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/6.yaml
+    sha256: a578d98b69e5742eaf2c42d870e9c5011e5f8b5ad216f04ca8f52caadc8bf89c
+    size: 715419
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2025/12/30.yaml
+  original: nightly-2025-12-30

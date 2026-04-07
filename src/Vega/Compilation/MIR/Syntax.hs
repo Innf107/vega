@@ -5,7 +5,7 @@ import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Unique (Unique, hashUnique)
 import GHC.Generics (Generically (..))
-import Relude
+import Relude hiding (Identity)
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation (..))
 import Vega.Panic (panic)
 import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, localIdentText, lparen, number, pretty, rparen, (<+>))
@@ -53,7 +53,8 @@ data PathSegment
 type Path = Seq PathSegment
 
 data Instruction
-    = Add Variable Variable Variable
+    = Identity Variable Variable
+    | Add Variable Variable Variable
     | AccessField {var :: Variable, path :: Path, target :: Variable, fieldRepresentation :: Representation}
     | Box
         { var :: Variable
@@ -141,6 +142,7 @@ prettyPath path = lparen "[" <> intercalateDoc (keyword "->") (fmap pretty path)
 
 instance Pretty Instruction where
     pretty = \case
+        Identity var target -> keywordInstruction "identity" var [pretty target]
         Add var arg1 arg2 -> keywordInstruction "add" var [pretty arg1, pretty arg2]
         AccessField{var, path, target, fieldRepresentation} -> keywordInstruction "accessField" var [prettyPath path, pretty target] <+> keyword ":" <+> pretty fieldRepresentation
         Box

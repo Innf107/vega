@@ -118,7 +118,9 @@ compileBody block statements returnExpr = case statements of
 
 compileLet :: (Compile es) => BlockBuilder -> MIR.Variable -> Representation -> Core.Expr -> Eff es BlockBuilder
 compileLet block local representation = \case
-    Core.Value value -> undefined
+    Core.Value value -> do
+        (block, target) <- compileValue block value
+        addInstruction block (MIR.Identity local target)
     Core.Application functionName arguments returnRepresentation -> case functionName of
         Core.Local localName -> do
             (closure, _) <- getLocal localName
@@ -147,7 +149,10 @@ compileLet block local representation = \case
         pure block
     Core.Unbox value -> do
         (block, mirValue) <- compileValue block value
-        block <- addInstruction block (MIR.Unbox{var = local, boxedTarget=mirValue, representation})
+        block <- addInstruction block (MIR.Unbox{var = local, boxedTarget = mirValue, representation})
+        pure block
+    Core.PureOperator pureOperator -> do
+        (block, _) <- compilePureOperator block (Just local) pureOperator
         pure block
     Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases} -> do
         undefined
@@ -188,7 +193,7 @@ compileReturn block = \case
     Core.Unbox value -> do
         (block, value) <- compileValue block value
         var <- newVar "unbox"
-        block <- addInstruction block (MIR.Unbox{var, boxedTarget=value, representation=undefined})
+        block <- addInstruction block (MIR.Unbox{var, boxedTarget = value, representation = undefined})
         finish block (MIR.Return var)
     Core.ConstructorCase scrutinee scrutineeRepresentation cases -> do
         (block, scrutinee) <- compileValue block scrutinee
@@ -229,6 +234,30 @@ compileReturn block = \case
         registerAdditionalDeclarations lambdaDeclarations
         let value = undefined
         finish block (MIR.Return value)
+    Core.PureOperator pureOperator -> do
+        (block, var) <- compilePureOperator block Nothing pureOperator
+        finish block (MIR.Return var)
+
+compilePureOperator :: (Compile es) => BlockBuilder -> Maybe MIR.Variable -> Core.PureOperatorExpr -> Eff es (BlockBuilder, MIR.Variable)
+compilePureOperator block var = \case
+    Core.PureOperatorValue value -> do
+        (block, target) <- compileValue block value
+        case var of 
+            Nothing -> pure (block, target)
+            Just var -> do
+                block <- addInstruction block (MIR.Identity var target)
+                pure (block, var)
+    Core.Add left right -> do
+        var <- targetVar
+        (block, left) <- compilePureOperator block Nothing left
+        (block, right) <- compilePureOperator block Nothing right
+        block <- addInstruction block (MIR.Add var left right)
+        pure (block, var)
+    _ -> undefined
+    where
+        targetVar = case var of
+            Nothing -> newVar ""
+            Just var -> pure var
 
 compileValues :: (Compile es) => BlockBuilder -> Seq Core.Value -> Eff es (BlockBuilder, Seq MIR.Variable)
 compileValues block values = mapAccumLM compileValue block values

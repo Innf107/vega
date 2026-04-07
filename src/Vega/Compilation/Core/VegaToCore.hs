@@ -177,7 +177,57 @@ compileExpr expr = do
         Vega.DoubleLiteral{} -> deferToValue
         Vega.TupleLiteral{} -> deferToValue
         Vega.RecordLiteral{} -> deferToValue
-        Vega.BinaryOperator{} -> undefined
+        Vega.BinaryOperator _loc left operator right -> case operator of
+            -- Short-circuiting operators
+            Vega.And
+            Vega.Or -> do
+                    (leftStatements, left, leftRepresentation) <- compileExprToValue left
+                    assert (leftRepresentation == Core.boolRepresentation)
+
+                    (rightStatements, right, rightRepresentation) <- compileExpr right
+                    assert (rightRepresentation == Core.boolRepresentation)
+
+                    let expr = case operator of
+                            Vega.And ->
+                                Core.ConstructorCase
+                                    left
+                                    Core.boolRepresentation
+                                    [ (0, ([], [], Core.Value Core.falseValue))
+                                    , (1, ([], rightStatements, right))
+                                    ]
+                            Vega.Or ->
+                                Core.ConstructorCase
+                                    left
+                                    Core.boolRepresentation
+                                    [ (0, ([], rightStatements, right))
+                                    , (1, ([], [], Core.Value Core.trueValue))
+                                    ]
+
+                    pure (leftStatements, expr, Core.boolRepresentation)
+            -- Regular operators
+            _ -> do
+                (leftStatements, leftExpr, leftRepresentation) <- compileExpr left
+                (rightStatements, rightExpr, rightRepresentation) <- compileExpr right
+                let asOperatorExpr representation expr = case expr of
+                        Core.PureOperator operatorExpr -> pure ([], operatorExpr)
+                        _ -> do
+                            local <- newLocal
+                            pure ([Core.Let local representation expr], Core.PureOperatorValue (Core.Var (Core.Local local)))
+                (leftBindStatements, left) <- asOperatorExpr leftRepresentation leftExpr
+                (rightBindStatements, right) <- asOperatorExpr rightRepresentation rightExpr
+                let (pureOperator, representation) = case operator of
+                        -- TODO: these only work on integers *for now*, but that will change in the future
+                        Vega.Add -> (Core.Add left right, Core.PrimitiveRep Vega.IntRep)
+                        Vega.Subtract -> (Core.Subtract left right, Core.PrimitiveRep Vega.IntRep)
+                        Vega.Multiply -> (Core.Multiply left right, Core.PrimitiveRep Vega.IntRep)
+                        Vega.Divide -> (Core.Divide left right, Core.PrimitiveRep Vega.IntRep)
+                        Vega.Less -> (Core.Less left right, Core.boolRepresentation)
+                        Vega.LessEqual -> (Core.LessEqual left right, Core.boolRepresentation)
+                        Vega.Equal -> (Core.Equal left right, Core.boolRepresentation)
+                        Vega.NotEqual -> (Core.NotEqual left right, Core.boolRepresentation)
+                        Vega.GreaterEqual -> (Core.LessEqual right left, Core.boolRepresentation)
+                        Vega.Greater -> (Core.Less right left, Core.boolRepresentation)
+                pure (leftStatements <> leftBindStatements <> rightStatements <> rightBindStatements, Core.PureOperator pureOperator, representation)
         Vega.If{condition, thenBranch, elseBranch} -> do
             (conditionStatements, conditionValue) <- compileExprToValue_ condition
             (thenStatements, thenExpr, thenRepresentation) <- compileExpr thenBranch
@@ -430,7 +480,7 @@ compileCaseTree compileGoal caseTree scrutinees = do
                                     else
                                         pure (local, [])
 
-                        (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local . snd) locals  <> rest) boundValues subTree
+                        (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local . snd) locals <> rest) boundValues subTree
                         pure (index, (possiblyBoxedLocals, fold boxingStatements <> subTreeStatements, subTreeExpr))
                 scrutineeRepresentation <- convertRepresentation scrutineeRepresentation
                 pure ([], Core.ConstructorCase{scrutinee = scrutinee, scrutineeRepresentation, cases})
@@ -644,6 +694,11 @@ coalesceExpr substitution = \case
     Core.TupleAccess value index -> pure (substitution, \substitution -> Core.TupleAccess (applySubst substitution value) index)
     Core.Box value -> pure (substitution, \substitution -> Core.Box (applySubst substitution value))
     Core.Unbox value -> pure (substitution, \substitution -> Core.Unbox (applySubst substitution value))
+    Core.PureOperator operatorExpr ->
+        pure
+            ( substitution
+            , \substitution -> Core.PureOperator (applySubstInPureOperatorExpr substitution operatorExpr)
+            )
     Core.ConstructorCase scrutinee scrutineeRepresentation cases -> do
         let coalesceCase substitution (parameters, statements, expr) = do
                 (substitution, makeStatements) <- coalesceStatements substitution statements
@@ -659,6 +714,49 @@ coalesceExpr substitution = \case
             , \substitution ->
                 Core.ConstructorCase{scrutinee = applySubst substitution scrutinee, scrutineeRepresentation, cases = fmap ($ substitution) makeCases}
             )
+
+applySubstInPureOperatorExpr :: Substitution -> Core.PureOperatorExpr -> Core.PureOperatorExpr
+applySubstInPureOperatorExpr substitution = \case
+    Core.PureOperatorValue value -> Core.PureOperatorValue (applySubst substitution value)
+    Core.Add left right ->
+        Core.Add
+            (applySubstInPureOperatorExpr substitution left)
+            (applySubstInPureOperatorExpr substitution right)
+    Core.Subtract left right ->
+        Core.Subtract
+            (applySubstInPureOperatorExpr substitution left)
+            (applySubstInPureOperatorExpr substitution right)
+    Core.Multiply left right ->
+        Core.Multiply
+            (applySubstInPureOperatorExpr substitution left)
+            (applySubstInPureOperatorExpr substitution right)
+    Core.Divide left right ->
+        Core.Divide
+            (applySubstInPureOperatorExpr substitution left)
+            (applySubstInPureOperatorExpr substitution right)
+    Core.Less left right ->
+        Core.Less
+            (applySubstInPureOperatorExpr substitution left)
+            (applySubstInPureOperatorExpr substitution right)
+    Core.LessEqual left right ->
+        Core.LessEqual
+            (applySubstInPureOperatorExpr substitution left)
+            (applySubstInPureOperatorExpr substitution right)
+    Core.Equal left right ->
+        Core.Equal
+            (applySubstInPureOperatorExpr substitution left)
+            (applySubstInPureOperatorExpr substitution right)
+    Core.NotEqual left right ->
+        Core.NotEqual
+            (applySubstInPureOperatorExpr substitution left)
+            (applySubstInPureOperatorExpr substitution right)
+
+
+
+
+
+
+
 
 applySubst :: Substitution -> Core.Value -> Core.Value
 applySubst substitution = \case

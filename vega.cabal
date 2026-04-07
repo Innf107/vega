@@ -99,6 +99,7 @@ library
       ImplicitParams
       RoleAnnotations
       LexicalNegation
+      OrPatterns
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -fno-show-error-context -fno-show-valid-hole-fits -fmax-relevant-binds=0 -fdefer-diagnostics
   build-depends:
       aeson
@@ -155,6 +156,7 @@ executable vega
       ImplicitParams
       RoleAnnotations
       LexicalNegation
+      OrPatterns
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -fno-show-error-context -fno-show-valid-hole-fits -fmax-relevant-binds=0 -fdefer-diagnostics -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson
@@ -213,6 +215,7 @@ test-suite vega-test
       ImplicitParams
       RoleAnnotations
       LexicalNegation
+      OrPatterns
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wredundant-constraints -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -fno-show-error-context -fno-show-valid-hole-fits -fmax-relevant-binds=0 -fdefer-diagnostics -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       aeson

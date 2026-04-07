@@ -102,4 +102,4 @@ default-extensions:
 - ImplicitParams
 - RoleAnnotations
 - LexicalNegation
-
+- OrPatterns
