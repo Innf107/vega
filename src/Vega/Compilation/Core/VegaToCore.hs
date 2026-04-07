@@ -420,18 +420,18 @@ compileCaseTree compileGoal caseTree scrutinees = do
 
                         assert (length locals == length autoBoxingFlags)
 
-                        (possiblyUnboxedLocals, boxingStatements) <-
+                        (possiblyBoxedLocals, boxingStatements) <-
                             Seq.unzip <$> for (Seq.zip locals autoBoxingFlags) \((vegaRepresentation, local), isAutoBoxed) -> do
                                 if isAutoBoxed
                                     then do
                                         representation <- convertRepresentation vegaRepresentation
-                                        unboxedLocal <- newLocal
-                                        pure (unboxedLocal, [Core.Let unboxedLocal representation (Core.Unbox (Core.Var (Core.Local local)))])
+                                        boxedLocal <- newLocal
+                                        pure (boxedLocal, [Core.Let local representation (Core.Unbox (Core.Var (Core.Local boxedLocal)))])
                                     else
                                         pure (local, [])
 
-                        (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local) possiblyUnboxedLocals <> rest) boundValues subTree
-                        pure (index, (possiblyUnboxedLocals, fold boxingStatements <> subTreeStatements, subTreeExpr))
+                        (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local . snd) locals  <> rest) boundValues subTree
+                        pure (index, (possiblyBoxedLocals, fold boxingStatements <> subTreeStatements, subTreeExpr))
                 scrutineeRepresentation <- convertRepresentation scrutineeRepresentation
                 pure ([], Core.ConstructorCase{scrutinee = scrutinee, scrutineeRepresentation, cases})
             PatternMatching.TupleCase count subTree -> do

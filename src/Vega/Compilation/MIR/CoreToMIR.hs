@@ -148,7 +148,7 @@ compileLet block local representation = \case
     Core.Unbox value -> do
         (block, mirValue) <- compileValue block value
         block <- addInstruction block (MIR.Unbox{var = local, boxedTarget=mirValue, representation})
-        undefined
+        pure block
     Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases} -> do
         undefined
 
