@@ -117,6 +117,7 @@ forwardDeclareDeclaration = \case
 
         (llvmType, _) <- functionLLVMType parameterLayouts returnLayout
         function <- LLVM.addFunction ?module_ (renderLLVMName name) llvmType
+        LLVM.setFunctionCallConv function LLVM.tailCallConv
 
         -- We also generate a wrapper function for closures. See Note: [Closure Representation]
         parameters <- LLVM.getParamTypes llvmType
@@ -317,23 +318,7 @@ compileInstruction builder = \case
         (argumentValues, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
         returnLayout <- Layout.representationLayout returnRepresentation
 
-        function <-
-            LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
-                Nothing -> panic $ "Trying to generate call to non-existent function" <> pretty (Core.Global functionName)
-                Just function -> pure function
-
-        (functionType, _) <- functionLLVMType argumentLayouts returnLayout
-
-        case Layout.kind returnLayout of
-            Layout.ZeroSized -> do
-                _ <- LLVMBuilder.buildCall builder functionType function (viaList argumentValues) ""
-                insertVarMapping var zeroSizedDummyValue returnLayout
-            Layout.LLVMScalar _ -> do
-                asVar_ var returnLayout $ LLVMBuilder.buildCall builder functionType function (viaList argumentValues)
-            Layout.AggregatePointer -> do
-                returnPointer <- asVar var returnLayout $ LLVMBuilder.buildAlloca builder (Layout.llvmType returnLayout)
-                _ <- LLVMBuilder.buildCall builder functionType function (viaList argumentValues <> [returnPointer]) ""
-                pure ()
+        asVar_ var returnLayout $ buildDirectCall builder functionName (viaList argumentValues) argumentLayouts returnLayout LLVM.TailCallKindNone
     MIR.CallClosure{var, closure, arguments, returnRepresentation} -> do
         (closureValue, closureLayout) <- lookupVar closure
         let (functionPointerOffset, _functionPointerLayout) = Layout.productOffsetAndLayout 0 closureLayout
@@ -354,31 +339,34 @@ compileInstruction builder = \case
 
         case Layout.kind returnLayout of
             Layout.ZeroSized -> do
-                _ <-
+                callInstr <-
                     LLVMBuilder.buildCall
                         builder
                         closureFunctionType
                         functionPointer
                         (viaList $ argumentValuesWithoutPayload <> [payload])
                         ""
+                LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
                 insertVarMapping var zeroSizedDummyValue returnLayout
-            Layout.LLVMScalar _ ->
-                asVar_ var returnLayout $
+            Layout.LLVMScalar _ -> do
+                callInstr <- asVar var returnLayout $
                     LLVMBuilder.buildCall
                         builder
                         closureFunctionType
                         functionPointer
                         (viaList $ argumentValuesWithoutPayload <> [payload])
+                LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
             Layout.AggregatePointer -> do
                 returnPointer <- asVar var returnLayout $ LLVMBuilder.buildAlloca builder (Layout.llvmType returnLayout)
-                _ <-
+                callInstr <-
                     LLVMBuilder.buildCall
                         builder
                         closureFunctionType
                         functionPointer
                         (viaList $ argumentValuesWithoutPayload <> [returnPointer, payload])
                         ""
-                pure ()
+                LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
+
 
 compileTerminator :: (Compile es) => LLVMBuilder.Builder -> MIR.Terminator -> Eff es ()
 compileTerminator builder = \case
@@ -412,6 +400,13 @@ compileTerminator builder = \case
 
         _ <- LLVMBuilder.buildSwitch builder scrutineeValue cases defaultBlock
         pure ()
+    MIR.TailCallDirect{functionName, arguments, returnRepresentation} -> do
+        (argumentValues, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
+        returnLayout <- Layout.representationLayout returnRepresentation
+
+        result <- buildDirectCall builder functionName (viaList argumentValues) argumentLayouts returnLayout LLVM.TailCallKindMustTail "ret"
+        _ <- LLVMBuilder.buildRet builder result
+        pure ()
     _ -> undefined
 
 getOrCreateLayoutInfoTablePointer :: (Compile es) => Layout -> Eff es LLVM.Value
@@ -437,6 +432,30 @@ getOrCreateLayoutInfoTablePointer layout = do
             llvmInfoTableGlobal <- LLVM.addGlobal ?module_ (LLVM.arrayType LLVM.int8Type (ByteString.length infoTableBytes)) identifier
             LLVM.setInitializer llvmInfoTableGlobal (LLVM.constDataArray LLVM.int8Type infoTableBytes)
             pure (LLVM.globalAsValue llvmInfoTableGlobal)
+
+buildDirectCall :: (Compile es) => LLVMBuilder.Builder -> Vega.GlobalName -> Storable.Vector LLVM.Value -> Seq Layout -> Layout -> LLVM.TailCallKind -> Text -> Eff es LLVM.Value
+buildDirectCall builder functionName arguments argumentLayouts returnLayout tailCallKind varName = do
+    function <-
+        LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
+            Nothing -> panic $ "Trying to generate call to non-existent function" <> pretty (Core.Global functionName)
+            Just function -> pure function
+
+    (functionType, _) <- functionLLVMType argumentLayouts returnLayout
+
+    (returnValue, callInstr) <- case Layout.kind returnLayout of
+        Layout.ZeroSized -> do
+            callInstr <- LLVMBuilder.buildCall builder functionType function arguments ""
+            pure (zeroSizedDummyValue, callInstr)
+        Layout.LLVMScalar _ -> do
+            callInstr <- LLVMBuilder.buildCall builder functionType function arguments varName
+            pure (callInstr, callInstr)
+        Layout.AggregatePointer -> do
+            returnPointer <- LLVMBuilder.buildAlloca builder (Layout.llvmType returnLayout) varName
+            callInstr <- LLVMBuilder.buildCall builder functionType function (arguments <> [returnPointer]) ""
+            pure (returnPointer, callInstr)
+    LLVM.setTailCallKind callInstr tailCallKind
+    LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
+    pure returnValue
 
 buildRuntimeCall ::
     (Compile es) =>
