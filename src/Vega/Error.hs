@@ -17,6 +17,9 @@ module Vega.Error (
 
 import Relude hiding (Type)
 
+import Control.Exception (someExceptionContext)
+import Control.Exception.Annotation (ExceptionAnnotation (displayExceptionAnnotation), SomeExceptionAnnotation (..))
+import Control.Exception.Context (ExceptionContext (..))
 import Data.List qualified as List
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Sequence (Seq (..))
@@ -466,8 +469,10 @@ renderCompilationError = \case
                         <+> pretty actualType
                     <> "\n    because the meta variable" <+> pretty meta <+> "occurs in both"
         UnableToSolveIntegerSum{loc = _, sum} -> do
-            align $ emphasis "Unable to solve integer sum\n"
-                <> "  " <> pretty sum <+> keyword "=" <+> number @Int 0
+            align $
+                emphasis "Unable to solve integer sum\n"
+                    <> "  "
+                    <> pretty sum <+> keyword "=" <+> number @Int 0
     DriverError error -> pure $ case error of
         EntryPointNotFound entryPoint ->
             PlainError $
@@ -482,9 +487,25 @@ renderCompilationError = \case
     Panic exception -> do
         let message = case fromException @Panic.Panic exception of
                 Just (Panic.Panic callStack prettyMessage) -> prettyMessage <> "\n" <> align (Panic.prettyCallStack callStack)
-                Nothing -> emphasis (show exception)
+                Nothing -> prettySomeException exception
 
         pure $ PlainError $ MkPlainErrorMessage $ align $ errorText "PANIC (the 'impossible' happened): " <> message
+
+prettySomeException :: SomeException -> Doc Ann
+prettySomeException exception = do
+    let ExceptionContext annotations = someExceptionContext exception
+
+    let context =
+            intercalateDoc
+                "\n"
+                ( map
+                    ( \(SomeExceptionAnnotation annotation) ->
+                        -- displayExceptionAnnotation adds an unnecessary newline at the end for some reason so we need to remove that ourselves
+                        note (Text.dropWhileEnd (== '\n') $ toText $ displayExceptionAnnotation annotation)
+                    )
+                    annotations
+                )
+    emphasis (toText (displayException exception) <> ":\n") <> align context
 
 pluralNumber :: (Text -> Doc Ann) -> Int -> Text -> Doc Ann
 pluralNumber render 1 text = number @Int 1 <+> render text
