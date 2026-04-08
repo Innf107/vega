@@ -125,6 +125,7 @@ forwardDeclareDeclaration = \case
         -- We add a single "Boxed" (i.e. ptr for LLVM) argument
         let wrapperType = LLVM.functionType (parameters <> [LLVM.pointerType]) returnType False
         closureWrapper <- LLVM.addFunction ?module_ (closureWrapperNameForFunction name) wrapperType
+        LLVM.setFunctionCallConv closureWrapper LLVM.tailCallConv
 
         block <- LLVM.appendBasicBlock closureWrapper ""
         builder <- LLVMBuilder.createBuilder
@@ -132,6 +133,8 @@ forwardDeclareDeclaration = \case
 
         let arguments = Storable.generate (Storable.length parameters) \i -> LLVM.getParam function i
         result <- LLVMBuilder.buildCall builder llvmType function arguments ""
+        LLVM.setTailCallKind result LLVM.TailCallKindMustTail
+        LLVM.setInstructionCallConv result LLVM.tailCallConv
         case Layout.kind returnLayout of
             Layout.LLVMScalar _ -> do
                 _ <- LLVMBuilder.buildRet builder result
@@ -349,12 +352,13 @@ compileInstruction builder = \case
                 LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
                 insertVarMapping var zeroSizedDummyValue returnLayout
             Layout.LLVMScalar _ -> do
-                callInstr <- asVar var returnLayout $
-                    LLVMBuilder.buildCall
-                        builder
-                        closureFunctionType
-                        functionPointer
-                        (viaList $ argumentValuesWithoutPayload <> [payload])
+                callInstr <-
+                    asVar var returnLayout $
+                        LLVMBuilder.buildCall
+                            builder
+                            closureFunctionType
+                            functionPointer
+                            (viaList $ argumentValuesWithoutPayload <> [payload])
                 LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
             Layout.AggregatePointer -> do
                 returnPointer <- asVar var returnLayout $ LLVMBuilder.buildAlloca builder (Layout.llvmType returnLayout)
@@ -366,7 +370,6 @@ compileInstruction builder = \case
                         (viaList $ argumentValuesWithoutPayload <> [returnPointer, payload])
                         ""
                 LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
-
 
 compileTerminator :: (Compile es) => LLVMBuilder.Builder -> MIR.Terminator -> Eff es ()
 compileTerminator builder = \case
@@ -450,6 +453,7 @@ buildDirectCall builder functionName arguments argumentLayouts returnLayout tail
             callInstr <- LLVMBuilder.buildCall builder functionType function arguments varName
             pure (callInstr, callInstr)
         Layout.AggregatePointer -> do
+            -- TODO: this doesn't actually work for tail calls (it's probably unsound even oops)
             returnPointer <- LLVMBuilder.buildAlloca builder (Layout.llvmType returnLayout) varName
             callInstr <- LLVMBuilder.buildCall builder functionType function (arguments <> [returnPointer]) ""
             pure (returnPointer, callInstr)
