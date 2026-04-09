@@ -1,0 +1,5 @@
+main : () -> ()
+main() = {
+    let x = 1
+    let shadow y = x + 1
+}

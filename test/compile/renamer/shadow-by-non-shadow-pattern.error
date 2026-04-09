@@ -1,0 +1,6 @@
+$FILE:6:9: ERROR:
+Variable x shadowed by non-shadow pattern
+  If the shadowing was intentional, use a shadow pattern (shadow x)
+  ┃ 
+6 ┃     let x = x + 1
+  ┃         ▔

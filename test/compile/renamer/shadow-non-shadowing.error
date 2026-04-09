@@ -1,0 +1,5 @@
+$FILE:4:9: ERROR:
+Shadow pattern binding y does not shadow anything
+  ┃ 
+4 ┃     let shadow y = x + 1
+  ┃         ▔▔▔▔▔▔▔▔

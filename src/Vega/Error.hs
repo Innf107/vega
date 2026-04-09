@@ -33,7 +33,7 @@ import Vega.Loc (HasLoc, Loc (..), getLoc)
 import Vega.Panic qualified as Panic
 import Vega.Parser (AdditionalParseError (..))
 import Vega.Parser qualified as Parser
-import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, note, number, plain, vsep, (<+>))
+import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, lparen, note, number, plain, rparen, vsep, (<+>))
 import Vega.Syntax (GlobalName (..), IntSum, Kind, LocalName, MetaVar, Name, NameKind (..), Type (..), prettyGlobal, prettyGlobalText, prettyLocal, prettyName)
 import Vega.Util (viaList)
 import Vega.Util qualified as Util
@@ -77,6 +77,14 @@ data RenameError
         , candidates :: HashSet GlobalName
         }
     | TypeVariableNotFound
+        { loc :: Loc
+        , name :: Text
+        }
+    | VariableShadowedByNonShadowPattern
+        { loc :: Loc
+        , name :: Text
+        }
+    | ShadowPatternDoesn'tShadow
         { loc :: Loc
         , name :: Text
         }
@@ -297,6 +305,15 @@ renderCompilationError = \case
                 <> align (intercalateDoc "\n" $ fmap (\candidate -> emphasis "-" <+> prettyGlobal nameKind candidate) (toList candidates))
         TypeVariableNotFound{name} -> align do
             emphasis "Unbound type variable" <+> prettyGlobalText VarKind name
+        VariableShadowedByNonShadowPattern{name} ->
+            align do
+                emphasis "Variable" <+> localIdentText name <+> emphasis "shadowed by non-shadow pattern\n"
+                <> "  If the shadowing was intentional, use a shadow pattern" <+> lparen "("
+                <> keyword "shadow" <+> localIdentText name
+                <> rparen ")"
+        ShadowPatternDoesn'tShadow{name} ->
+            align do
+                emphasis "Shadow pattern binding" <+> prettyGlobalText VarKind name <+> emphasis "does not shadow anything"
     TypeError error -> pure $ ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
         FunctionDefinedWithIncorrectNumberOfArguments
             { loc = _

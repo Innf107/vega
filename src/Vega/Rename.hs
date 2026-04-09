@@ -58,8 +58,15 @@ emptyEnv =
         , localDataConstructors = mempty
         }
 
-bindLocalVar :: (Rename es) => Text -> Eff es (LocalName, Env -> Env)
-bindLocalVar text = do
+bindLocalVar :: (Rename es) => Loc -> Env -> Bool -> Text -> Eff es (LocalName, Env -> Env)
+bindLocalVar loc env shouldShadow text = do
+    case lookup text env.localVariables of
+        Just _
+            | shouldShadow -> pure ()
+            | otherwise -> Output.output (VariableShadowedByNonShadowPattern{loc, name = text})
+        Nothing
+            | shouldShadow -> Output.output (ShadowPatternDoesn'tShadow{loc, name = text})
+            | otherwise -> pure ()
     parent <- ask @DeclarationName
     count <- indexForNewLocal text
     let localName = MkLocalName{parent, name = text, count}
@@ -325,11 +332,11 @@ renamePattern :: (Rename es) => Env -> Pattern Parsed -> Eff es (Pattern Renamed
 renamePattern env = \case
     WildcardPattern loc -> pure (WildcardPattern loc, id)
     VarPattern{loc, ext = (), name, isShadowed} -> do
-        (localName, envTrans) <- bindLocalVar name
+        (localName, envTrans) <- bindLocalVar loc env isShadowed name
         pure (VarPattern{loc, ext = (), name = localName, isShadowed}, envTrans)
     AsPattern loc () innerPattern name -> do
         (innerPattern, innerTrans) <- renamePattern env innerPattern
-        (localName, envTrans) <- bindLocalVar name
+        (localName, envTrans) <- bindLocalVar loc env False name
         pure (AsPattern loc () innerPattern localName, envTrans . innerTrans)
     ConstructorPattern{loc, constructor, constructorExt, subPatterns} -> do
         constructor <- findDataConstructorName env loc constructor
@@ -352,9 +359,9 @@ renamePattern env = \case
 
 renameExpr :: (Rename es) => Env -> Expr Parsed -> Eff es (Expr Renamed)
 renameExpr env = \case
-    Var {loc, name, representation=()} -> do
+    Var{loc, name, representation = ()} -> do
         name <- findVarName env loc name
-        pure (Var {loc, name, representation=()})
+        pure (Var{loc, name, representation = ()})
     DataConstructor loc () name -> do
         name <- findDataConstructorName env loc name
         pure (DataConstructor loc () name)
@@ -428,7 +435,7 @@ renameStatement env = \case
         body <- renameExpr env body
         pure (Let loc pattern_ body, envTrans)
     LetFunction{ext = (), loc, name, typeSignature, parameters, body} -> do
-        (name, envTrans) <- bindLocalVar name
+        (name, envTrans) <- bindLocalVar loc env False name
         typeSignature <- traverse (renameTypeSyntax env) typeSignature
         (parameters, innerTransformers) <-
             Seq.unzip <$> for parameters \(pattern_, ()) -> do
