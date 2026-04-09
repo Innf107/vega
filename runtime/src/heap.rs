@@ -1,5 +1,3 @@
-use std::slice;
-
 /// The type of Vega heap objects.
 /// The fields of this type only contain the heap header
 #[repr(C)]
@@ -19,12 +17,14 @@ impl HeapObject {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct InfoTable {
     object_type: ObjectType,
     layout: Layout,
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub union Layout {
     boxed: BoxedLayout,
     array: ArrayLayout,
@@ -54,6 +54,7 @@ pub struct ArrayLayout {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub enum ObjectType {
     Boxed,
     Array,
@@ -67,11 +68,6 @@ pub enum ObjectType {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vega_allocate_boxed(info_table: *const InfoTable) -> *mut u8 {
     let layout = unsafe { (*info_table).layout.boxed };
-
-    println!(
-        "size: {}, boxed: {}",
-        layout.size_in_bytes, layout.boxed_count
-    );
 
     unsafe { libc::malloc(HeapObject::HEADER_SIZE_IN_BYTES + layout.size_in_bytes) as *mut u8 }
 }
