@@ -36,7 +36,6 @@ import Vega.Compilation.LLVM.Layout (Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
 import Vega.Compilation.LLVM.Runtime (RuntimeDefinitions (..), declareRuntimeDefinitions)
 import Vega.Compilation.LLVM.Runtime.Heap qualified as Heap
-import Vega.Compilation.LLVM.Runtime.Serialize (serialize)
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
@@ -45,6 +44,8 @@ import Vega.Syntax (renderPackageName)
 import Vega.Syntax qualified as Vega
 import Vega.Util (forIndexed_, viaList, type (?))
 import Vega.Util qualified as Util
+import Vega.Compilation.LLVM.Runtime.ToLLVMConstant (ToLLVMConstant(toLLVMConstant))
+import qualified Vega.Compilation.LLVM.Runtime.ToLLVMConstant as ToLLVMConstant
 
 data DeclarationState = MkDeclarationState
     { registeredBlocks :: HashMap MIR.BlockDescriptor LLVM.BasicBlock
@@ -441,10 +442,10 @@ getOrCreateLayoutInfoTablePointer layout = do
                                     }
                                 )
                         }
-            let infoTableBytes = serialize infoTable
+            (infoTableLLVMType, infoTableConstant) <- toLLVMConstant infoTable
 
-            llvmInfoTableGlobal <- LLVM.addGlobal ?module_ (LLVM.arrayType LLVM.int8Type (ByteString.length infoTableBytes)) identifier
-            LLVM.setInitializer llvmInfoTableGlobal (LLVM.constDataArray LLVM.int8Type infoTableBytes)
+            llvmInfoTableGlobal <- LLVM.addGlobal ?module_ infoTableLLVMType identifier
+            LLVM.setInitializer llvmInfoTableGlobal infoTableConstant
             pure (LLVM.globalAsValue llvmInfoTableGlobal)
 
 buildDirectCall :: (Compile es) => LLVMBuilder.Builder -> Vega.GlobalName -> Storable.Vector LLVM.Value -> Seq Layout -> Layout -> LLVM.TailCallKind -> Text -> Eff es LLVM.Value
@@ -613,7 +614,7 @@ renderVariable (MIR.MkVariable name index) = name <> "_" <> show index
 -- TODO: consider using more standard name mangling i guess
 renderLLVMName :: Core.CoreName -> Text
 renderLLVMName = \case
-    Core.Global name -> "_vega_" <> renderPackageName name.moduleName.package <> ":" <> Text.intercalate "/" (toList (name.moduleName.subModules)) <> ":" <> name.name
+    Core.Global name -> "_vega_" <> renderPackageName name.moduleName.package <> "::" <> Text.intercalate "/" (toList (name.moduleName.subModules)) <> "::" <> name.name
     Core.Local _ -> undefined
 
 sretAttribute :: (?context :: LLVM.Context, IOE :> es) => LLVM.Type -> Eff es LLVM.Attribute

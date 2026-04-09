@@ -1,3 +1,5 @@
+use std::slice;
+
 /// The type of Vega heap objects.
 /// The fields of this type only contain the heap header
 #[repr(C)]
@@ -61,10 +63,16 @@ pub enum ObjectType {
 /// To access the heap object header, use [HeapObject::from_data].
 // TODO: eventually we will want to inline this directly into the generated code but
 // it's simpler to keep it as a rust function for now
-// SAFETY: this assumes that info_table points to an immutable heap object
+// SAFETY: this assumes that info_table points to a boxed heap object info table
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vega_allocate_boxed(info_table: *const InfoTable) -> *mut u8 {
     let layout = unsafe { (*info_table).layout.boxed };
 
+    println!(
+        "size: {}, boxed: {}",
+        layout.size_in_bytes, layout.boxed_count
+    );
+
     unsafe { libc::malloc(HeapObject::HEADER_SIZE_IN_BYTES + layout.size_in_bytes) as *mut u8 }
 }
+

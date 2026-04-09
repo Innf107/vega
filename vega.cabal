@@ -38,7 +38,7 @@ library
       Vega.Compilation.LLVM.MIRToLLVM
       Vega.Compilation.LLVM.Runtime
       Vega.Compilation.LLVM.Runtime.Heap
-      Vega.Compilation.LLVM.Runtime.Serialize
+      Vega.Compilation.LLVM.Runtime.ToLLVMConstant
       Vega.Compilation.MIR.CoreToMIR
       Vega.Compilation.MIR.Syntax
       Vega.Compilation.MIR.Verify
