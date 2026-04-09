@@ -19,6 +19,7 @@ import Data.Sequence qualified as Seq
 import Data.Text qualified as Text
 import Data.Traversable (for)
 import Data.Vector.Storable qualified as Storable
+import Data.Vector.Strict qualified as Strict
 import Effectful (Eff, IOE, (:>))
 import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import GHC.Records (HasField, getField)
@@ -30,6 +31,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import Vega.Alignment qualified as Alignment
 import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
+import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, addFunctionWithAttributes, attributeFunctionType, parametersWithAttributes, rawFunctionType, returnTypeWithAttributes)
 import Vega.Compilation.LLVM.Layout (Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
 import Vega.Compilation.LLVM.Runtime (RuntimeDefinitions (..), declareRuntimeDefinitions)
@@ -43,8 +45,6 @@ import Vega.Syntax (renderPackageName)
 import Vega.Syntax qualified as Vega
 import Vega.Util (forIndexed_, viaList, type (?))
 import Vega.Util qualified as Util
-import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, attributeFunctionType, addFunctionWithAttributes, parametersWithAttributes, returnTypeWithAttributes, rawFunctionType)
-import qualified Data.Vector.Strict as Strict
 
 data DeclarationState = MkDeclarationState
     { registeredBlocks :: HashMap MIR.BlockDescriptor LLVM.BasicBlock
@@ -100,17 +100,16 @@ functionLLVMType parameters returnLayout = do
     (parameterTypes, returnType, usesSRet) <- case Layout.kind returnLayout of
         Layout.AggregatePointer -> do
             -- If we return a complex (AggregatePointer) value, we can't return it directly
-            -- but instead we need to assign it to an sret parameter. By convention, this is
-            -- always our *last* parameter (not including closure payloads)
+            -- but instead we need to assign it to an sret parameter. This always needs to be the *first* parameter.
             --
-            -- TODO: add an sret attribute (and alignment??)
+            -- TODO: alignment?
             sretAttribute <- sretAttribute (Layout.llvmType returnLayout)
-            pure (baseParameterTypes :|> (LLVM.pointerType, [sretAttribute]), LLVM.voidType, True)
+            pure ((LLVM.pointerType, [sretAttribute]) :<| baseParameterTypes, LLVM.voidType, True)
         Layout.LLVMScalar scalar -> pure (baseParameterTypes, scalar, False)
         Layout.ZeroSized -> pure (baseParameterTypes, LLVM.voidType, False)
 
-    -- The sret parameter is always the last one
-    let sretParameter = if usesSRet then Just (length parameterTypes - 1, returnLayout) else Nothing
+    -- The sret parameter is always the first one
+    let sretParameter = if usesSRet then Just (0, returnLayout) else Nothing
     let functionType = attributeFunctionType (viaList parameterTypes) (returnType, [])
 
     pure (functionType, sretParameter)
@@ -189,7 +188,6 @@ compileDeclaration = \case
                     MkFunctionEnv
                         { sretVariable =
                             case sretParameter of
-                                -- The sret parameter is always the last one
                                 Just (position, returnLayout) -> Just (LLVM.getParam function position, returnLayout)
                                 Nothing -> Nothing
                         }
