@@ -38,7 +38,9 @@ import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Effectful (Eff)
 import LLVM.Core qualified as LLVM
+import LLVM.Core.Context qualified as LLVM
 import Relude
+import System.IO.Unsafe (unsafePerformIO)
 import Text.Show (Show (..))
 import Vega.Alignment (Alignment)
 import Vega.Alignment qualified as Alignment
@@ -49,8 +51,6 @@ import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
 import Vega.Pretty (number, pretty)
 import Vega.Syntax qualified as Vega
-import qualified LLVM.Core.Context as LLVM
-import System.IO.Unsafe (unsafePerformIO)
 
 data Layout = MkLayout
     { size :: Int
@@ -90,7 +90,8 @@ llvmParameterType layout = case layout.kind of
         byvalAttribute <- LLVM.createTypeAttribute byvalAttributeKind (llvmType layout)
 
         alignmentAttributeKind <- LLVM.getEnumAttributeKindForName "align"
-        pure (LLVM.pointerType, [byvalAttribute]) -- TODO: alignment?
+        alignmentAttribute <- LLVM.createEnumAttribute alignmentAttributeKind (fromIntegral (Alignment.toInt layout.alignment))
+        pure (LLVM.pointerType, [byvalAttribute, alignmentAttribute])
     ZeroSized -> panic "Trying to access LLVM type of zero-sized layout"
 
 llvmType :: (?context :: LLVM.Context, HasCallStack) => Layout -> LLVM.Type

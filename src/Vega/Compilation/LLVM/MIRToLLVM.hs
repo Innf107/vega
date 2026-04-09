@@ -6,7 +6,7 @@
 -- ImplicitParams with do blocks quite a lot here and we don't actually need ApplicativeDo
 {-# LANGUAGE NoApplicativeDo #-}
 
-module Vega.Compilation.LLVM.MIRToLLVM where
+module Vega.Compilation.LLVM.MIRToLLVM (compile) where
 
 import Relude hiding (State, evalState, get, modify, put)
 
