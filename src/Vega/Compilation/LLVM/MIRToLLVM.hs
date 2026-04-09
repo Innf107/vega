@@ -24,6 +24,7 @@ import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import GHC.Records (HasField, getField)
 import GHC.TypeLits (Symbol)
 import LLVM.Core qualified as LLVM
+import LLVM.Core.Context qualified as LLVM
 import LLVM.InstructionBuilder qualified as LLVMBuilder
 import System.IO.Unsafe (unsafePerformIO)
 import Vega.Alignment qualified as Alignment
@@ -42,6 +43,8 @@ import Vega.Syntax (renderPackageName)
 import Vega.Syntax qualified as Vega
 import Vega.Util (forIndexed_, viaList, type (?))
 import Vega.Util qualified as Util
+import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, attributeFunctionType, addFunctionWithAttributes, parametersWithAttributes, returnTypeWithAttributes, rawFunctionType)
+import qualified Data.Vector.Strict as Strict
 
 data DeclarationState = MkDeclarationState
     { registeredBlocks :: HashMap MIR.BlockDescriptor LLVM.BasicBlock
@@ -84,7 +87,13 @@ compile program = do
         evalState initialState $ compileDeclaration declaration
     pure module_
 
-functionLLVMType :: (?context :: LLVM.Context) => Seq Layout -> Layout -> Eff es (LLVM.FunctionType, "sretParameter" ? Maybe (Int, Layout))
+type AttributeApplication = LLVM.Value -> IO ()
+
+functionLLVMType ::
+    (?context :: LLVM.Context, IOE :> es) =>
+    Seq Layout ->
+    Layout ->
+    Eff es (AttributeFunctionType, "sretParameter" ? Maybe (Int, Layout))
 functionLLVMType parameters returnLayout = do
     let baseParameterTypes = fmap Layout.llvmParameterType parameters
 
@@ -95,13 +104,16 @@ functionLLVMType parameters returnLayout = do
             -- always our *last* parameter (not including closure payloads)
             --
             -- TODO: add an sret attribute (and alignment??)
-            pure (baseParameterTypes :|> LLVM.pointerType, LLVM.voidType, True)
+            sretAttribute <- sretAttribute (Layout.llvmType returnLayout)
+            pure (baseParameterTypes :|> (LLVM.pointerType, [sretAttribute]), LLVM.voidType, True)
         Layout.LLVMScalar scalar -> pure (baseParameterTypes, scalar, False)
         Layout.ZeroSized -> pure (baseParameterTypes, LLVM.voidType, False)
 
     -- The sret parameter is always the last one
     let sretParameter = if usesSRet then Just (length parameterTypes - 1, returnLayout) else Nothing
-    pure (LLVM.functionType (viaList parameterTypes) returnType False, sretParameter)
+    let functionType = attributeFunctionType (viaList parameterTypes) (returnType, [])
+
+    pure (functionType, sretParameter)
 
 forwardDeclareDeclaration ::
     ( ?context :: LLVM.Context
@@ -115,24 +127,24 @@ forwardDeclareDeclaration = \case
         parameterLayouts <- for parameters \(_, representation) -> Layout.representationLayout representation
         returnLayout <- Layout.representationLayout returnRepresentation
 
-        (llvmType, _) <- functionLLVMType parameterLayouts returnLayout
-        function <- LLVM.addFunction ?module_ (renderLLVMName name) llvmType
+        (functionTypeWithAttributes, _) <- functionLLVMType parameterLayouts returnLayout
+        function <- addFunctionWithAttributes ?module_ (renderLLVMName name) functionTypeWithAttributes
         LLVM.setFunctionCallConv function LLVM.tailCallConv
 
         -- We also generate a wrapper function for closures. See Note: [Closure Representation]
-        parameters <- LLVM.getParamTypes llvmType
-        let returnType = LLVM.getReturnType llvmType
+        let parameters = parametersWithAttributes functionTypeWithAttributes
+        let returnType = returnTypeWithAttributes functionTypeWithAttributes
         -- We add a single "Boxed" (i.e. ptr for LLVM) argument
-        let wrapperType = LLVM.functionType (parameters <> [LLVM.pointerType]) returnType False
-        closureWrapper <- LLVM.addFunction ?module_ (closureWrapperNameForFunction name) wrapperType
+        let wrapperType = attributeFunctionType (parameters <> [(LLVM.pointerType, [])]) returnType
+        closureWrapper <- addFunctionWithAttributes ?module_ (closureWrapperNameForFunction name) wrapperType
         LLVM.setFunctionCallConv closureWrapper LLVM.tailCallConv
 
         block <- LLVM.appendBasicBlock closureWrapper ""
         builder <- LLVMBuilder.createBuilder
         LLVMBuilder.positionBuilderAtEnd builder block
 
-        let arguments = Storable.generate (Storable.length parameters) \i -> LLVM.getParam function i
-        result <- LLVMBuilder.buildCall builder llvmType function arguments ""
+        let arguments = Storable.generate (Strict.length parameters) \i -> LLVM.getParam function i
+        result <- LLVMBuilder.buildCall builder (rawFunctionType functionTypeWithAttributes) function arguments ""
         LLVM.setTailCallKind result LLVM.TailCallKindMustTail
         LLVM.setInstructionCallConv result LLVM.tailCallConv
         case Layout.kind returnLayout of
@@ -338,7 +350,8 @@ compileInstruction builder = \case
 
         returnLayout <- Layout.representationLayout returnRepresentation
 
-        (closureFunctionType, _) <- functionLLVMType argumentLayouts returnLayout
+        (closureFunctionTypeWithAttributes, _) <- functionLLVMType argumentLayouts returnLayout
+        let closureFunctionType = rawFunctionType closureFunctionTypeWithAttributes
 
         case Layout.kind returnLayout of
             Layout.ZeroSized -> do
@@ -443,7 +456,8 @@ buildDirectCall builder functionName arguments argumentLayouts returnLayout tail
             Nothing -> panic $ "Trying to generate call to non-existent function" <> pretty (Core.Global functionName)
             Just function -> pure function
 
-    (functionType, _) <- functionLLVMType argumentLayouts returnLayout
+    (functionTypeWithAttributes, _) <- functionLLVMType argumentLayouts returnLayout
+    let functionType = rawFunctionType functionTypeWithAttributes
 
     (returnValue, callInstr) <- case Layout.kind returnLayout of
         Layout.ZeroSized -> do
@@ -603,6 +617,16 @@ renderLLVMName :: Core.CoreName -> Text
 renderLLVMName = \case
     Core.Global name -> "_vega_" <> renderPackageName name.moduleName.package <> ":" <> Text.intercalate "/" (toList (name.moduleName.subModules)) <> ":" <> name.name
     Core.Local _ -> undefined
+
+sretAttribute :: (?context :: LLVM.Context, IOE :> es) => LLVM.Type -> Eff es LLVM.Attribute
+sretAttribute targetType = do
+    kind <- LLVM.getEnumAttributeKindForName "sret"
+    LLVM.createTypeAttribute kind targetType
+
+byvalAttribute :: (?context :: LLVM.Context, IOE :> es) => LLVM.Type -> Eff es LLVM.Attribute
+byvalAttribute targetType = do
+    kind <- LLVM.getEnumAttributeKindForName "byval"
+    LLVM.createTypeAttribute kind targetType
 
 {- | Zero sized values should never appear in the generated LLVM code, but
 we sometimes still need to register a value for a MIR variable, so we

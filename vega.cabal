@@ -33,6 +33,7 @@ library
       Vega.Compilation.JavaScript.Assemble
       Vega.Compilation.JavaScript.Syntax
       Vega.Compilation.JavaScript.VegaToJavaScript
+      Vega.Compilation.LLVM.AttributeFunctionType
       Vega.Compilation.LLVM.Layout
       Vega.Compilation.LLVM.MIRToLLVM
       Vega.Compilation.LLVM.Runtime

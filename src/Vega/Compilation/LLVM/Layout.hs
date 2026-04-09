@@ -49,6 +49,8 @@ import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
 import Vega.Pretty (number, pretty)
 import Vega.Syntax qualified as Vega
+import qualified LLVM.Core.Context as LLVM
+import System.IO.Unsafe (unsafePerformIO)
 
 data Layout = MkLayout
     { size :: Int
@@ -80,10 +82,13 @@ size layout = layout.size
 alignment :: Layout -> Vega.Alignment
 alignment layout = layout.alignment
 
-llvmParameterType :: (?context :: LLVM.Context, HasCallStack) => Layout -> LLVM.Type
+llvmParameterType :: (?context :: LLVM.Context, HasCallStack) => Layout -> (LLVM.Type, Seq LLVM.Attribute)
 llvmParameterType layout = case layout.kind of
-    LLVMScalar type_ -> type_
-    AggregatePointer -> LLVM.pointerType -- TODO: byval?? alignment??
+    LLVMScalar type_ -> (type_, [])
+    AggregatePointer -> unsafePerformIO do
+        byvalAttributeKind <- LLVM.getEnumAttributeKindForName "byval"
+        byvalAttribute <- LLVM.createTypeAttribute byvalAttributeKind (llvmType layout)
+        pure (LLVM.pointerType, [byvalAttribute]) -- TODO: alignment?
     ZeroSized -> panic "Trying to access LLVM type of zero-sized layout"
 
 llvmType :: (?context :: LLVM.Context, HasCallStack) => Layout -> LLVM.Type
