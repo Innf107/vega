@@ -88,6 +88,8 @@ llvmParameterType layout = case layout.kind of
     AggregatePointer -> unsafePerformIO do
         byvalAttributeKind <- LLVM.getEnumAttributeKindForName "byval"
         byvalAttribute <- LLVM.createTypeAttribute byvalAttributeKind (llvmType layout)
+
+        alignmentAttributeKind <- LLVM.getEnumAttributeKindForName "align"
         pure (LLVM.pointerType, [byvalAttribute]) -- TODO: alignment?
     ZeroSized -> panic "Trying to access LLVM type of zero-sized layout"
 

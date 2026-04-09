@@ -290,7 +290,7 @@ compileInstruction builder = \case
             Layout.ZeroSized -> insertVarMapping var zeroSizedDummyValue layout
             Layout.LLVMScalar{} -> undefined
             Layout.AggregatePointer -> do
-                productPointer <- asVar var layout (LLVMBuilder.buildAlloca builder (Layout.llvmType layout))
+                productPointer <- asVar var layout $ buildLayoutAlloca builder layout
                 forIndexed_ llvmValues \value index -> do
                     let (offset, _subLayout) = Layout.productOffsetAndLayout index layout
                     pointer <- case offset of
@@ -302,7 +302,7 @@ compileInstruction builder = \case
         (value, _) <- lookupVar payload
         layout <- Layout.representationLayout representation
 
-        sumPointer <- asVar var layout (LLVMBuilder.buildAlloca builder (Layout.llvmType layout))
+        sumPointer <- asVar var layout $ buildLayoutAlloca builder layout
 
         -- Store the tag
         let tagLLVMType = LLVM.intType (Layout.sumTagSizeInBytes layout * 8)
@@ -373,7 +373,7 @@ compileInstruction builder = \case
                             (viaList $ argumentValuesWithoutPayload <> [payload])
                 LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
             Layout.AggregatePointer -> do
-                returnPointer <- asVar var returnLayout $ LLVMBuilder.buildAlloca builder (Layout.llvmType returnLayout)
+                returnPointer <- asVar var returnLayout $ buildLayoutAlloca builder returnLayout
                 callInstr <-
                     LLVMBuilder.buildCall
                         builder
@@ -467,7 +467,7 @@ buildDirectCall builder functionName arguments argumentLayouts returnLayout tail
             pure (callInstr, callInstr)
         Layout.AggregatePointer -> do
             -- TODO: this doesn't actually work for tail calls (it's probably unsound even oops)
-            returnPointer <- LLVMBuilder.buildAlloca builder (Layout.llvmType returnLayout) varName
+            returnPointer <- buildLayoutAlloca builder returnLayout varName
             callInstr <- LLVMBuilder.buildCall builder functionType function (arguments <> [returnPointer]) ""
             pure (returnPointer, callInstr)
     LLVM.setTailCallKind callInstr tailCallKind
@@ -498,7 +498,7 @@ buildClosure builder functionName closureLayout closureValue varName = do
 
 buildProduct :: (Compile es) => LLVMBuilder.Builder -> Seq LLVM.Value -> Layout -> Text -> Eff es LLVM.Value
 buildProduct builder values layout varName = do
-    productPointer <- LLVMBuilder.buildAlloca builder (Layout.llvmType layout) varName
+    productPointer <- buildLayoutAlloca builder layout varName
 
     forIndexed_ values \value index -> do
         let (offset, subLayout) = Layout.productOffsetAndLayout index layout
@@ -532,7 +532,7 @@ buildComplexLoad :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value 
 buildComplexLoad builder layout pointer varName = case Layout.kind layout of
     Layout.LLVMScalar scalar -> LLVMBuilder.buildLoad builder scalar pointer varName
     Layout.AggregatePointer -> do
-        localMemory <- LLVMBuilder.buildAlloca builder (Layout.llvmType layout) ""
+        localMemory <- buildLayoutAlloca builder layout ""
         let alignment = Alignment.toInt (Layout.alignment layout)
         let size = LLVM.constInt LLVM.int64Type (fromIntegral (Layout.size layout)) False
         _ <- LLVMBuilder.buildMemCpy builder localMemory alignment pointer alignment size
@@ -546,6 +546,12 @@ buildGEPOffset :: (Compile es) => LLVMBuilder.Builder -> LLVM.Value -> Int -> Te
 buildGEPOffset builder pointer offset name = do
     result <- LLVMBuilder.buildInBoundsGetElementPtr builder LLVM.int8Type pointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] name
     pure result
+
+buildLayoutAlloca :: Compile es => LLVMBuilder.Builder -> Layout -> Text -> Eff es LLVM.Value
+buildLayoutAlloca builder layout varName = do
+    alloca <- LLVMBuilder.buildAlloca builder (Layout.llvmType layout) varName
+    LLVM.setAlignment alloca (Alignment.toInt (Layout.alignment layout))
+    pure alloca
 
 registerNewBlock :: (Compile es) => MIR.BlockDescriptor -> Eff es LLVM.BasicBlock
 registerNewBlock descriptor = do
