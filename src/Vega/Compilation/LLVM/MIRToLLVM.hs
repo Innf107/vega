@@ -129,7 +129,7 @@ forwardDeclareDeclaration = \case
         parameterLayouts <- for parameters \(_, representation) -> Layout.representationLayout representation
         returnLayout <- Layout.representationLayout returnRepresentation
 
-        (functionTypeWithAttributes, _) <- functionLLVMType parameterLayouts returnLayout
+        (functionTypeWithAttributes, sret) <- functionLLVMType parameterLayouts returnLayout
         function <- addFunctionWithAttributes ?module_ (renderLLVMName name) functionTypeWithAttributes
         LLVM.setFunctionCallConv function LLVM.tailCallConv
 
@@ -197,7 +197,11 @@ compileDeclaration = \case
 
             forIndexed_ parameters \(variable, representation) index -> do
                 layout <- Layout.representationLayout representation
-                insertVarMapping variable (LLVM.getParam function index) layout
+                let llvmValue = case sretParameter of
+                        Nothing -> LLVM.getParam function index
+                        -- The sret parameter is always the first one so we need to skip it
+                        Just{} -> LLVM.getParam function (index + 1)
+                insertVarMapping variable llvmValue layout
 
             builder <- LLVMBuilder.createBuilder
 
@@ -469,7 +473,8 @@ buildDirectCall builder functionName arguments argumentLayouts returnLayout tail
         Layout.AggregatePointer -> do
             -- TODO: this doesn't actually work for tail calls (it's probably unsound even oops)
             returnPointer <- buildLayoutAlloca builder returnLayout varName
-            callInstr <- buildCallWithAttributes builder functionType function (arguments <> [returnPointer]) ""
+            -- The sret parameter is always the first parameter
+            callInstr <- buildCallWithAttributes builder functionType function ([returnPointer] <> arguments) ""
             pure (returnPointer, callInstr)
     LLVM.setTailCallKind callInstr tailCallKind
     LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
