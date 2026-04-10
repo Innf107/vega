@@ -292,11 +292,12 @@ compileInstruction builder = \case
             Layout.AggregatePointer -> do
                 productPointer <- asVar var layout $ buildLayoutAlloca builder layout
                 forIndexed_ llvmValues \value index -> do
-                    let (offset, _subLayout) = Layout.productOffsetAndLayout index layout
+                    let (offset, subLayout) = Layout.productOffsetAndLayout index layout
                     pointer <- case offset of
                         0 -> pure productPointer
                         _ -> buildGEPOffset builder productPointer offset ""
-                    _ <- LLVMBuilder.buildStore builder value pointer
+                    store <- LLVMBuilder.buildStore builder value pointer
+                    LLVM.setAlignment store (Alignment.toInt (Layout.alignment subLayout))
                     pure ()
     MIR.SumConstructor{var, tag, payload, representation} -> do
         (value, _) <- lookupVar payload
@@ -513,7 +514,8 @@ buildComplexStore :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value
 buildComplexStore builder layout value pointer = do
     case Layout.kind layout of
         Layout.LLVMScalar _scalar -> do
-            _ <- LLVMBuilder.buildStore builder value pointer
+            store <- LLVMBuilder.buildStore builder value pointer
+            LLVM.setAlignment store (Alignment.toInt (Layout.alignment layout))
             pure ()
         Layout.AggregatePointer -> do
             let alignment = Alignment.toInt (Layout.alignment layout)
