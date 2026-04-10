@@ -28,14 +28,17 @@ import LLVM.Core qualified as LLVM
 import LLVM.Core.Context qualified as LLVM
 import LLVM.InstructionBuilder qualified as LLVMBuilder
 import System.IO.Unsafe (unsafePerformIO)
+import Vega.Alignment (Alignment)
 import Vega.Alignment qualified as Alignment
 import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
-import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, addFunctionWithAttributes, attributeFunctionType, parametersWithAttributes, rawFunctionType, returnTypeWithAttributes, buildCallWithAttributes)
+import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, addFunctionWithAttributes, attributeFunctionType, buildCallWithAttributes, parametersWithAttributes, rawFunctionType, returnTypeWithAttributes)
 import Vega.Compilation.LLVM.Layout (Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
 import Vega.Compilation.LLVM.Runtime (RuntimeDefinitions (..), declareRuntimeDefinitions)
 import Vega.Compilation.LLVM.Runtime.Heap qualified as Heap
+import Vega.Compilation.LLVM.Runtime.ToLLVMConstant (ToLLVMConstant (toLLVMConstant))
+import Vega.Compilation.LLVM.Runtime.ToLLVMConstant qualified as ToLLVMConstant
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
@@ -44,8 +47,6 @@ import Vega.Syntax (renderPackageName)
 import Vega.Syntax qualified as Vega
 import Vega.Util (forIndexed_, viaList, type (?))
 import Vega.Util qualified as Util
-import Vega.Compilation.LLVM.Runtime.ToLLVMConstant (ToLLVMConstant(toLLVMConstant))
-import qualified Vega.Compilation.LLVM.Runtime.ToLLVMConstant as ToLLVMConstant
 
 data DeclarationState = MkDeclarationState
     { registeredBlocks :: HashMap MIR.BlockDescriptor LLVM.BasicBlock
@@ -105,7 +106,8 @@ functionLLVMType parameters returnLayout = do
             --
             -- TODO: alignment?
             sretAttribute <- sretAttribute (Layout.llvmType returnLayout)
-            pure ((LLVM.pointerType, [sretAttribute]) :<| baseParameterTypes, LLVM.voidType, True)
+            alignmentAttribute <- alignAttribute (Layout.alignment returnLayout)
+            pure ((LLVM.pointerType, [sretAttribute, alignmentAttribute]) :<| baseParameterTypes, LLVM.voidType, True)
         Layout.LLVMScalar scalar -> pure (baseParameterTypes, scalar, False)
         Layout.ZeroSized -> pure (baseParameterTypes, LLVM.voidType, False)
 
@@ -547,7 +549,7 @@ buildGEPOffset builder pointer offset name = do
     result <- LLVMBuilder.buildInBoundsGetElementPtr builder LLVM.int8Type pointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] name
     pure result
 
-buildLayoutAlloca :: Compile es => LLVMBuilder.Builder -> Layout -> Text -> Eff es LLVM.Value
+buildLayoutAlloca :: (Compile es) => LLVMBuilder.Builder -> Layout -> Text -> Eff es LLVM.Value
 buildLayoutAlloca builder layout varName = do
     alloca <- LLVMBuilder.buildAlloca builder (Layout.llvmType layout) varName
     LLVM.setAlignment alloca (Alignment.toInt (Layout.alignment layout))
@@ -628,10 +630,10 @@ sretAttribute targetType = do
     kind <- LLVM.getEnumAttributeKindForName "sret"
     LLVM.createTypeAttribute kind targetType
 
-byvalAttribute :: (?context :: LLVM.Context, IOE :> es) => LLVM.Type -> Eff es LLVM.Attribute
-byvalAttribute targetType = do
-    kind <- LLVM.getEnumAttributeKindForName "byval"
-    LLVM.createTypeAttribute kind targetType
+alignAttribute :: (?context :: LLVM.Context, IOE :> es) => Alignment -> Eff es LLVM.Attribute
+alignAttribute alignment = do
+    kind <- LLVM.getEnumAttributeKindForName "align"
+    LLVM.createEnumAttribute kind (fromIntegral (Alignment.toInt alignment))
 
 {- | Zero sized values should never appear in the generated LLVM code, but
 we sometimes still need to register a value for a MIR variable, so we
