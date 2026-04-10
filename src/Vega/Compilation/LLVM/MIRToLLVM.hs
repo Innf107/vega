@@ -405,7 +405,7 @@ compileTerminator builder = \case
                 case ?functionEnv.sretVariable of
                     Nothing -> panic $ "Returning AggregatePointer layout from a function without sret variable: " <> show layout
                     Just (sretVariable, _) -> do
-                        buildComplexStore builder layout sretVariable value
+                        buildComplexStore builder layout value sretVariable
                         _ <- LLVMBuilder.buildRetVoid builder
                         pure ()
     MIR.SwitchInt scrutinee alternatives -> do
