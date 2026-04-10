@@ -145,7 +145,7 @@ forwardDeclareDeclaration = \case
 
         let arguments = Storable.generate (Strict.length parameters) \i -> LLVM.getParam function i
         result <- buildCallWithAttributes builder functionTypeWithAttributes function arguments ""
-        LLVM.setTailCallKind result LLVM.TailCallKindMustTail
+        LLVM.setTailCallKind result LLVM.TailCallKindTail
         LLVM.setInstructionCallConv result LLVM.tailCallConv
         case Layout.kind returnLayout of
             Layout.LLVMScalar _ -> do
@@ -419,7 +419,7 @@ compileTerminator builder = \case
         (argumentValues, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
         returnLayout <- Layout.representationLayout returnRepresentation
 
-        result <- buildDirectCall builder functionName (viaList argumentValues) argumentLayouts returnLayout LLVM.TailCallKindMustTail "ret"
+        result <- buildDirectCall builder functionName (viaList argumentValues) argumentLayouts returnLayout LLVM.TailCallKindTail "ret"
         _ <- LLVMBuilder.buildRet builder result
         pure ()
     _ -> undefined
