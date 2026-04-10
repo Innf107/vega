@@ -31,7 +31,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import Vega.Alignment qualified as Alignment
 import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
-import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, addFunctionWithAttributes, attributeFunctionType, parametersWithAttributes, rawFunctionType, returnTypeWithAttributes)
+import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, addFunctionWithAttributes, attributeFunctionType, parametersWithAttributes, rawFunctionType, returnTypeWithAttributes, buildCallWithAttributes)
 import Vega.Compilation.LLVM.Layout (Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
 import Vega.Compilation.LLVM.Runtime (RuntimeDefinitions (..), declareRuntimeDefinitions)
@@ -144,7 +144,7 @@ forwardDeclareDeclaration = \case
         LLVMBuilder.positionBuilderAtEnd builder block
 
         let arguments = Storable.generate (Strict.length parameters) \i -> LLVM.getParam function i
-        result <- LLVMBuilder.buildCall builder (rawFunctionType functionTypeWithAttributes) function arguments ""
+        result <- buildCallWithAttributes builder functionTypeWithAttributes function arguments ""
         LLVM.setTailCallKind result LLVM.TailCallKindMustTail
         LLVM.setInstructionCallConv result LLVM.tailCallConv
         case Layout.kind returnLayout of
@@ -350,13 +350,12 @@ compileInstruction builder = \case
 
         returnLayout <- Layout.representationLayout returnRepresentation
 
-        (closureFunctionTypeWithAttributes, _) <- functionLLVMType argumentLayouts returnLayout
-        let closureFunctionType = rawFunctionType closureFunctionTypeWithAttributes
+        (closureFunctionType, _) <- functionLLVMType argumentLayouts returnLayout
 
         case Layout.kind returnLayout of
             Layout.ZeroSized -> do
                 callInstr <-
-                    LLVMBuilder.buildCall
+                    buildCallWithAttributes
                         builder
                         closureFunctionType
                         functionPointer
@@ -367,7 +366,7 @@ compileInstruction builder = \case
             Layout.LLVMScalar _ -> do
                 callInstr <-
                     asVar var returnLayout $
-                        LLVMBuilder.buildCall
+                        buildCallWithAttributes
                             builder
                             closureFunctionType
                             functionPointer
@@ -376,7 +375,7 @@ compileInstruction builder = \case
             Layout.AggregatePointer -> do
                 returnPointer <- asVar var returnLayout $ buildLayoutAlloca builder returnLayout
                 callInstr <-
-                    LLVMBuilder.buildCall
+                    buildCallWithAttributes
                         builder
                         closureFunctionType
                         functionPointer
@@ -456,20 +455,19 @@ buildDirectCall builder functionName arguments argumentLayouts returnLayout tail
             Nothing -> panic $ "Trying to generate call to non-existent function" <> pretty (Core.Global functionName)
             Just function -> pure function
 
-    (functionTypeWithAttributes, _) <- functionLLVMType argumentLayouts returnLayout
-    let functionType = rawFunctionType functionTypeWithAttributes
+    (functionType, _) <- functionLLVMType argumentLayouts returnLayout
 
     (returnValue, callInstr) <- case Layout.kind returnLayout of
         Layout.ZeroSized -> do
-            callInstr <- LLVMBuilder.buildCall builder functionType function arguments ""
+            callInstr <- buildCallWithAttributes builder functionType function arguments ""
             pure (zeroSizedDummyValue, callInstr)
         Layout.LLVMScalar _ -> do
-            callInstr <- LLVMBuilder.buildCall builder functionType function arguments varName
+            callInstr <- buildCallWithAttributes builder functionType function arguments varName
             pure (callInstr, callInstr)
         Layout.AggregatePointer -> do
             -- TODO: this doesn't actually work for tail calls (it's probably unsound even oops)
             returnPointer <- buildLayoutAlloca builder returnLayout varName
-            callInstr <- LLVMBuilder.buildCall builder functionType function (arguments <> [returnPointer]) ""
+            callInstr <- buildCallWithAttributes builder functionType function (arguments <> [returnPointer]) ""
             pure (returnPointer, callInstr)
     LLVM.setTailCallKind callInstr tailCallKind
     LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
@@ -479,13 +477,13 @@ buildRuntimeCall ::
     (Compile es) =>
     LLVMBuilder.Builder ->
     forall (name :: Symbol) ->
-    (HasField name RuntimeDefinitions (LLVM.Value, LLVM.FunctionType)) =>
+    (HasField name RuntimeDefinitions (LLVM.Value, AttributeFunctionType)) =>
     Storable.Vector LLVM.Value ->
     Text ->
     Eff es LLVM.Value
 buildRuntimeCall builder name arguments varName = do
     let (function, functionType) = getField @name ?runtimeDefinitions
-    LLVMBuilder.buildCall builder functionType function arguments varName
+    buildCallWithAttributes builder functionType function arguments varName
 
 buildClosure :: (Compile es) => LLVMBuilder.Builder -> Vega.GlobalName -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
 buildClosure builder functionName closureLayout closureValue varName = do

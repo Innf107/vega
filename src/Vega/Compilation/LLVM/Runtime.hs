@@ -3,15 +3,16 @@ module Vega.Compilation.LLVM.Runtime (declareRuntimeDefinitions, RuntimeDefiniti
 import Relude
 
 import LLVM.Core qualified as LLVM
+import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, attributeFunctionType, addFunctionWithAttributes)
 
 data RuntimeDefinitions = MkRuntimeDefinitions
-    { vega_allocate_boxed :: (LLVM.Value, LLVM.FunctionType)
+    { vega_allocate_boxed :: (LLVM.Value, AttributeFunctionType)
     }
 
 declareRuntimeDefinitions :: (MonadIO io, ?context :: LLVM.Context) => LLVM.Module -> io RuntimeDefinitions
 declareRuntimeDefinitions module_ = do
-    let vega_allocate_boxed_type = LLVM.functionType [LLVM.pointerType] LLVM.pointerType False
-    vega_allocate_boxed <- LLVM.addFunction module_ "vega_allocate_boxed" vega_allocate_boxed_type
+    let vega_allocate_boxed_type = attributeFunctionType [(LLVM.pointerType, [])] (LLVM.pointerType, [])
+    vega_allocate_boxed <- addFunctionWithAttributes module_ "vega_allocate_boxed" vega_allocate_boxed_type
 
     pure
         ( MkRuntimeDefinitions
