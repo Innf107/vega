@@ -453,18 +453,21 @@ compileTerminator builder = \case
 
         callInstr <- case Layout.kind returnLayout of
             Layout.ZeroSized -> do
-                _ <- buildCallWithAttributes builder functionType function argumentValues ""
-                LLVMBuilder.buildRetVoid builder
+                callInstr <- buildCallWithAttributes builder functionType function argumentValues ""
+                _ <- LLVMBuilder.buildRetVoid builder
+                pure callInstr
             Layout.LLVMScalar _ -> do
                 result <- buildCallWithAttributes builder functionType function argumentValues "ret"
-                LLVMBuilder.buildRet builder result
+                _ <- LLVMBuilder.buildRet builder result
+                pure result
             Layout.AggregatePointer -> do
                 let sretPointer = case ?functionEnv.sretVariable of
                         Nothing -> panic "Trying to return AggregatePointer from function without sret variable"
                         Just (variable, _) -> variable
 
-                _ <- buildCallWithAttributes builder functionType function ([sretPointer] <> argumentValues) ""
-                LLVMBuilder.buildRetVoid builder
+                callInstr <- buildCallWithAttributes builder functionType function ([sretPointer] <> argumentValues) ""
+                _ <- LLVMBuilder.buildRetVoid builder
+                pure callInstr
         LLVM.setTailCallKind callInstr LLVM.TailCallKindTail
         LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
     _ -> undefined
