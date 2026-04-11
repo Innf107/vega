@@ -785,11 +785,10 @@ checkStatement env ambientEffect statement = withTrace TypeCheck ("checkStatemen
 
         body <- check innerEnv effect returnType body
 
-        -- TODO: include this in the generated core
-        -- TODO: add metadata for error messages in case this fails (i think it should have thrown earlier in that case though)
         let typeSignatureLoc = case typeSignature of
                 Nothing -> loc
                 Just typeSignature -> getLoc typeSignature
+        -- TODO: add metadata for error messages in case this fails (i think it should have thrown earlier in that case though)
         returnRepresentation <- representationOfType typeSignatureLoc innerEnv returnType
 
         pure (env, LetFunction{ext = MkLetFunctionTypedExt{returnRepresentation}, loc, name, typeSignature, parameters, body})
@@ -1586,10 +1585,13 @@ occursAndAdjust meta type_ = do
                 go typeConstructor
                 for_ arguments go
             TypeVar{} -> pure ()
-            Forall _typeVarBinders body -> do
-                -- TODO: do we need to look into kinds here? (and likewise for existentials)
+            Forall typeVarBinders body -> do
+                for_ typeVarBinders \(MkForallBinder _name _visibility kind _monomorphization) -> do
+                    go kind
                 go body
-            Exists _binders body -> go body
+            Exists binders body -> do
+                for_ binders \(_, kind) -> go kind
+                go body
             Function parameters effect result -> do
                 for_ parameters go
                 go effect
