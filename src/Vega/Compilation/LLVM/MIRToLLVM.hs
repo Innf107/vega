@@ -465,7 +465,7 @@ compileTerminator builder = \case
 
                 _ <- buildCallWithAttributes builder functionType function ([sretPointer] <> argumentValues) ""
                 LLVMBuilder.buildRetVoid builder
-        LLVM.setTailCallKind callInstr LLVM.TailCallKindNone
+        LLVM.setTailCallKind callInstr LLVM.TailCallKindTail
         LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
     _ -> undefined
 
