@@ -69,6 +69,8 @@ pub enum ObjectType {
 pub unsafe extern "C" fn vega_allocate_boxed(info_table: *const InfoTable) -> *mut u8 {
     let layout = unsafe { (*info_table).layout.boxed };
 
-    unsafe { libc::malloc(HeapObject::HEADER_SIZE_IN_BYTES + layout.size_in_bytes) as *mut u8 }
+    let object_pointer = unsafe { libc::malloc(HeapObject::HEADER_SIZE_IN_BYTES + layout.size_in_bytes) as *mut HeapObject };
+    unsafe { *object_pointer = HeapObject {info_table}; };
+    HeapObject::data(object_pointer)
 }
 
