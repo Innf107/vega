@@ -54,7 +54,7 @@ type Path = Seq PathSegment
 
 data Instruction
     = Identity Variable Variable
-    | Add Variable Variable Variable
+    | ArithmeticOperator {var :: Variable, operatorExpr :: ArithmeticExpr}
     | AccessField {var :: Variable, path :: Path, target :: Variable, fieldRepresentation :: Representation}
     | Box
         { var :: Variable
@@ -72,10 +72,20 @@ data Instruction
     | CallClosure {var :: Variable, closure :: Variable, arguments :: (Seq Variable), returnRepresentation :: Representation}
     deriving (Generic)
 
+data ArithmeticExpr
+    = Add Variable Variable
+    | Subtract Variable Variable
+    | Multiply Variable Variable
+    | Divide Variable Variable
+    | Less Variable Variable
+    | LessEqual Variable Variable
+    | Equal Variable Variable
+    | NotEqual Variable Variable
+
 data Terminator
     = Return Variable
     | Jump BlockDescriptor
-    | SwitchInt {var :: Variable, cases :: Seq (Int, BlockDescriptor)}
+    | SwitchInt {var :: Variable, cases :: Seq (Int, BlockDescriptor), default_ :: Maybe BlockDescriptor}
     | TailCallDirect {functionName :: Vega.GlobalName, arguments :: Seq Variable, returnRepresentation :: Representation}
     | TailCallClosure {closure :: Variable, arguments :: Seq Variable, returnRepresentation :: Representation}
     deriving (Generic)
@@ -143,7 +153,7 @@ prettyPath path = lparen "[" <> intercalateDoc (keyword "->") (fmap pretty path)
 instance Pretty Instruction where
     pretty = \case
         Identity var target -> keywordInstruction "identity" var [pretty target]
-        Add var arg1 arg2 -> keywordInstruction "add" var [pretty arg1, pretty arg2]
+        ArithmeticOperator {var, operatorExpr} -> pretty var <+> keyword "=" <+> pretty operatorExpr
         AccessField{var, path, target, fieldRepresentation} -> keywordInstruction "accessField" var [prettyPath path, pretty target] <+> keyword ":" <+> pretty fieldRepresentation
         Box
             { var
@@ -165,6 +175,17 @@ instance Pretty Instruction where
         CallDirect{var, functionName, arguments = callArguments} -> keywordInstruction "callDirect" var [Vega.prettyGlobal Vega.VarKind functionName] <> arguments callArguments
         CallClosure{var, closure, arguments = callArguments} -> keywordInstruction "callClosure" var [pretty closure] <> arguments callArguments
 
+instance Pretty ArithmeticExpr where
+    pretty = \case
+        Add var1 var2 -> pretty var1 <+> keyword "+" <+> pretty var2
+        Subtract var1 var2 -> pretty var1 <+> keyword "-" <+> pretty var2
+        Multiply var1 var2 -> pretty var1 <+> keyword "*" <+> pretty var2
+        Divide var1 var2 -> pretty var1 <+> keyword "/" <+> pretty var2
+        Less var1 var2 -> pretty var1 <+> keyword "<" <+> pretty var2
+        LessEqual var1 var2 -> pretty var1 <+> keyword "<=" <+> pretty var2
+        Equal var1 var2 -> pretty var1 <+> keyword "==" <+> pretty var2
+        NotEqual var1 var2 -> pretty var1 <+> keyword "!=" <+> pretty var2
+
 keywordInstruction :: Text -> Variable -> Seq (Doc Ann) -> Doc Ann
 keywordInstruction name var arguments =
     pretty var <+> keyword "=" <+> keyword name <+> intercalateDoc " " arguments
@@ -173,11 +194,15 @@ instance Pretty Terminator where
     pretty = \case
         Return value -> keyword "return" <+> pretty value
         Jump block -> keyword "jump" <+> pretty block
-        SwitchInt value targets ->
+        SwitchInt value targets default_ ->
             keyword "switchInt" <+> pretty value <+> lparen "["
                 <> "\n  "
                 <> align (intercalateDoc "\n" (fmap (\(value, target) -> number value <+> keyword "->" <+> pretty target) targets))
                 <> "\n"
+                <> ( case default_ of
+                        Nothing -> mempty
+                        Just defaultBlock -> keyword "default" <+> keyword "->" <+> pretty defaultBlock
+                   )
                 <> rparen "]"
         TailCallDirect functionName callArguments returnRepresentation ->
             keyword "tailcallDirect" <+> Vega.prettyGlobal Vega.VarKind functionName <> arguments callArguments <+> keyword ":" <+> pretty returnRepresentation

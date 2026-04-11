@@ -41,7 +41,17 @@ data Expr
     | Box Value
     | Unbox Value
     | PureOperator PureOperatorExpr
-    | ConstructorCase {scrutinee :: Value, scrutineeRepresentation :: Representation, cases :: (HashMap Int (Seq LocalCoreName, Seq Statement, Expr))}
+    | ConstructorCase
+        { scrutinee :: Value
+        , scrutineeRepresentation :: Representation
+        , cases :: (HashMap Int (Seq LocalCoreName, Seq Statement, Expr))
+        , default_ :: Maybe (Seq Statement, Expr)
+        }
+    | IntCase
+        { scrutinee :: Value
+        , intCases :: HashMap Int (Seq Statement, Expr)
+        , default_ :: Maybe (Seq Statement, Expr)
+        }
 
 data PureOperatorExpr
     = PureOperatorValue Value
@@ -153,7 +163,7 @@ instance Pretty Expr where
             pretty tupleValue <> lparen "[" <> number index <> rparen "]"
         Box value -> keyword "box" <+> pretty value
         Unbox value -> keyword "unbox" <+> pretty value
-        ConstructorCase scrutinee representation cases -> do
+        ConstructorCase scrutinee representation cases default_ -> do
             let prettyCase (constructor, (locals, bodyStatements, bodyExpr)) =
                     lparen "[" <> number constructor <> rparen "]" <+> arguments locals <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
 
@@ -161,6 +171,27 @@ instance Pretty Expr where
                 <> "\n"
                 <> indent 2 (align (intercalateDoc "\n" (map prettyCase (HashMap.toList cases))))
                 <> "\n"
+                <> ( case default_ of
+                        Nothing -> mempty
+                        Just (statements, expr) -> indent 2 $ align $ prettyBody statements expr
+                   )
+                <> rparen "}"
+        IntCase{scrutinee, intCases, default_} -> do
+            let prettyCase (constructor, (bodyStatements, bodyExpr)) =
+                    number constructor <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
+
+            keyword "match[Int]" <+> pretty scrutinee <+> lparen "{"
+                <> "\n"
+                <> indent 2 (align (intercalateDoc "\n" (map prettyCase (HashMap.toList intCases))))
+                <> "\n"
+                <> ( case default_ of
+                        Nothing -> mempty
+                        Just (statements, expr) ->
+                            ( indent 2 $
+                                align $ keyword "default" <+> keyword "->" <+> prettyBody statements expr
+                            )
+                                <> "\n"
+                   )
                 <> rparen "}"
         PureOperator operator -> pretty operator
 

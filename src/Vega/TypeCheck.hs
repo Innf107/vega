@@ -323,6 +323,9 @@ checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <>
         VarPattern loc () var isShadowed -> do
             rep <- representationOfType loc env expectedType
             pure (VarPattern{loc = loc, ext = rep, name = var, isShadowed = isShadowed}, bindVarType var expectedType)
+        IntLiteralPattern{}
+        StringLiteralPattern{}
+        DoubleLiteralPattern{} -> deferToInference
         AsPattern loc () pattern_ name -> do
             (pattern_, innerTrans) <- checkPattern env expectedType pattern_
             rep <- representationOfType loc env expectedType
@@ -396,6 +399,9 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
         rep <- MetaVar <$> freshMeta "r" Rep
         type_ <- MetaVar <$> freshMeta (varName.name) (Type rep)
         pure (VarPattern{loc = loc, ext = rep, name = varName, isShadowed = isShadowed}, type_, bindVarType varName type_)
+    IntLiteralPattern{loc, intLiteral} -> pure (IntLiteralPattern{loc, intLiteral}, Builtins.intType, id)
+    StringLiteralPattern{loc, stringLiteral} -> pure (StringLiteralPattern{loc, stringLiteral}, Builtins.stringType, id)
+    DoubleLiteralPattern{loc, doubleLiteral} -> pure (DoubleLiteralPattern{loc, doubleLiteral}, Builtins.doubleType, id)
     AsPattern loc () innerPattern name -> do
         (innerPattern, innerType, innerTrans) <- inferPattern env innerPattern
         rep <- representationOfType loc env innerType
@@ -613,10 +619,10 @@ infer env ambientEffect expr = do
     pure (type_, expr)
   where
     go = case expr of
-        Var {loc, name, representation=()} -> do
+        Var{loc, name, representation = ()} -> do
             type_ <- instantiate loc env =<< varType env name
             representation <- representationOfType loc env type_
-            pure (type_, Var {loc, name, representation})
+            pure (type_, Var{loc, name, representation})
         DataConstructor loc () name -> do
             type_ <- instantiate loc env =<< varType env name
             representation <- representationOfType loc env type_

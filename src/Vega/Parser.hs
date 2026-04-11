@@ -73,8 +73,8 @@ intLit = MegaParsec.token match (fromList [Label (fromList "integer literal")])
         (Lexer.IntLiteral int, loc) -> Just (int, loc)
         _ -> Nothing
 
-floatLit :: Parser (Rational, Loc)
-floatLit = MegaParsec.token match (fromList [Label (fromList "float literal")])
+doubleLit :: Parser (Rational, Loc)
+doubleLit = MegaParsec.token match (fromList [Label (fromList "float literal")])
   where
     match = \case
         (Lexer.FloatLiteral float, loc) -> Just (float, loc)
@@ -519,6 +519,15 @@ pattern_ = do
             , do
                 loc <- single Underscore
                 pure (WildcardPattern loc)
+            , do
+                (int, loc) <- intLit
+                pure (IntLiteralPattern loc int)
+            , do
+                (string, loc) <- stringLit
+                pure (StringLiteralPattern loc string)
+            , do
+                (double, loc) <- doubleLit
+                pure (DoubleLiteralPattern loc double)
             ]
       where
         recordField = do
@@ -604,7 +613,7 @@ expr = label "expression" exprLogical
                 (integer, loc) <- intLit
                 pure (Syntax.IntLiteral loc integer)
             , do
-                (float, loc) <- floatLit
+                (float, loc) <- doubleLit
                 pure (Syntax.DoubleLiteral loc float)
             , do
                 (elements, loc) <- argumentsWithLoc expr

@@ -269,6 +269,9 @@ data TypeOperator
 data Pattern p
     = WildcardPattern Loc
     | VarPattern {loc :: Loc, ext :: (XVarPattern p), name :: (XLocalName p), isShadowed :: Bool}
+    | IntLiteralPattern {loc :: Loc, intLiteral :: Integer}
+    | StringLiteralPattern {loc :: Loc, stringLiteral :: Text}
+    | DoubleLiteralPattern {loc :: Loc, doubleLiteral :: Rational}
     | AsPattern Loc (XAsPattern p) (Pattern p) (XLocalName p)
     | ConstructorPattern
         { loc :: Loc

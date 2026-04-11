@@ -223,6 +223,7 @@ compileCaseTree compileGoal scrutinees caseTree = go scrutinees caseTree
                     , cases
                     }
                 ]
+        IntCase{} -> undefined
         TupleCase count subTree -> do
             variables <- Seq.replicateA count (freshVar "t")
             let (scrutinee, rest) = consume scrutinees

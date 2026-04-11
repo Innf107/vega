@@ -255,10 +255,9 @@ compileInstruction builder = \case
     MIR.Identity var target -> do
         (targetValue, targetLayout) <- lookupVar target
         insertVarMapping var targetValue targetLayout
-    MIR.Add var arg1 arg2 -> do
-        arg1Value <- lookupVarValue arg1
-        arg2Value <- lookupVarValue arg2
-        asVar_ var Layout.intLayout $ LLVMBuilder.buildAdd builder arg1Value arg2Value
+    MIR.ArithmeticOperator var operator -> do
+        (value, layout) <- compileArithmeticOperator builder operator (renderVariable var)
+        insertVarMapping var value layout
     MIR.AccessField{var, path, target, fieldRepresentation} -> do
         (targetValue, targetLayout) <- lookupVar target
         fieldLayout <- Layout.representationLayout fieldRepresentation
@@ -408,7 +407,7 @@ compileTerminator builder = \case
                         buildComplexStore builder layout value sretVariable
                         _ <- LLVMBuilder.buildRetVoid builder
                         pure ()
-    MIR.SwitchInt scrutinee alternatives -> do
+    MIR.SwitchInt scrutinee alternatives default_ -> do
         (scrutineeValue, layout) <- lookupVar scrutinee
         let llvmType = Layout.llvmType layout
 
@@ -417,7 +416,9 @@ compileTerminator builder = \case
                 targetLLVMBlock <- registerNewBlock target
                 pure (LLVM.constInt llvmType (fromIntegral int) False, targetLLVMBlock)
 
-        defaultBlock <- newUnreachableBlock
+        defaultBlock <- case default_ of
+                Just block -> registerNewBlock block
+                Nothing -> newUnreachableBlock
 
         _ <- LLVMBuilder.buildSwitch builder scrutineeValue cases defaultBlock
         pure ()
@@ -429,6 +430,51 @@ compileTerminator builder = \case
         _ <- LLVMBuilder.buildRet builder result
         pure ()
     _ -> undefined
+
+compileArithmeticOperator :: Compile es => LLVMBuilder.Builder -> MIR.ArithmeticExpr -> Text -> Eff es (LLVM.Value, Layout)
+compileArithmeticOperator builder arithmeticExpr varName = case arithmeticExpr of
+    MIR.Add var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildAdd builder arg1 arg2 varName
+        pure (result, Layout.intLayout)
+    MIR.Subtract var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildSub builder arg1 arg2 varName
+        pure (result, Layout.intLayout)
+    MIR.Multiply var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildMul builder arg1 arg2 varName
+        pure (result, Layout.intLayout)
+    MIR.Divide var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildSDiv builder arg1 arg2 varName
+        pure (result, Layout.intLayout)
+    MIR.Less var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildICmp builder LLVM.IntSLT arg1 arg2 varName
+        pure (result, Layout.boolLayout)
+    MIR.LessEqual var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildICmp builder LLVM.IntSLE arg1 arg2 varName
+        pure (result, Layout.boolLayout)
+    MIR.Equal var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildICmp builder LLVM.IntEQ arg1 arg2 varName
+        pure (result, Layout.boolLayout)
+    MIR.NotEqual var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildICmp builder LLVM.IntNE arg1 arg2 varName
+        pure (result, Layout.boolLayout)
+
+
 
 getOrCreateLayoutInfoTablePointer :: (Compile es) => Layout -> Eff es LLVM.Value
 getOrCreateLayoutInfoTablePointer layout = do

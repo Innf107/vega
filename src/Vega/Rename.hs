@@ -334,6 +334,9 @@ renamePattern env = \case
     VarPattern{loc, ext = (), name, isShadowed} -> do
         (localName, envTrans) <- bindLocalVar loc env isShadowed name
         pure (VarPattern{loc, ext = (), name = localName, isShadowed}, envTrans)
+    IntLiteralPattern {loc , intLiteral }  -> pure (IntLiteralPattern {loc, intLiteral}, id)
+    StringLiteralPattern {loc, stringLiteral } -> pure (StringLiteralPattern {loc, stringLiteral}, id)
+    DoubleLiteralPattern {loc, doubleLiteral } -> pure (DoubleLiteralPattern{loc, doubleLiteral}, id)
     AsPattern loc () innerPattern name -> do
         (innerPattern, innerTrans) <- renamePattern env innerPattern
         (localName, envTrans) <- bindLocalVar loc env False name

@@ -175,10 +175,7 @@ verifyInstruction = \case
     MIR.Identity var target -> do
         representation <- varRepresentation target
         insertVarRepresentation var representation
-    MIR.Add var arg1 arg2 -> do
-        checkVarRepresentation arg1 (PrimitiveRep IntRep) var
-        checkVarRepresentation arg2 (PrimitiveRep IntRep) var
-        insertVarRepresentation var (PrimitiveRep IntRep)
+    MIR.ArithmeticOperator var operator -> verifyArithmeticOperator var operator
     MIR.AccessField{var, path, target, fieldRepresentation} -> do
         targetRepresentation <- varRepresentation target
         verifyValidPath var targetRepresentation path fieldRepresentation
@@ -254,6 +251,26 @@ verifyInstruction = \case
         -- We can't actually verify that the arguments are correct here
         checkVarRepresentation closure Core.functionRepresentation var
         insertVarRepresentation var returnRepresentation
+
+verifyArithmeticOperator :: (Verify es) => MIR.Variable -> MIR.ArithmeticExpr -> Eff es ()
+verifyArithmeticOperator var = \case
+    MIR.Add arg1 arg2 -> allInts arg1 arg2
+    MIR.Subtract arg1 arg2 -> allInts arg1 arg2
+    MIR.Multiply arg1 arg2 -> allInts arg1 arg2
+    MIR.Divide arg1 arg2 -> allInts arg1 arg2
+    MIR.Less arg1 arg2 -> comparison arg1 arg2
+    MIR.LessEqual arg1 arg2 -> comparison arg1 arg2
+    MIR.Equal arg1 arg2 -> comparison arg1 arg2
+    MIR.NotEqual arg1 arg2 -> comparison arg1 arg2
+  where
+    allInts arg1 arg2 = do
+        checkVarRepresentation arg1 (PrimitiveRep IntRep) var
+        checkVarRepresentation arg2 (PrimitiveRep IntRep) var
+        insertVarRepresentation var (PrimitiveRep IntRep)
+    comparison arg1 arg2 = do
+        checkVarRepresentation arg1 (PrimitiveRep IntRep) var
+        checkVarRepresentation arg2 (PrimitiveRep IntRep) var
+        insertVarRepresentation var (Core.boolRepresentation)
 
 verifyValidPath :: (Verify es) => MIR.Variable -> Representation -> MIR.Path -> Representation -> Eff es ()
 verifyValidPath var fullInputRep path expectedRep = go fullInputRep path

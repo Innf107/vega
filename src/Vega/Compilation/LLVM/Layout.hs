@@ -9,6 +9,7 @@ module Vega.Compilation.LLVM.Layout (
     sizedIntLayoutInBytes,
     functionPointerLayout,
     closureLayout,
+    boolLayout,
 
     -- * Layout Properties
     size,
@@ -204,6 +205,10 @@ sizedIntLayoutInBytes size = MkLayout{size, alignment = Alignment.fromValue size
 -- TODO: we might be able to give heap pointers a different address space from unmanaged pointers?
 boxedLayout :: (?context :: LLVM.Context) => Layout
 boxedLayout = MkLayout{size = 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive}
+
+-- TODO: i don't think the way we're treating booleans in the frontend actually lets us use i1 here
+boolLayout :: (?context :: LLVM.Context) => Layout
+boolLayout = MkLayout{size = 1, alignment = Alignment.fromValue 1, kind = LLVMScalar LLVM.int1Type, details = Primitive}
 
 -- TODO: This pointer should not count as boxed since it doesn't need to be followed by the GC
 functionPointerLayout :: (?context :: LLVM.Context) => Layout

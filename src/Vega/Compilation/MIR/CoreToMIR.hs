@@ -156,6 +156,7 @@ compileLet block local representation = \case
         pure block
     Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases} -> do
         undefined
+    Core.IntCase{} -> undefined
 
 compileReturn :: (Compile es) => BlockBuilder -> Core.Expr -> Eff es ()
 compileReturn block = \case
@@ -195,7 +196,7 @@ compileReturn block = \case
         var <- newVar "unbox"
         block <- addInstruction block (MIR.Unbox{var, boxedTarget = value, representation = undefined})
         finish block (MIR.Return var)
-    Core.ConstructorCase scrutinee scrutineeRepresentation cases -> do
+    Core.ConstructorCase scrutinee scrutineeRepresentation cases default_ -> do
         (block, scrutinee) <- compileValue block scrutinee
         tag <- newVar "tag"
         block <- addInstruction block (MIR.LoadSumTag tag scrutinee)
@@ -226,7 +227,27 @@ compileReturn block = \case
             compileBody targetBlockBuilder bodyStatements bodyExpr
 
             pure (index, targetBlockDescriptor)
-        finish block (MIR.SwitchInt{var = tag, cases = fromList targetBlocks})
+
+        defaultBlock <- for default_ \(defaultStatements, defaultExpr) -> do
+            defaultBlockBuilder <- newBlock (MkPhis mempty)
+            let defaultBlockDescriptor = defaultBlockBuilder.descriptor
+            compileBody defaultBlockBuilder defaultStatements defaultExpr
+            pure defaultBlockDescriptor
+
+        finish block (MIR.SwitchInt{var = tag, cases = fromList targetBlocks, default_ = defaultBlock})
+    Core.IntCase{scrutinee, intCases, default_} -> do
+        (block, scrutinee) <- compileValue block scrutinee
+        targets <- for (HashMap.toList intCases) \(int, (statements, expr)) -> do
+            targetBlockBuilder <- newBlock (MkPhis mempty)
+            let targetBlockDescriptor = targetBlockBuilder.descriptor
+            compileBody targetBlockBuilder statements expr
+            pure (int, targetBlockDescriptor)
+        defaultBlock <- for default_ \(defaultStatements, defaultExpr) -> do
+            defaultBlockBuilder <- newBlock (MkPhis mempty)
+            let defaultBlockDescriptor = defaultBlockBuilder.descriptor
+            compileBody defaultBlockBuilder defaultStatements defaultExpr
+            pure defaultBlockDescriptor
+        finish block (MIR.SwitchInt{var = scrutinee, cases = fromList targets, default_=defaultBlock})
     Core.Lambda parameters statements returnExpr -> do
         lambdaName <- undefined
         let returnRepresentation = undefined returnExpr
@@ -242,22 +263,29 @@ compilePureOperator :: (Compile es) => BlockBuilder -> Maybe MIR.Variable -> Cor
 compilePureOperator block var = \case
     Core.PureOperatorValue value -> do
         (block, target) <- compileValue block value
-        case var of 
+        case var of
             Nothing -> pure (block, target)
             Just var -> do
                 block <- addInstruction block (MIR.Identity var target)
                 pure (block, var)
-    Core.Add left right -> do
+    Core.Add left right -> asArithmeticOperator MIR.Add left right
+    Core.Subtract left right -> asArithmeticOperator MIR.Subtract left right
+    Core.Multiply left right -> asArithmeticOperator MIR.Multiply left right
+    Core.Divide left right -> asArithmeticOperator MIR.Divide left right
+    Core.Less left right -> asArithmeticOperator MIR.Less left right
+    Core.LessEqual left right -> asArithmeticOperator MIR.LessEqual left right
+    Core.Equal left right -> asArithmeticOperator MIR.Equal left right
+    Core.NotEqual left right -> asArithmeticOperator MIR.NotEqual left right
+  where
+    asArithmeticOperator operator left right = do
         var <- targetVar
         (block, left) <- compilePureOperator block Nothing left
         (block, right) <- compilePureOperator block Nothing right
-        block <- addInstruction block (MIR.Add var left right)
+        block <- addInstruction block (MIR.ArithmeticOperator var (operator left right))
         pure (block, var)
-    _ -> undefined
-    where
-        targetVar = case var of
-            Nothing -> newVar ""
-            Just var -> pure var
+    targetVar = case var of
+        Nothing -> newVar ""
+        Just var -> pure var
 
 compileValues :: (Compile es) => BlockBuilder -> Seq Core.Value -> Eff es (BlockBuilder, Seq MIR.Variable)
 compileValues block values = mapAccumLM compileValue block values

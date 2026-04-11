@@ -190,18 +190,21 @@ compileExpr expr = do
                     let expr = case operator of
                             Vega.And ->
                                 Core.ConstructorCase
-                                    left
-                                    Core.boolRepresentation
-                                    [ (0, ([], [], Core.Value Core.falseValue))
-                                    , (1, ([], rightStatements, right))
-                                    ]
+                                    { scrutinee = left
+                                    , scrutineeRepresentation = Core.boolRepresentation
+                                    , cases =
+                                        [ (0, ([], [], Core.Value Core.falseValue))
+                                        , (1, ([], rightStatements, right))
+                                        ]
+                                    , default_ = Nothing
+                                    }
                             Vega.Or ->
                                 Core.ConstructorCase
-                                    left
-                                    Core.boolRepresentation
-                                    [ (0, ([], rightStatements, right))
-                                    , (1, ([], [], Core.Value Core.trueValue))
-                                    ]
+                                    { scrutinee = left
+                                    , scrutineeRepresentation = Core.boolRepresentation
+                                    , cases = [(0, ([], rightStatements, right)), (1, ([], [], Core.Value Core.trueValue))]
+                                    , default_ = Nothing
+                                    }
 
                     pure (leftStatements, expr, Core.boolRepresentation)
             -- Regular operators
@@ -242,6 +245,7 @@ compileExpr expr = do
                         [ (1, ([], thenStatements, thenExpr))
                         , (0, ([], elseStatements, elseExpr))
                         ]
+                    , default_ = Nothing
                     }
                 , thenRepresentation
                 )
@@ -311,7 +315,7 @@ compileExprToValue expr = do
                 , Core.DataConstructorApplication (Core.TupleConstructor (length elementValues)) (fromList elementValues) representation
                 , representation
                 )
-        Vega.BinaryOperator{} -> undefined
+        Vega.BinaryOperator{} -> deferToLet
         Vega.If{} -> deferToLet
         Vega.SequenceBlock{} -> deferToLet
         Vega.Match{} -> deferToLet
@@ -454,7 +458,7 @@ compileCaseTree compileGoal caseTree scrutinees = do
                         Just (joinPointName, _) ->
                             pure ([], Core.JumpJoin joinPointName (fmap (\var -> Core.Var (Core.Local var)) boundValues))
                     _ -> panic $ "Not all scrutinees consumed. Remaining: [" <> intercalateDoc ", " (fmap pretty scrutinees) <> "]"
-            PatternMatching.ConstructorCase{constructors, scrutineeRepresentation} -> do
+            PatternMatching.ConstructorCase{constructors, scrutineeRepresentation, default_} -> do
                 let (scrutinee, rest) = consume scrutinees
                 cases <-
                     fromList <$> for (Map.toList constructors) \(constructor, (argumentRepresentations, subTree)) -> do
@@ -484,8 +488,20 @@ compileCaseTree compileGoal caseTree scrutinees = do
 
                         (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local . snd) locals <> rest) boundValues subTree
                         pure (index, (possiblyBoxedLocals, fold boxingStatements <> subTreeStatements, subTreeExpr))
+                default_ <- for default_ (go rest boundValues)
+
                 scrutineeRepresentation <- convertRepresentation scrutineeRepresentation
-                pure ([], Core.ConstructorCase{scrutinee = scrutinee, scrutineeRepresentation, cases})
+                pure ([], Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases, default_})
+            PatternMatching.IntCase{cases, default_} -> do
+                -- TODO: this currently drops the default
+                let (scrutinee, rest) = consume scrutinees
+                intCases <-
+                    fromList <$> for (Map.toList cases) \(int, subTree) -> do
+                        (subTreeStatements, subTreeExpr) <- go rest boundValues subTree
+                        pure (int, (subTreeStatements, subTreeExpr))
+                default_ <- for default_ (go rest boundValues)
+
+                pure ([], Core.IntCase{scrutinee, intCases, default_})
             PatternMatching.TupleCase count subTree -> do
                 let (scrutinee, rest) = consume scrutinees
                 locals <- Seq.replicateA count newLocal
@@ -701,7 +717,7 @@ coalesceExpr substitution = \case
             ( substitution
             , \substitution -> Core.PureOperator (applySubstInPureOperatorExpr substitution operatorExpr)
             )
-    Core.ConstructorCase scrutinee scrutineeRepresentation cases -> do
+    Core.ConstructorCase scrutinee scrutineeRepresentation cases default_ -> do
         let coalesceCase substitution (parameters, statements, expr) = do
                 (substitution, makeStatements) <- coalesceStatements substitution statements
                 (substitution, makeExpr) <- coalesceExpr substitution expr
@@ -711,11 +727,46 @@ coalesceExpr substitution = \case
                         (fmap (getFinalName substitution) parameters, makeStatements substitution, makeExpr substitution)
                     )
         (substitution, makeCases) <- Util.mapAccumLM coalesceCase substitution cases
+        (substitution, makeDefault) <- case default_ of
+            Nothing -> pure (substitution, \_ -> Nothing)
+            Just body -> do
+                (substitution, makeBody) <- coalesceBody substitution body
+                pure (substitution, \substitution -> Just (makeBody substitution))
+
         pure
             ( substitution
             , \substitution ->
-                Core.ConstructorCase{scrutinee = applySubst substitution scrutinee, scrutineeRepresentation, cases = fmap ($ substitution) makeCases}
+                Core.ConstructorCase
+                    { scrutinee = applySubst substitution scrutinee
+                    , scrutineeRepresentation
+                    , cases = fmap ($ substitution) makeCases
+                    , default_ = makeDefault substitution
+                    }
             )
+    Core.IntCase{scrutinee, intCases, default_} -> do
+        (substitution, makeCases) <- Util.mapAccumLM coalesceBody substitution intCases
+
+        (substitution, makeDefault) <- case default_ of
+            Nothing -> pure (substitution, \_ -> Nothing)
+            Just body -> do
+                (substitution, makeBody) <- coalesceBody substitution body
+                pure (substitution, \substitution -> Just (makeBody substitution))
+
+        pure
+            ( substitution
+            , \substitution ->
+                Core.IntCase
+                    { scrutinee = applySubst substitution scrutinee
+                    , intCases = fmap ($ substitution) makeCases
+                    , default_ = makeDefault substitution
+                    }
+            )
+
+coalesceBody :: Substitution -> (Seq Core.Statement, Core.Expr) -> Eff es (Substitution, Substitution -> (Seq Core.Statement, Core.Expr))
+coalesceBody substitution (statements, expr) = do
+    (substitution, makeStatements) <- coalesceStatements substitution statements
+    (substitution, makeExpr) <- coalesceExpr substitution expr
+    pure (substitution, \substitution -> (makeStatements substitution, makeExpr substitution))
 
 applySubstInPureOperatorExpr :: Substitution -> Core.PureOperatorExpr -> Core.PureOperatorExpr
 applySubstInPureOperatorExpr substitution = \case
