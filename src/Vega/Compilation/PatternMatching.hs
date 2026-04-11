@@ -29,7 +29,7 @@ data CaseTree goal
         { cases :: Map Int (CaseTree goal)
         , default_ :: Maybe (CaseTree goal)
         }
-    | TupleCase Int (CaseTree goal)
+    | TupleCase (Seq Representation) (CaseTree goal)
     | -- Bind a scrutinee to a variable without consuming it
       BindVar {name :: LocalName, representation :: Type, next :: CaseTree goal}
     | -- Consume a scrutinee and unconditionally continue
@@ -116,17 +116,17 @@ merge tree1 tree2 = case (tree1, tree2) of
                 (Nothing, _) -> default2
                 (Just default1, Just default2) -> Just (merge default1 default2)
         IntCase{cases = mergedCases, default_ = mergedDefault}
-    (Ignore ignoreSubTree, TupleCase count tupleSubTree) ->
-        TupleCase count (merge (replicateIgnore count ignoreSubTree) tupleSubTree)
-    (TupleCase count tupleSubTree, Ignore ignoreSubTree) ->
-        TupleCase count (merge tupleSubTree (replicateIgnore count ignoreSubTree))
+    (Ignore ignoreSubTree, TupleCase representations tupleSubTree) ->
+        TupleCase representations (merge (replicateIgnore (length representations) ignoreSubTree) tupleSubTree)
+    (TupleCase representations tupleSubTree, Ignore ignoreSubTree) ->
+        TupleCase representations (merge tupleSubTree (replicateIgnore (length representations) ignoreSubTree))
     (BindVar name1 rep1 subTree1, BindVar name2 rep2 subTree2) -> BindVar name1 rep1 (BindVar name2 rep2 (merge subTree1 subTree2))
     (tree, BindVar name rep subTree) ->
         BindVar name rep (merge tree subTree)
     (BindVar name rep subTree, tree) ->
         BindVar name rep (merge subTree tree)
     (TupleCase count1 subTree1, TupleCase count2 subTree2)
-        | count1 /= count2 -> panic $ "Tuple applied to different numbers of arguments (" <> number count1 <> " vs " <> number count2 <> ")"
+        | length count1 /= length count2 -> panic $ "Tuple applied to different numbers of arguments (" <> number (length count1) <> " vs " <> number (length count2) <> ")"
         | otherwise -> TupleCase count1 (merge subTree1 subTree2)
     (ConstructorCase{}, TupleCase{}) -> invalidMergeCombination tree1 tree2
     (TupleCase{}, ConstructorCase{}) -> invalidMergeCombination tree1 tree2
@@ -173,9 +173,9 @@ compileSinglePattern pattern_ leaf = case pattern_ of
             , constructors = [(constructor, (constructorExt.parameterRepresentations, subTree))]
             , default_ = Nothing
             }
-    TuplePattern _ subPatterns -> do
-        let subTree = serializeSubPatternsWithLeaf subPatterns leaf
-        TupleCase (length subPatterns) subTree
+    TuplePattern{loc = _, tupleSubPatterns} -> do
+        let subTree = serializeSubPatternsWithLeaf (fmap fst tupleSubPatterns) leaf
+        TupleCase (fmap snd tupleSubPatterns) subTree
     RecordPattern{loc = _, fields} -> do
         undefined
     TypePattern _ inner _ -> compileSinglePattern inner leaf
@@ -229,8 +229,8 @@ instance (Pretty goal) => Pretty (CaseTree goal) where
                 <> case default_ of
                     Nothing -> mempty
                     Just defaultTree -> "\n" <> indent 2 (align $ keyword "default" <+> pretty defaultTree)
-        TupleCase count subTree ->
-            keyword "TupleCase" <> lparen "(" <> number count <> rparen ")" <> prettySubTree subTree
+        TupleCase representations subTree ->
+            keyword "TupleCase" <> lparen "(" <> intercalateDoc ", " (fmap pretty representations) <> rparen ")" <> prettySubTree subTree
         Ignore subTree -> keyword "Ignore" <+> prettySubTree subTree
 
 prettySubTree :: (Pretty a) => a -> Doc Ann

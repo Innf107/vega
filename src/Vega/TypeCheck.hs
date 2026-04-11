@@ -359,7 +359,9 @@ checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <>
                     )
 
             (patterns, envTransformers) <- for2 elementPatterns elementTypes \pattern_ type_ -> do
-                checkPattern env type_ pattern_
+                (pattern_, envTrans) <- checkPattern env type_ pattern_
+                representation <- representationOfType loc env type_
+                pure ((pattern_, representation), envTrans)
             pure (TuplePattern loc patterns, Util.compose envTransformers)
         RecordPattern loc fieldPatterns -> do
             fieldTypes <-
@@ -479,11 +481,13 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
                     , resultType
                     , Util.compose envTransformers
                     )
-    TuplePattern{loc, subPatterns} -> do
-        (subPatterns, subPatternTypes, envTransformers) <-
-            unzip3Seq <$> for subPatterns \pattern_ -> do
-                inferPattern env pattern_
-        pure (TuplePattern{loc, subPatterns}, Tuple subPatternTypes, Util.compose envTransformers)
+    TuplePattern{loc, tupleSubPatterns} -> do
+        (tupleSubPatterns, subPatternTypes, envTransformers) <-
+            unzip3Seq <$> for tupleSubPatterns \pattern_ -> do
+                (pattern_, type_, envTrans) <- inferPattern env pattern_
+                representation <- representationOfType loc env type_
+                pure ((pattern_, representation), type_, envTrans)
+        pure (TuplePattern{loc, tupleSubPatterns}, Tuple subPatternTypes, Util.compose envTransformers)
     RecordPattern{loc, fields} -> do
         fieldsWithTypes <- for fields \(fieldName, subPattern) -> do
             (subPattern, type_, envTrans) <- inferPattern env subPattern

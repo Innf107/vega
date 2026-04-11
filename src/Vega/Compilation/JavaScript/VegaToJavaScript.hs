@@ -224,8 +224,8 @@ compileCaseTree compileGoal scrutinees caseTree = go scrutinees caseTree
                     }
                 ]
         IntCase{} -> undefined
-        TupleCase count subTree -> do
-            variables <- Seq.replicateA count (freshVar "t")
+        TupleCase representations subTree -> do
+            variables <- for representations \_ -> freshVar "t"
             let (scrutinee, rest) = consume scrutinees
             subTreeStatements <- go (variables <> rest) subTree
             pure $ JS.DestructureArray variables (JS.Var scrutinee) :<| subTreeStatements

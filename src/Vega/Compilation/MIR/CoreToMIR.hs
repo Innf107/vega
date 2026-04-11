@@ -100,7 +100,7 @@ compileBody block statements returnExpr = case statements of
     Core.Let name representation expr :<| rest -> do
         var <- newVarFromName name
         registerVariable name var representation
-        block <- compileLet block var representation expr
+        block <- compileLet block var expr
         compileBody block rest returnExpr
     Core.LetJoin name parameters statements returnExpr :<| rest -> do
         undefined
@@ -116,8 +116,8 @@ compileBody block statements returnExpr = case statements of
     -}
     Core.LetFunction{} :<| rest -> undefined
 
-compileLet :: (Compile es) => BlockBuilder -> MIR.Variable -> Representation -> Core.Expr -> Eff es BlockBuilder
-compileLet block local representation = \case
+compileLet :: (Compile es) => BlockBuilder -> MIR.Variable -> Core.Expr -> Eff es BlockBuilder
+compileLet block local = \case
     Core.Value value -> do
         (block, target) <- compileValue block value
         addInstruction block (MIR.Identity local target)
@@ -141,15 +141,22 @@ compileLet block local representation = \case
     Core.Lambda parameters statements returnExpr -> do
         let returnRepresentation = undefined returnExpr
         compileLambda block local parameters returnRepresentation statements returnExpr
-    Core.TupleAccess tupleValue index -> do
-        undefined
+    Core.ProductAccess{product, index, resultRepresentation} -> do
+        (block, product) <- compileValue block product
+        addInstruction block $
+            MIR.AccessField
+                { var = local
+                , path = [MIR.ProductFieldPath index]
+                , target = product
+                , fieldRepresentation = resultRepresentation
+                }
     Core.Box value -> do
         (block, mirValue) <- compileValue block value
         block <- addInstruction block (MIR.Box{var = local, target = mirValue})
         pure block
-    Core.Unbox value -> do
+    Core.Unbox {value, innerRepresentation} -> do
         (block, mirValue) <- compileValue block value
-        block <- addInstruction block (MIR.Unbox{var = local, boxedTarget = mirValue, representation})
+        block <- addInstruction block (MIR.Unbox{var = local, boxedTarget = mirValue, representation=innerRepresentation})
         pure block
     Core.PureOperator pureOperator -> do
         (block, _) <- compilePureOperator block (Just local) pureOperator
@@ -159,105 +166,101 @@ compileLet block local representation = \case
     Core.IntCase{} -> undefined
 
 compileReturn :: (Compile es) => BlockBuilder -> Core.Expr -> Eff es ()
-compileReturn block = \case
-    Core.Value value -> do
-        (block, value) <- compileValue block value
-        finish block (MIR.Return value)
-    Core.Application functionName arguments returnRepresentation -> case functionName of
-        Core.Local localName -> do
-            (closure, _) <- getLocal localName
+compileReturn block expr = do
+    let deferToReturn = do
+            var <- newVar "ret"
+            block <- compileLet block var expr
+            finish block (MIR.Return var)
+    case expr of
+        Core.Value value -> do
+            (block, value) <- compileValue block value
+            finish block (MIR.Return value)
+        Core.Application functionName arguments returnRepresentation -> case functionName of
+            Core.Local localName -> do
+                (closure, _) <- getLocal localName
+                (block, arguments) <- compileValues block arguments
+                finish block (MIR.TailCallClosure{closure, arguments, returnRepresentation})
+            Core.Global functionName -> do
+                GraphPersistence.getGlobalRepresentation functionName >>= \case
+                    GlobalVar representation -> do
+                        closure <- newVar "closure"
+                        block <- addInstruction block (MIR.LoadGlobal{var = closure, globalName = functionName, representation})
+                        (block, arguments) <- compileValues block arguments
+                        finish block (TailCallClosure{closure, arguments, returnRepresentation})
+                    GlobalClosure -> do
+                        (block, arguments) <- compileValues block arguments
+                        finish block (TailCallDirect{functionName, arguments, returnRepresentation})
+        Core.JumpJoin joinPoint arguments -> do
             (block, arguments) <- compileValues block arguments
-            finish block (MIR.TailCallClosure{closure, arguments, returnRepresentation})
-        Core.Global functionName -> do
-            GraphPersistence.getGlobalRepresentation functionName >>= \case
-                GlobalVar representation -> do
-                    closure <- newVar "closure"
-                    block <- addInstruction block (MIR.LoadGlobal{var = closure, globalName = functionName, representation})
-                    (block, arguments) <- compileValues block arguments
-                    finish block (TailCallClosure{closure, arguments, returnRepresentation})
-                GlobalClosure -> do
-                    (block, arguments) <- compileValues block arguments
-                    finish block (TailCallDirect{functionName, arguments, returnRepresentation})
-    Core.JumpJoin joinPoint arguments -> do
-        (block, arguments) <- compileValues block arguments
 
-        joinPointBlock <- joinPointBlockFor joinPoint
-        undefined
-    -- finish block (MIR.Jump joinPointBlock arguments)
-    Core.TupleAccess tupleValue index -> do
-        undefined
-    Core.Box value -> do
-        (block, value) <- compileValue block value
-        var <- newVar "box"
-        block <- addInstruction block (MIR.Box{var, target = value})
-        finish block (MIR.Return var)
-    Core.Unbox value -> do
-        (block, value) <- compileValue block value
-        var <- newVar "unbox"
-        block <- addInstruction block (MIR.Unbox{var, boxedTarget = value, representation = undefined})
-        finish block (MIR.Return var)
-    Core.ConstructorCase scrutinee scrutineeRepresentation cases default_ -> do
-        (block, scrutinee) <- compileValue block scrutinee
-        tag <- newVar "tag"
-        block <- addInstruction block (MIR.LoadSumTag tag scrutinee)
+            joinPointBlock <- joinPointBlockFor joinPoint
+            undefined
+        -- finish block (MIR.Jump joinPointBlock arguments)
+        Core.ProductAccess{} -> deferToReturn
+        Core.Box{} -> deferToReturn
+        Core.Unbox{} -> deferToReturn
+        Core.ConstructorCase scrutinee scrutineeRepresentation cases default_ -> do
+            (block, scrutinee) <- compileValue block scrutinee
+            tag <- newVar "tag"
+            block <- addInstruction block (MIR.LoadSumTag tag scrutinee)
 
-        targetBlocks <- for (HashMap.toList cases) \(index, (parameters, bodyStatements, bodyExpr)) -> do
-            targetBlockBuilder <- newBlock (MkPhis mempty)
-            let targetBlockDescriptor = targetBlockBuilder.descriptor
+            targetBlocks <- for (HashMap.toList cases) \(index, (parameters, bodyStatements, bodyExpr)) -> do
+                targetBlockBuilder <- newBlock (MkPhis mempty)
+                let targetBlockDescriptor = targetBlockBuilder.descriptor
 
-            targetBlockBuilder <- execState targetBlockBuilder $ forIndexed_ parameters \name productIndex -> do
-                targetBlockBuilder <- get
-                parameterVariable <- newVarFromName name
+                targetBlockBuilder <- execState targetBlockBuilder $ forIndexed_ parameters \name productIndex -> do
+                    targetBlockBuilder <- get
+                    parameterVariable <- newVarFromName name
 
-                let path = [MIR.SumConstructorPath index, MIR.ProductFieldPath productIndex]
-                let fieldRepresentation = MIR.representationAtPath scrutineeRepresentation path
-                registerVariable name parameterVariable fieldRepresentation
-                targetBlockBuilder <-
-                    addInstruction
-                        targetBlockBuilder
-                        ( MIR.AccessField
-                            { var = parameterVariable
-                            , path
-                            , target = scrutinee
-                            , fieldRepresentation
-                            }
-                        )
-                put targetBlockBuilder
+                    let path = [MIR.SumConstructorPath index, MIR.ProductFieldPath productIndex]
+                    let fieldRepresentation = MIR.representationAtPath scrutineeRepresentation path
+                    registerVariable name parameterVariable fieldRepresentation
+                    targetBlockBuilder <-
+                        addInstruction
+                            targetBlockBuilder
+                            ( MIR.AccessField
+                                { var = parameterVariable
+                                , path
+                                , target = scrutinee
+                                , fieldRepresentation
+                                }
+                            )
+                    put targetBlockBuilder
 
-            compileBody targetBlockBuilder bodyStatements bodyExpr
+                compileBody targetBlockBuilder bodyStatements bodyExpr
 
-            pure (index, targetBlockDescriptor)
+                pure (index, targetBlockDescriptor)
 
-        defaultBlock <- for default_ \(defaultStatements, defaultExpr) -> do
-            defaultBlockBuilder <- newBlock (MkPhis mempty)
-            let defaultBlockDescriptor = defaultBlockBuilder.descriptor
-            compileBody defaultBlockBuilder defaultStatements defaultExpr
-            pure defaultBlockDescriptor
+            defaultBlock <- for default_ \(defaultStatements, defaultExpr) -> do
+                defaultBlockBuilder <- newBlock (MkPhis mempty)
+                let defaultBlockDescriptor = defaultBlockBuilder.descriptor
+                compileBody defaultBlockBuilder defaultStatements defaultExpr
+                pure defaultBlockDescriptor
 
-        finish block (MIR.SwitchInt{var = tag, cases = fromList targetBlocks, default_ = defaultBlock})
-    Core.IntCase{scrutinee, intCases, default_} -> do
-        (block, scrutinee) <- compileValue block scrutinee
-        targets <- for (HashMap.toList intCases) \(int, (statements, expr)) -> do
-            targetBlockBuilder <- newBlock (MkPhis mempty)
-            let targetBlockDescriptor = targetBlockBuilder.descriptor
-            compileBody targetBlockBuilder statements expr
-            pure (int, targetBlockDescriptor)
-        defaultBlock <- for default_ \(defaultStatements, defaultExpr) -> do
-            defaultBlockBuilder <- newBlock (MkPhis mempty)
-            let defaultBlockDescriptor = defaultBlockBuilder.descriptor
-            compileBody defaultBlockBuilder defaultStatements defaultExpr
-            pure defaultBlockDescriptor
-        finish block (MIR.SwitchInt{var = scrutinee, cases = fromList targets, default_=defaultBlock})
-    Core.Lambda parameters statements returnExpr -> do
-        lambdaName <- undefined
-        let returnRepresentation = undefined returnExpr
-        lambdaDeclarations <- compileFunction lambdaName parameters returnRepresentation statements returnExpr
-        registerAdditionalDeclarations lambdaDeclarations
-        let value = undefined
-        finish block (MIR.Return value)
-    Core.PureOperator pureOperator -> do
-        (block, var) <- compilePureOperator block Nothing pureOperator
-        finish block (MIR.Return var)
+            finish block (MIR.SwitchInt{var = tag, cases = fromList targetBlocks, default_ = defaultBlock})
+        Core.IntCase{scrutinee, intCases, default_} -> do
+            (block, scrutinee) <- compileValue block scrutinee
+            targets <- for (HashMap.toList intCases) \(int, (statements, expr)) -> do
+                targetBlockBuilder <- newBlock (MkPhis mempty)
+                let targetBlockDescriptor = targetBlockBuilder.descriptor
+                compileBody targetBlockBuilder statements expr
+                pure (int, targetBlockDescriptor)
+            defaultBlock <- for default_ \(defaultStatements, defaultExpr) -> do
+                defaultBlockBuilder <- newBlock (MkPhis mempty)
+                let defaultBlockDescriptor = defaultBlockBuilder.descriptor
+                compileBody defaultBlockBuilder defaultStatements defaultExpr
+                pure defaultBlockDescriptor
+            finish block (MIR.SwitchInt{var = scrutinee, cases = fromList targets, default_ = defaultBlock})
+        Core.Lambda parameters statements returnExpr -> do
+            lambdaName <- undefined
+            let returnRepresentation = undefined returnExpr
+            lambdaDeclarations <- compileFunction lambdaName parameters returnRepresentation statements returnExpr
+            registerAdditionalDeclarations lambdaDeclarations
+            let value = undefined
+            finish block (MIR.Return value)
+        Core.PureOperator pureOperator -> do
+            (block, var) <- compilePureOperator block Nothing pureOperator
+            finish block (MIR.Return var)
 
 compilePureOperator :: (Compile es) => BlockBuilder -> Maybe MIR.Variable -> Core.PureOperatorExpr -> Eff es (BlockBuilder, MIR.Variable)
 compilePureOperator block var = \case

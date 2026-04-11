@@ -151,6 +151,11 @@ type family XRepresentation p where
     XRepresentation Renamed = ()
     XRepresentation Typed = Type
 
+type family XWithRepresentation p a where
+    XWithRepresentation Parsed a = a
+    XWithRepresentation Renamed a = a
+    XWithRepresentation Typed a = (a, Type)
+
 data Expr p
     = Var {loc :: Loc, representation :: XRepresentation p, name :: XName p}
     | DataConstructor
@@ -281,7 +286,7 @@ data Pattern p
         }
     | TuplePattern
         { loc :: Loc
-        , subPatterns :: Seq (Pattern p)
+        , tupleSubPatterns :: Seq (XWithRepresentation p (Pattern p))
         }
     | RecordPattern
         { loc :: Loc
@@ -301,6 +306,11 @@ type family XConstructorPattern p where
     XConstructorPattern Parsed = ()
     XConstructorPattern Renamed = ()
     XConstructorPattern Typed = TypedConstructorPatternExt
+
+type family XTuplePattern p where
+    XTuplePattern Parsed = ()
+    XTuplePattern Renamed = ()
+    XTuplePattern Typed = Seq Type -- Parameter representations
 
 data TypedConstructorPatternExt = MkTypedConstructorPatternExt
     { parameterRepresentations :: Seq Type

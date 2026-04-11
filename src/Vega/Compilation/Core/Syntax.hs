@@ -37,9 +37,9 @@ data Expr
     | -- INVARIANT: JumpJoin never occurs in a let
       JumpJoin LocalCoreName (Seq Value)
     | Lambda (Seq (LocalCoreName, Representation)) (Seq Statement) Expr
-    | TupleAccess Value Int
+    | ProductAccess {product :: Value, index :: Int, resultRepresentation :: Representation}
     | Box Value
-    | Unbox Value
+    | Unbox {value :: Value, innerRepresentation :: Representation} 
     | PureOperator PureOperatorExpr
     | ConstructorCase
         { scrutinee :: Value
@@ -159,10 +159,10 @@ instance Pretty Expr where
         Application funValue argValues representation -> pretty funValue <> arguments argValues <+> keyword ":" <+> pretty representation
         JumpJoin name jumpArguments -> keyword "join" <+> pretty name <> arguments jumpArguments
         Lambda parameters bodyStatements bodyExpr -> keyword "\\" <> typedParameters parameters <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
-        TupleAccess tupleValue index -> do
-            pretty tupleValue <> lparen "[" <> number index <> rparen "]"
+        ProductAccess tupleValue index returnRepresentation -> do
+            pretty tupleValue <> lparen "[" <> number index <> rparen "]" <+> keyword ":" <+> pretty returnRepresentation
         Box value -> keyword "box" <+> pretty value
-        Unbox value -> keyword "unbox" <+> pretty value
+        Unbox {value, innerRepresentation} -> keyword "unbox" <+> pretty value <+> keyword ":" <+> pretty innerRepresentation
         ConstructorCase scrutinee representation cases default_ -> do
             let prettyCase (constructor, (locals, bodyStatements, bodyExpr)) =
                     lparen "[" <> number constructor <> rparen "]" <+> arguments locals <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
@@ -188,7 +188,8 @@ instance Pretty Expr where
                         Nothing -> mempty
                         Just (statements, expr) ->
                             ( indent 2 $
-                                align $ keyword "_" <+> keyword "->" <+> prettyBody statements expr
+                                align $
+                                    keyword "_" <+> keyword "->" <+> prettyBody statements expr
                             )
                                 <> "\n"
                    )

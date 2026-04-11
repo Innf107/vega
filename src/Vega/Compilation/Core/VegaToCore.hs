@@ -482,7 +482,15 @@ compileCaseTree compileGoal caseTree scrutinees = do
                                     then do
                                         representation <- convertRepresentation vegaRepresentation
                                         boxedLocal <- newLocal
-                                        pure (boxedLocal, [Core.Let local representation (Core.Unbox (Core.Var (Core.Local boxedLocal)))])
+                                        pure
+                                            ( boxedLocal
+                                            ,
+                                                [ Core.Let
+                                                    local
+                                                    representation
+                                                    (Core.Unbox{value = Core.Var (Core.Local boxedLocal), innerRepresentation = representation})
+                                                ]
+                                            )
                                     else
                                         pure (local, [])
 
@@ -502,12 +510,15 @@ compileCaseTree compileGoal caseTree scrutinees = do
                 default_ <- for default_ (go rest boundValues)
 
                 pure ([], Core.IntCase{scrutinee, intCases, default_})
-            PatternMatching.TupleCase count subTree -> do
+            PatternMatching.TupleCase representations subTree -> do
                 let (scrutinee, rest) = consume scrutinees
-                locals <- Seq.replicateA count newLocal
-                let accessStatements = Seq.mapWithIndex (\i local -> Core.Let local undefined (Core.TupleAccess scrutinee i)) locals
+                localsWithReps <- for representations \representation -> do
+                    local <- newLocal
+                    rep <- convertRepresentation representation
+                    pure (local, rep)
+                let accessStatements = Seq.mapWithIndex (\i (local, rep) -> Core.Let local rep (Core.ProductAccess scrutinee i rep)) localsWithReps
 
-                (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local) locals <> rest) boundValues subTree
+                (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local . fst) localsWithReps <> rest) boundValues subTree
                 pure (accessStatements <> subTreeStatements, subTreeExpr)
             PatternMatching.BindVar name vegaRepresentation subTree -> do
                 let (scrutinee, _) = consume scrutinees
@@ -709,9 +720,11 @@ coalesceExpr substitution = \case
                     (makeStatements substitution)
                     (makeExpr substitution)
             )
-    Core.TupleAccess value index -> pure (substitution, \substitution -> Core.TupleAccess (applySubst substitution value) index)
+    Core.ProductAccess{product, index, resultRepresentation} ->
+        pure (substitution, \substitution -> Core.ProductAccess{product = applySubst substitution product, index, resultRepresentation})
     Core.Box value -> pure (substitution, \substitution -> Core.Box (applySubst substitution value))
-    Core.Unbox value -> pure (substitution, \substitution -> Core.Unbox (applySubst substitution value))
+    Core.Unbox{value, innerRepresentation} ->
+        pure (substitution, \substitution -> Core.Unbox{value = applySubst substitution value, innerRepresentation})
     Core.PureOperator operatorExpr ->
         pure
             ( substitution

@@ -281,6 +281,10 @@ compileBackend = do
             llvmModule <- MIRToLLVM.compile mirProgram
             debugEmit llvmModule
 
+            initializationError <- LLVM.initializeNativeTarget
+            when initializationError do
+                panic "Unable to initialize native target in LLVM"
+            
             undefined
         _ -> undefined
 
