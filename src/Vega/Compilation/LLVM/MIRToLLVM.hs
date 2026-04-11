@@ -335,10 +335,27 @@ compileInstruction builder = \case
         tagPointer <- buildGEPOffset builder sumValue (Layout.sumTagOffset sumLayout) "tagptr"
         asVar_ var tagLayout $ LLVMBuilder.buildLoad builder (Layout.llvmType tagLayout) tagPointer
     MIR.CallDirect{var, functionName, arguments, returnRepresentation} -> do
-        (argumentValues, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
+        (argumentValueSeq, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
+        let argumentValues = viaList argumentValueSeq
         returnLayout <- Layout.representationLayout returnRepresentation
 
-        asVar_ var returnLayout $ buildDirectCall builder functionName (viaList argumentValues) argumentLayouts returnLayout LLVM.TailCallKindNone
+        function <-
+            LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
+                Nothing -> panic $ "Trying to generate call to non-existent function" <> pretty (Core.Global functionName)
+                Just function -> pure function
+
+        (functionType, _) <- functionLLVMType argumentLayouts returnLayout
+
+        callInstr <- case Layout.kind returnLayout of
+            Layout.ZeroSized -> do
+                insertVarMapping var zeroSizedDummyValue returnLayout
+                buildCallWithAttributes builder functionType function argumentValues ""
+            Layout.LLVMScalar _ -> asVar var returnLayout $ buildCallWithAttributes builder functionType function argumentValues
+            Layout.AggregatePointer -> do
+                returnPointer <- asVar var returnLayout $ buildLayoutAlloca builder returnLayout
+                -- The sret parameter is always the first parameter
+                buildCallWithAttributes builder functionType function ([returnPointer] <> argumentValues) ""
+        LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
     MIR.CallClosure{var, closure, arguments, returnRepresentation} -> do
         (closureValue, closureLayout) <- lookupVar closure
         let (functionPointerOffset, _functionPointerLayout) = Layout.productOffsetAndLayout 0 closureLayout
@@ -423,57 +440,34 @@ compileTerminator builder = \case
         _ <- LLVMBuilder.buildSwitch builder scrutineeValue cases defaultBlock
         pure ()
     MIR.TailCallDirect{functionName, arguments, returnRepresentation} -> do
-        (argumentValues, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
+        (argumentValueSeq, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
+        let argumentValues = viaList argumentValueSeq
         returnLayout <- Layout.representationLayout returnRepresentation
 
-        result <- buildDirectCall builder functionName (viaList argumentValues) argumentLayouts returnLayout LLVM.TailCallKindTail "ret"
-        _ <- LLVMBuilder.buildRet builder result
-        pure ()
+        function <-
+            LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
+                Nothing -> panic $ "Trying to generate call to non-existent function" <> pretty (Core.Global functionName)
+                Just function -> pure function
+
+        (functionType, _) <- functionLLVMType argumentLayouts returnLayout
+
+        callInstr <- case Layout.kind returnLayout of
+            Layout.ZeroSized -> do
+                _ <- buildCallWithAttributes builder functionType function argumentValues ""
+                LLVMBuilder.buildRetVoid builder
+            Layout.LLVMScalar _ -> do
+                result <- buildCallWithAttributes builder functionType function argumentValues "ret"
+                LLVMBuilder.buildRet builder result
+            Layout.AggregatePointer -> do
+                let sretPointer = case ?functionEnv.sretVariable of
+                        Nothing -> panic "Trying to return AggregatePointer from function without sret variable"
+                        Just (variable, _) -> variable
+
+                _ <- buildCallWithAttributes builder functionType function ([sretPointer] <> argumentValues) ""
+                LLVMBuilder.buildRetVoid builder
+        LLVM.setTailCallKind callInstr LLVM.TailCallKindNone
+        LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
     _ -> undefined
-
-compileArithmeticOperator :: Compile es => LLVMBuilder.Builder -> MIR.ArithmeticExpr -> Text -> Eff es (LLVM.Value, Layout)
-compileArithmeticOperator builder arithmeticExpr varName = case arithmeticExpr of
-    MIR.Add var1 var2 -> do
-        arg1 <- lookupVarValue var1
-        arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildAdd builder arg1 arg2 varName
-        pure (result, Layout.intLayout)
-    MIR.Subtract var1 var2 -> do
-        arg1 <- lookupVarValue var1
-        arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildSub builder arg1 arg2 varName
-        pure (result, Layout.intLayout)
-    MIR.Multiply var1 var2 -> do
-        arg1 <- lookupVarValue var1
-        arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildMul builder arg1 arg2 varName
-        pure (result, Layout.intLayout)
-    MIR.Divide var1 var2 -> do
-        arg1 <- lookupVarValue var1
-        arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildSDiv builder arg1 arg2 varName
-        pure (result, Layout.intLayout)
-    MIR.Less var1 var2 -> do
-        arg1 <- lookupVarValue var1
-        arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildICmp builder LLVM.IntSLT arg1 arg2 varName
-        pure (result, Layout.boolLayout)
-    MIR.LessEqual var1 var2 -> do
-        arg1 <- lookupVarValue var1
-        arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildICmp builder LLVM.IntSLE arg1 arg2 varName
-        pure (result, Layout.boolLayout)
-    MIR.Equal var1 var2 -> do
-        arg1 <- lookupVarValue var1
-        arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildICmp builder LLVM.IntEQ arg1 arg2 varName
-        pure (result, Layout.boolLayout)
-    MIR.NotEqual var1 var2 -> do
-        arg1 <- lookupVarValue var1
-        arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildICmp builder LLVM.IntNE arg1 arg2 varName
-        pure (result, Layout.boolLayout)
-
 
 
 getOrCreateLayoutInfoTablePointer :: (Compile es) => Layout -> Eff es LLVM.Value
@@ -500,31 +494,6 @@ getOrCreateLayoutInfoTablePointer layout = do
             LLVM.setInitializer llvmInfoTableGlobal infoTableConstant
             pure (LLVM.globalAsValue llvmInfoTableGlobal)
 
-buildDirectCall :: (Compile es) => LLVMBuilder.Builder -> Vega.GlobalName -> Storable.Vector LLVM.Value -> Seq Layout -> Layout -> LLVM.TailCallKind -> Text -> Eff es LLVM.Value
-buildDirectCall builder functionName arguments argumentLayouts returnLayout tailCallKind varName = do
-    function <-
-        LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
-            Nothing -> panic $ "Trying to generate call to non-existent function" <> pretty (Core.Global functionName)
-            Just function -> pure function
-
-    (functionType, _) <- functionLLVMType argumentLayouts returnLayout
-
-    (returnValue, callInstr) <- case Layout.kind returnLayout of
-        Layout.ZeroSized -> do
-            callInstr <- buildCallWithAttributes builder functionType function arguments ""
-            pure (zeroSizedDummyValue, callInstr)
-        Layout.LLVMScalar _ -> do
-            callInstr <- buildCallWithAttributes builder functionType function arguments varName
-            pure (callInstr, callInstr)
-        Layout.AggregatePointer -> do
-            -- TODO: this doesn't actually work for tail calls (it's probably unsound even oops)
-            returnPointer <- buildLayoutAlloca builder returnLayout varName
-            -- The sret parameter is always the first parameter
-            callInstr <- buildCallWithAttributes builder functionType function ([returnPointer] <> arguments) ""
-            pure (returnPointer, callInstr)
-    LLVM.setTailCallKind callInstr tailCallKind
-    LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
-    pure returnValue
 
 buildRuntimeCall ::
     (Compile es) =>
@@ -692,6 +661,49 @@ use this dummy value that will be very visible if it does end up in the generate
 -}
 zeroSizedDummyValue :: (?context :: LLVM.Context) => LLVM.Value
 zeroSizedDummyValue = LLVM.constString "USE_OF_ZERO_SIZED_VALUE" LLVM.Don'tNullTerminate
+
+compileArithmeticOperator :: Compile es => LLVMBuilder.Builder -> MIR.ArithmeticExpr -> Text -> Eff es (LLVM.Value, Layout)
+compileArithmeticOperator builder arithmeticExpr varName = case arithmeticExpr of
+    MIR.Add var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildAdd builder arg1 arg2 varName
+        pure (result, Layout.intLayout)
+    MIR.Subtract var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildSub builder arg1 arg2 varName
+        pure (result, Layout.intLayout)
+    MIR.Multiply var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildMul builder arg1 arg2 varName
+        pure (result, Layout.intLayout)
+    MIR.Divide var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildSDiv builder arg1 arg2 varName
+        pure (result, Layout.intLayout)
+    MIR.Less var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildICmp builder LLVM.IntSLT arg1 arg2 varName
+        pure (result, Layout.boolLayout)
+    MIR.LessEqual var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildICmp builder LLVM.IntSLE arg1 arg2 varName
+        pure (result, Layout.boolLayout)
+    MIR.Equal var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildICmp builder LLVM.IntEQ arg1 arg2 varName
+        pure (result, Layout.boolLayout)
+    MIR.NotEqual var1 var2 -> do
+        arg1 <- lookupVarValue var1
+        arg2 <- lookupVarValue var2
+        result <- LLVMBuilder.buildICmp builder LLVM.IntNE arg1 arg2 varName
+        pure (result, Layout.boolLayout)
 
 {- NOTE [Closure Representation]:
 Closures with payload representation `r` are *always* represented as products (FunctionPointer * r).
