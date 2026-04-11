@@ -188,7 +188,7 @@ instance Pretty Expr where
                         Nothing -> mempty
                         Just (statements, expr) ->
                             ( indent 2 $
-                                align $ keyword "default" <+> keyword "->" <+> prettyBody statements expr
+                                align $ keyword "_" <+> keyword "->" <+> prettyBody statements expr
                             )
                                 <> "\n"
                    )

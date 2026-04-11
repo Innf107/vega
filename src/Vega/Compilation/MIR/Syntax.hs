@@ -201,7 +201,7 @@ instance Pretty Terminator where
                 <> "\n"
                 <> ( case default_ of
                         Nothing -> mempty
-                        Just defaultBlock -> keyword "default" <+> keyword "->" <+> pretty defaultBlock
+                        Just defaultBlock -> "  " <> keyword "_" <+> keyword "->" <+> pretty defaultBlock <> "\n"
                    )
                 <> rparen "]"
         TailCallDirect functionName callArguments returnRepresentation ->
