@@ -614,7 +614,8 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
                 (pattern_, envTrans) <- checkPattern env scrutineeType pattern_
                 body <- check (envTrans env) ambientEffect expectedType body
                 pure (MkMatchCase{loc, pattern_, body})
-            pure (Match{loc, scrutinee, cases})
+            returnRepresentation <- representationOfType loc env expectedType
+            pure (Match{loc, scrutinee, cases, returnRepresentation})
 
 infer :: (TypeCheck es) => Env -> Effect -> Expr Renamed -> Eff es (Type, Expr Typed)
 infer env ambientEffect expr = do
@@ -733,7 +734,9 @@ infer env ambientEffect expr = do
                 (pattern_, envTrans) <- checkPattern env scrutineeType pattern_
                 body <- check (envTrans env) ambientEffect resultType body
                 pure (MkMatchCase{loc, pattern_, body})
-            pure (resultType, Match{loc, scrutinee, cases})
+
+            returnRepresentation <- representationOfType loc env resultType
+            pure (resultType, Match{loc, scrutinee, cases, returnRepresentation})
 
 checkStatements :: (TypeCheck es) => Env -> Effect -> Seq (Statement Renamed) -> Eff es (Env, Seq (Statement Typed))
 checkStatements env ambientEffect statements = mapAccumLM (\env -> checkStatement env ambientEffect) env statements

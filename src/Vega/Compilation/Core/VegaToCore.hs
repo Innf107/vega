@@ -250,9 +250,10 @@ compileExpr expr = do
                 , thenRepresentation
                 )
         Vega.SequenceBlock{statements} -> compileStatements statements
-        Vega.Match{scrutinee, cases} -> do
+        Vega.Match{scrutinee, cases, returnRepresentation} -> do
             (statements, returnExpr) <- compilePatternMatch scrutinee (fmap (\Vega.MkMatchCase{pattern_, body} -> (pattern_, body)) cases)
-            pure (statements, returnExpr, undefined)
+            returnRepresentation <- convertRepresentation returnRepresentation
+            pure (statements, returnExpr, returnRepresentation)
 
 -- | Like 'compileExprToValue' but discards the representation
 compileExprToValue_ :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Value)

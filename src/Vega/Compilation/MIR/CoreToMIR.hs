@@ -5,6 +5,7 @@ import Relude hiding (State, execState, get, modify, put, runState)
 
 import Effectful.State.Static.Local (State, execState, get, modify, put, runState)
 
+import Control.Exception qualified as Assert
 import Data.Foldable (foldrM)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
@@ -81,7 +82,7 @@ compileFunction functionName parameters returnRepresentation statements returnEx
             registerVariable parameterName var representation
             pure (var, representation)
 
-        initialBlock <- newBlock (MkPhis mempty)
+        initialBlock <- newBlock
         compileBody initialBlock statements returnExpr
         pure (initialBlock.descriptor, mirParameters)
     let declaration =
@@ -95,13 +96,16 @@ compileFunction functionName parameters returnRepresentation statements returnEx
     pure $ [declaration] <> finalDeclarationState.additionalDeclarations
 
 compileBody :: (Compile es) => BlockBuilder -> Seq Core.Statement -> Core.Expr -> Eff es ()
-compileBody block statements returnExpr = case statements of
-    Empty -> compileReturn block returnExpr
+compileBody block statements returnExpr = compileBodyWith compileReturn block statements returnExpr
+
+compileBodyWith :: (Compile es) => (BlockBuilder -> Core.Expr -> Eff es a) -> BlockBuilder -> Seq Core.Statement -> Core.Expr -> Eff es a
+compileBodyWith onReturn block statements returnExpr = case statements of
+    Empty -> onReturn block returnExpr
     Core.Let name representation expr :<| rest -> do
         var <- newVarFromName name
         registerVariable name var representation
-        block <- compileLet block var expr
-        compileBody block rest returnExpr
+        block <- compileLet block var representation expr
+        compileBodyWith onReturn block rest returnExpr
     Core.LetJoin name parameters statements returnExpr :<| rest -> do
         undefined
     {-
@@ -116,8 +120,8 @@ compileBody block statements returnExpr = case statements of
     -}
     Core.LetFunction{} :<| rest -> undefined
 
-compileLet :: (Compile es) => BlockBuilder -> MIR.Variable -> Core.Expr -> Eff es BlockBuilder
-compileLet block local = \case
+compileLet :: (Compile es) => BlockBuilder -> MIR.Variable -> Representation -> Core.Expr -> Eff es BlockBuilder
+compileLet block local representation = \case
     Core.Value value -> do
         (block, target) <- compileValue block value
         addInstruction block (MIR.Identity local target)
@@ -154,22 +158,78 @@ compileLet block local = \case
         (block, mirValue) <- compileValue block value
         block <- addInstruction block (MIR.Box{var = local, target = mirValue})
         pure block
-    Core.Unbox {value, innerRepresentation} -> do
+    Core.Unbox{value, innerRepresentation} -> do
         (block, mirValue) <- compileValue block value
-        block <- addInstruction block (MIR.Unbox{var = local, boxedTarget = mirValue, representation=innerRepresentation})
+        block <- addInstruction block (MIR.Unbox{var = local, boxedTarget = mirValue, representation = innerRepresentation})
         pure block
     Core.PureOperator pureOperator -> do
         (block, _) <- compilePureOperator block (Just local) pureOperator
         pure block
-    Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases} -> do
-        undefined
+    Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases, default_} -> do
+        (block, scrutinee) <- compileValue block scrutinee
+
+        continuationBlock <- newBlock
+        let continuationDescriptor = continuationBlock.descriptor
+
+        cases <- for (HashMap.toList cases) \(index, (parameters, bodyStatements, bodyExpr)) -> do
+            targetBlockBuilder <- newBlock
+            let targetBlockDescriptor = targetBlockBuilder.descriptor
+            targetBlockBuilder <- execState targetBlockBuilder $ forIndexed_ parameters \name productIndex -> do
+                targetBlockBuilder <- get
+                parameterVariable <- newVarFromName name
+
+                let path = [MIR.SumConstructorPath index, MIR.ProductFieldPath productIndex]
+                let fieldRepresentation = MIR.representationAtPath scrutineeRepresentation path
+                registerVariable name parameterVariable fieldRepresentation
+                targetBlockBuilder <-
+                    addInstruction
+                        targetBlockBuilder
+                        ( MIR.AccessField
+                            { var = parameterVariable
+                            , path
+                            , target = scrutinee
+                            , fieldRepresentation
+                            }
+                        )
+                put targetBlockBuilder
+
+            joinVar <- newVar "join"
+            targetBlockBuilder <- compileBodyWith (\block expr -> compileLet block joinVar representation expr) targetBlockBuilder bodyStatements bodyExpr
+
+            finish targetBlockBuilder (MIR.Jump continuationDescriptor)
+
+            pure (index, targetBlockDescriptor, joinVar)
+
+        default_ <- case default_ of
+            Nothing -> pure Nothing
+            Just (statements, expr) -> do
+                targetBlockBuilder <- newBlock
+                let targetBlockDescriptor = targetBlockBuilder.descriptor
+                joinVar <- newVar "join"
+                targetBlockBuilder <- compileBodyWith (\block expr -> compileLet block joinVar representation expr) targetBlockBuilder statements expr
+
+                finish targetBlockBuilder (MIR.Jump continuationDescriptor)
+                pure $ Just (targetBlockDescriptor, joinVar)
+
+        tagVar <- newVar "tag"
+        block <- addInstruction block (MIR.LoadSumTag{var = tagVar, sum = scrutinee})
+        finish
+            block
+            ( MIR.SwitchInt
+                tagVar
+                (fromList (fmap (\(index, block, _) -> (index, block)) cases))
+                (fmap fst default_)
+            )
+
+        let phis = MkPhis [(local, (representation, fromList (fmap (\(_index, block, joinVar) -> (block, joinVar)) cases)))]
+        addPhis phis continuationBlock
     Core.IntCase{} -> undefined
 
 compileReturn :: (Compile es) => BlockBuilder -> Core.Expr -> Eff es ()
 compileReturn block expr = do
-    let deferToReturn = do
+    let deferToReturn representation = do
             var <- newVar "ret"
-            block <- compileLet block var expr
+            block <- compileLet block var representation expr
             finish block (MIR.Return var)
     case expr of
         Core.Value value -> do
@@ -196,16 +256,16 @@ compileReturn block expr = do
             joinPointBlock <- joinPointBlockFor joinPoint
             undefined
         -- finish block (MIR.Jump joinPointBlock arguments)
-        Core.ProductAccess{} -> deferToReturn
-        Core.Box{} -> deferToReturn
-        Core.Unbox{} -> deferToReturn
+        Core.ProductAccess{resultRepresentation} -> deferToReturn resultRepresentation
+        Core.Box{} -> deferToReturn (Core.PrimitiveRep Vega.BoxedRep)
+        Core.Unbox{innerRepresentation} -> deferToReturn innerRepresentation
         Core.ConstructorCase scrutinee scrutineeRepresentation cases default_ -> do
             (block, scrutinee) <- compileValue block scrutinee
             tag <- newVar "tag"
             block <- addInstruction block (MIR.LoadSumTag tag scrutinee)
 
             targetBlocks <- for (HashMap.toList cases) \(index, (parameters, bodyStatements, bodyExpr)) -> do
-                targetBlockBuilder <- newBlock (MkPhis mempty)
+                targetBlockBuilder <- newBlock
                 let targetBlockDescriptor = targetBlockBuilder.descriptor
 
                 targetBlockBuilder <- execState targetBlockBuilder $ forIndexed_ parameters \name productIndex -> do
@@ -232,7 +292,7 @@ compileReturn block expr = do
                 pure (index, targetBlockDescriptor)
 
             defaultBlock <- for default_ \(defaultStatements, defaultExpr) -> do
-                defaultBlockBuilder <- newBlock (MkPhis mempty)
+                defaultBlockBuilder <- newBlock
                 let defaultBlockDescriptor = defaultBlockBuilder.descriptor
                 compileBody defaultBlockBuilder defaultStatements defaultExpr
                 pure defaultBlockDescriptor
@@ -241,12 +301,12 @@ compileReturn block expr = do
         Core.IntCase{scrutinee, intCases, default_} -> do
             (block, scrutinee) <- compileValue block scrutinee
             targets <- for (HashMap.toList intCases) \(int, (statements, expr)) -> do
-                targetBlockBuilder <- newBlock (MkPhis mempty)
+                targetBlockBuilder <- newBlock
                 let targetBlockDescriptor = targetBlockBuilder.descriptor
                 compileBody targetBlockBuilder statements expr
                 pure (int, targetBlockDescriptor)
             defaultBlock <- for default_ \(defaultStatements, defaultExpr) -> do
-                defaultBlockBuilder <- newBlock (MkPhis mempty)
+                defaultBlockBuilder <- newBlock
                 let defaultBlockDescriptor = defaultBlockBuilder.descriptor
                 compileBody defaultBlockBuilder defaultStatements defaultExpr
                 pure defaultBlockDescriptor
@@ -382,10 +442,24 @@ data BlockBuilder = MkBlockBuilder
     , phis :: MIR.Phis
     }
 
-newBlock :: (Compile es) => MIR.Phis -> Eff es BlockBuilder
-newBlock phis = do
+newBlock :: (Compile es) => Eff es BlockBuilder
+newBlock = do
     descriptor <- MIR.MkBlockDescriptor <$> newUnique
-    pure MkBlockBuilder{descriptor, instructions = [], phis}
+    pure MkBlockBuilder{descriptor, instructions = [], phis = MkPhis mempty}
+
+addPhis :: (Compile es) => MIR.Phis -> BlockBuilder -> Eff es BlockBuilder
+addPhis phis block = do
+    pure $ block{phis = mergePhis block.phis phis}
+
+mergePhis :: MIR.Phis -> MIR.Phis -> MIR.Phis
+mergePhis (MkPhis left) (MkPhis right) = do
+    let combineVars var blockDescriptor value1 value2
+            | value1 == value2 = value1
+            | otherwise = panic $ "Conflicting phi definitons for " <> pretty var <> " from " <> pretty blockDescriptor <> ". " <> pretty value1 <> " vs " <> pretty value2
+    let combineBlocks var (rep1, map1) (rep2, map2) = Assert.assert (rep1 == rep2) do
+            let map = HashMap.unionWithKey (combineVars var) map1 map2
+            (rep1, map)
+    MkPhis $ HashMap.unionWithKey combineBlocks left right
 
 -- The f only exists to allow shadowing the builder.
 -- If you need this in a pure context, just instantiate it with Identity

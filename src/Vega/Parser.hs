@@ -637,7 +637,7 @@ expr = label "expression" exprLogical
                 _ <- single LBrace
                 cases <- fromList <$> matchCase `sepEndBy` semicolon
                 endLoc <- single RBrace
-                pure (Syntax.Match{loc = startLoc <> endLoc, scrutinee, cases})
+                pure (Syntax.Match{loc = startLoc <> endLoc, scrutinee, cases, returnRepresentation=()})
             ]
 
 blockOrRecord :: Parser (Expr Parsed)

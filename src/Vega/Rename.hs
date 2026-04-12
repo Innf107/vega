@@ -422,10 +422,10 @@ renameExpr env = \case
                 env
                 statements
         pure (SequenceBlock{loc, statements})
-    Match{loc, scrutinee, cases} -> do
+    Match{loc, scrutinee, cases, returnRepresentation} -> do
         scrutinee <- renameExpr env scrutinee
         cases <- traverse (renameMatchCase env) cases
-        pure (Match{loc, scrutinee, cases})
+        pure (Match{loc, scrutinee, cases, returnRepresentation})
 
 renameStatement :: (Rename es) => Env -> Statement Parsed -> Eff es (Statement Renamed, Env -> Env)
 renameStatement env = \case

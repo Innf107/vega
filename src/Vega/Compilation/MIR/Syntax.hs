@@ -29,7 +29,7 @@ newtype BlockDescriptor = MkBlockDescriptor Unique
     deriving stock (Generic)
     deriving newtype (Eq, Hashable)
 
-newtype Phis = MkPhis (HashMap Variable (HashMap BlockDescriptor Variable))
+newtype Phis = MkPhis (HashMap Variable (Representation, HashMap BlockDescriptor Variable))
 
 data Block = MkBlock
     { phis :: Phis
@@ -136,7 +136,16 @@ prettyBlock descriptor MkBlock{phis = MkPhis phiMap, instructions, terminator} =
             <> "\n"
             <> ( case HashMap.toList phiMap of
                     [] -> ""
-                    phis -> intercalateDoc "\n" (map (\(result, inputs) -> pretty result <> keyword " = " <> keyword "φ" <> arguments inputs) phis) <> "\n"
+                    phis ->
+                        intercalateDoc
+                            "\n"
+                            ( map
+                                ( \(result, (representation, inputs)) ->
+                                    pretty result <+> keyword ":" <+> pretty representation <> keyword " = " <> keyword "φ" <> arguments inputs
+                                )
+                                phis
+                            )
+                            <> "\n"
                )
             <> "  "
             <> align
@@ -153,7 +162,7 @@ prettyPath path = lparen "[" <> intercalateDoc (keyword "->") (fmap pretty path)
 instance Pretty Instruction where
     pretty = \case
         Identity var target -> keywordInstruction "identity" var [pretty target]
-        ArithmeticOperator {var, operatorExpr} -> pretty var <+> keyword "=" <+> pretty operatorExpr
+        ArithmeticOperator{var, operatorExpr} -> pretty var <+> keyword "=" <+> pretty operatorExpr
         AccessField{var, path, target, fieldRepresentation} -> keywordInstruction "accessField" var [prettyPath path, pretty target] <+> keyword ":" <+> pretty fieldRepresentation
         Box
             { var

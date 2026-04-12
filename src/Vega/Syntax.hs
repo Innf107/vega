@@ -210,6 +210,7 @@ data Expr p
         { loc :: Loc
         , scrutinee :: Expr p
         , cases :: Seq (MatchCase p)
+        , returnRepresentation :: XRepresentation p
         }
     deriving stock (Generic)
     deriving anyclass (HasLoc)

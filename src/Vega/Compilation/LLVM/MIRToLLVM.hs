@@ -242,13 +242,14 @@ compileRegisteredBlock builder descriptor block = do
 
 compilePhis :: (Compile es) => LLVMBuilder.Builder -> MIR.Phis -> Eff es ()
 compilePhis builder (MIR.MkPhis phis) = do
-    for_ (HashMap.toList phis) \(targetVar, incoming) -> do
+    for_ (HashMap.toList phis) \(targetVar, (representation, incoming)) -> do
         incomingValues <-
             fromList <$> for (HashMap.toList incoming) \(block, variable) -> do
                 (value, _) <- lookupVar variable
                 block <- lookupBlock block
                 pure (value, block)
-        asVar_ targetVar undefined $ LLVMBuilder.buildPhi builder undefined incomingValues
+        layout <- Layout.representationLayout representation
+        asVar_ targetVar layout $ LLVMBuilder.buildPhi builder (Layout.llvmType layout) incomingValues
 
 compileInstruction :: (Compile es) => LLVMBuilder.Builder -> MIR.Instruction -> Eff es ()
 compileInstruction builder = \case
@@ -434,8 +435,8 @@ compileTerminator builder = \case
                 pure (LLVM.constInt llvmType (fromIntegral int) False, targetLLVMBlock)
 
         defaultBlock <- case default_ of
-                Just block -> registerNewBlock block
-                Nothing -> newUnreachableBlock
+            Just block -> registerNewBlock block
+            Nothing -> newUnreachableBlock
 
         _ <- LLVMBuilder.buildSwitch builder scrutineeValue cases defaultBlock
         pure ()
@@ -470,8 +471,11 @@ compileTerminator builder = \case
                 pure callInstr
         LLVM.setTailCallKind callInstr LLVM.TailCallKindTail
         LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
+    MIR.Jump targetBlock -> do
+        targetLLVMBlock <- registerNewBlock targetBlock
+        _ <- LLVMBuilder.buildBr builder targetLLVMBlock
+        pure ()
     _ -> undefined
-
 
 getOrCreateLayoutInfoTablePointer :: (Compile es) => Layout -> Eff es LLVM.Value
 getOrCreateLayoutInfoTablePointer layout = do
@@ -496,7 +500,6 @@ getOrCreateLayoutInfoTablePointer layout = do
             llvmInfoTableGlobal <- LLVM.addGlobal ?module_ infoTableLLVMType identifier
             LLVM.setInitializer llvmInfoTableGlobal infoTableConstant
             pure (LLVM.globalAsValue llvmInfoTableGlobal)
-
 
 buildRuntimeCall ::
     (Compile es) =>
@@ -582,7 +585,7 @@ registerNewBlock :: (Compile es) => MIR.BlockDescriptor -> Eff es LLVM.BasicBloc
 registerNewBlock descriptor = do
     state <- get @DeclarationState
     case HashMap.lookup descriptor state.registeredBlocks of
-        Just _previousBlock -> panic $ "Trying to register MIR block " <> pretty descriptor <> " twice"
+        Just block -> pure block
         Nothing -> do
             llvmBlock <- LLVM.appendBasicBlock ?function ""
             put
@@ -665,7 +668,7 @@ use this dummy value that will be very visible if it does end up in the generate
 zeroSizedDummyValue :: (?context :: LLVM.Context) => LLVM.Value
 zeroSizedDummyValue = LLVM.constString "USE_OF_ZERO_SIZED_VALUE" LLVM.Don'tNullTerminate
 
-compileArithmeticOperator :: Compile es => LLVMBuilder.Builder -> MIR.ArithmeticExpr -> Text -> Eff es (LLVM.Value, Layout)
+compileArithmeticOperator :: (Compile es) => LLVMBuilder.Builder -> MIR.ArithmeticExpr -> Text -> Eff es (LLVM.Value, Layout)
 compileArithmeticOperator builder arithmeticExpr varName = case arithmeticExpr of
     MIR.Add var1 var2 -> do
         arg1 <- lookupVarValue var1
