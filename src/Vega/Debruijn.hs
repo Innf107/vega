@@ -1,5 +1,13 @@
-module Vega.Debruijn (Index, Limit, initial, new, size) where
+module Vega.Debruijn (
+    Index,
+    lookup,
+    Limit,
+    initial,
+    new,
+    size,
+) where
 
+import Data.Sequence qualified as Seq
 import Relude
 import Vega.Pretty (Pretty)
 import Vega.Pretty qualified as Pretty
@@ -21,3 +29,6 @@ new limit = (limit{nextIndex = limit.nextIndex + 1}, MkIndex limit.nextIndex)
 
 size :: Limit -> Int
 size limit = limit.nextIndex
+
+lookup :: Index -> Seq a -> Maybe a
+lookup (MkIndex i) seq = seq Seq.!? i

@@ -40,6 +40,7 @@ library
       Vega.Compilation.LLVM.Runtime.Heap
       Vega.Compilation.LLVM.Runtime.ToLLVMConstant
       Vega.Compilation.MIR.CoreToMIR
+      Vega.Compilation.MIR.Monomorphize
       Vega.Compilation.MIR.Syntax
       Vega.Compilation.MIR.Verify
       Vega.Compilation.PatternMatching

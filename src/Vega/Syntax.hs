@@ -460,7 +460,8 @@ data PrimitiveRep
     = BoxedRep
     | IntRep
     | DoubleRep
-    deriving (Generic, Eq, Ord)
+    deriving stock (Generic, Eq, Ord)
+    deriving anyclass Hashable
 
 instance Pretty PrimitiveRep where
     pretty = \case

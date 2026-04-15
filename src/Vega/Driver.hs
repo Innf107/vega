@@ -26,6 +26,7 @@ import Effectful.Concurrent (Concurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
 import TextBuilder qualified
 
+import Data.HashMap.Strict qualified as HashMap
 import Effectful.Exception (try)
 import Effectful.Process (Process, callProcess)
 import LLVM.Core qualified as LLVM
@@ -60,6 +61,7 @@ import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
+import qualified Vega.Compilation.MIR.Monomorphize as Monomorphize
 
 data CompilationResult
     = CompilationSuccessful
@@ -271,18 +273,23 @@ compileBackend = do
                 False -> pure ()
                 True -> Streaming.mapM_ (\declarationName -> trace Reachable (pretty declarationName)) reachableStream
 
-            mirDeclarations <- mconcat <$> Streaming.toList_ (Streaming.mapM compileToMIR reachableStream)
+            let toHashMap declarations =
+                    HashMap.fromList $ mconcat $ fmap (\seq -> fmap (\declaration -> (declaration.name, declaration)) (toList seq)) declarations
+            mirDeclarations <- toHashMap <$> Streaming.toList_ (Streaming.mapM compileToMIR reachableStream)
 
             let mirProgram = MIR.MkProgram{declarations = mirDeclarations}
+
+            monomorphizedMIRProgram <- Monomorphize.monomorphize mirProgram entryPoint
+            -- TODO: it might be nice to verify the non-monomorphized MIR (especially since that is what we're logging)
             when verifyMIR do
-                VerifyMIR.verify mirProgram >>= \case
+                VerifyMIR.verify monomorphizedMIRProgram >>= \case
                     [] -> pure ()
                     errors -> for_ errors \error -> do
                         -- TODO: make this more configurable than logging straight to stderr
                         let ?config = Pretty.defaultPrettyANSIIConfig
                         Pretty.eprintANSII (Pretty.errorText "MIR VERIFICATION ERROR: " <> error)
 
-            llvmModule <- MIRToLLVM.compile mirProgram
+            llvmModule <- MIRToLLVM.compile monomorphizedMIRProgram
             debugEmit llvmModule
 
             initializationError <- LLVM.initializeNativeTarget

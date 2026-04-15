@@ -106,7 +106,8 @@ data Representation
     | FunctionPointerRep
     | PrimitiveRep Vega.PrimitiveRep
     | ParameterRep Debruijn.Index
-    deriving (Eq)
+    deriving stock (Eq, Generic)
+    deriving anyclass Hashable
 
 nameToCoreName :: Vega.Name -> CoreName
 nameToCoreName = \case

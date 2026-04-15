@@ -12,7 +12,7 @@ import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, localIdent
 import Vega.Syntax qualified as Vega
 
 data Program = MkProgram
-    { declarations :: Seq Declaration
+    { declarations :: HashMap CoreName Declaration
     }
     deriving (Generic)
 
