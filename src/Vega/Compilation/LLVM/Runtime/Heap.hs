@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -ddump-simpl -ddump-to-file -dsuppress-all -dsuppress-uniques #-}
 {- | These definitions follow runtime/src/heap.rs and are mostly necessary since we need to
 generate some runtime objects (in particular info tables) at compile time
 -}

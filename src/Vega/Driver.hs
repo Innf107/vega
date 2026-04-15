@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 module Vega.Driver (
     rebuild,
     execute,
@@ -27,17 +29,19 @@ import TextBuilder qualified
 import Effectful.Exception (try)
 import Effectful.Process (Process, callProcess)
 import LLVM.Core qualified as LLVM
+import LLVM.Target qualified
 import Streaming.Prelude qualified as Streaming
+import System.OsPath (osp)
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.Core.VegaToCore qualified as VegaToCore
 import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
 import Vega.Compilation.JavaScript.VegaToJavaScript qualified as JavaScript
+import Vega.Compilation.LLVM.MIRToLLVM qualified as MIRToLLVM
 import Vega.Compilation.MIR.CoreToMIR qualified as CoreToMIR
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Compilation.MIR.Verify qualified as VerifyMIR
-import Vega.Compilation.LLVM.MIRToLLVM qualified as MIRToLLVM
 import Vega.Diff (DiffChange (..))
 import Vega.Diff qualified as Diff
 import Vega.Effect.DebugEmit (DebugEmit, debugEmit)
@@ -282,10 +286,30 @@ compileBackend = do
             debugEmit llvmModule
 
             initializationError <- LLVM.initializeNativeTarget
+            LLVM.Target.initializeNativeAsmParser
+            LLVM.Target.initializeNativeAsmPrinter
+            LLVM.Target.initializeNativeDisassembler
+
             when initializationError do
                 panic "Unable to initialize native target in LLVM"
-            
-            undefined
+
+            -- TODO: for now we're just building for the host machine.
+            -- we will eventually want to make this configurable
+
+            target <-
+                LLVM.Target.getFirstTarget >>= \case
+                    Nothing -> panic "No LLVM target found"
+                    Just target -> pure target
+            triple <- LLVM.Target.getDefaultTargetTriple
+            targetMachineOptions <- LLVM.Target.createTargetMachineOptions
+
+            targetMachine <-
+                LLVM.Target.createTargetMachineWithOptions target triple targetMachineOptions >>= \case
+                    Nothing -> panic "Unable to create LLVM target machine"
+                    Just targetMachine -> pure targetMachine
+
+            -- TODO: be smarter about where to put the output
+            LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile
         _ -> undefined
 
 execute :: FilePath -> Text -> Eff es ()
