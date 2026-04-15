@@ -295,7 +295,6 @@ compileBackend = do
 
             -- TODO: for now we're just building for the host machine.
             -- we will eventually want to make this configurable
-
             target <-
                 LLVM.Target.getFirstTarget >>= \case
                     Nothing -> panic "No LLVM target found"
@@ -308,6 +307,9 @@ compileBackend = do
                     Nothing -> panic "Unable to create LLVM target machine"
                     Just targetMachine -> pure targetMachine
 
+            dataLayout <- LLVM.Target.createTargetDataLayout targetMachine
+            LLVM.Target.setModuleDataLayout llvmModule dataLayout
+            
             -- TODO: be smarter about where to put the output
             LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile
         _ -> undefined

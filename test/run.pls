@@ -2,6 +2,7 @@
 options {
     "--pre-print-cases" as prePrintCases: "Print the name of a test case before running it. This is useful to find infinite loops in tests"
     "--backend" (*) as backendStrings: "The backend to run tests on. Can be specified multiple times. 'all' will run all backends. Default: 'all'"
+    "--hide-passing" as hidePassing: "Only print immediate output for failing tests"
 }
 
 module List = import("@std/list.pls")
@@ -105,7 +106,9 @@ List.for(compileTests, \testFile -> {
             Failed(message) -> Just((backend, message))
         }, backendStrings)
     match failuresForThisTest {
-        [] -> print("\e[32m[${testFile}]: passed\e[0m")
+        [] -> if not hidePassing then {
+            print("\e[32m[${testFile}]: passed\e[0m")
+        } else {}
         _ -> {
             failures := failures! + 1
             print("\e[1m\e[31m[${testFile}]: FAILED on ${List.length(failuresForThisTest)}/${numberOfBackends} backends\e[0m")
