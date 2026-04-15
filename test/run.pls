@@ -1,6 +1,33 @@
 #!/usr/bin/env polaris
 options {
     "--pre-print-cases" as prePrintCases: "Print the name of a test case before running it. This is useful to find infinite loops in tests"
+    "--backend" (*) as backendStrings: "The backend to run tests on. Can be specified multiple times. 'all' will run all backends. Default: 'all'"
+}
+
+module List = import("@std/list.pls")
+
+let parseBackends(backends, strings) = match strings {
+    [] -> backends
+    (backendString :: rest) -> {
+        let backends = match backendString {
+            "all" -> { release = true, javascript = true }
+            "release" -> { backends with release = true }
+            "javascript" -> { backends with javascript = true }
+            _ -> fail("Invalid backend '${backendString}'. Possible values are 'all', 'release', 'javascript'")
+        }
+        parseBackends(backends, rest)
+    }
+}
+
+let backends = match backendStrings {
+    [] -> { release = true, javascript = true }
+    _ -> parseBackends({release = false, javascript = false}, backendStrings)
+}
+let backendStrings = {
+    List.concatMap(\(name, active) -> if active then [name] else [], 
+        [ ("release", backends.release)
+        , ("javascript", backends.javascript)
+        ])
 }
 
 module List = import("@std/list.pls")
@@ -14,14 +41,10 @@ let vega = !readlink "-f" "../${!stack "path" "--dist-dir"}/build/vega/vega"
 let compileTests = lines(!find "compile" "-name" "*.vega")
 
 
-let compileYmlFile(name) = "name: ${name}\nsource-directory: \".\""
+let compileYmlFile(name, backend) = "name: ${name}\nsource-directory: \".\"\nbackend: ${backend}"
 
-let failures = ref 0
-List.for(compileTests, \testFile -> {
-    if prePrintCases then {
-        print("\e[30m[${testFile}]\e[0m")
-    } else {}
-
+let runTest : (String, String) -> < Passed, Failed(String) >
+let runTest(backend, testFile) = {
     chdir(testdir)
 
     let testName = !basename "-s" ".vega" testFile
@@ -33,7 +56,7 @@ List.for(compileTests, \testFile -> {
 
     !rm "-rf" "./run"
     !mkdir "./run"
-    writeFile("./run/vega.yaml", compileYmlFile(testName))
+    writeFile("./run/vega.yaml", compileYmlFile(testName, backend))
     !cp testFile "./run/Main.vega"
 
     chdir("./run")
@@ -46,14 +69,12 @@ List.for(compileTests, \testFile -> {
         }
     }
     match (testKind, testResult) {
-        (ExpectPass, Passed) -> print("\e[32m[${testFile}]: passed\e[0m")
+        (ExpectPass, Passed) -> Passed
         (ExpectPass, Failed(output)) -> {
-            print("\e[1m\e[31m[${testFile}]: FAILED\e[0m\n\e[31m${output}\e[0m")
-            failures := failures! + 1
+            Failed("\e[31m${output}")
         }
         (ExpectFail(expectedMessage), Passed) -> {
-            print("\e[1m\e[31m[${testFile}]: FAILED\e[0m\n\e[31m\e[1mTest should have failed to compile. Expected error message:\n\e[0m\e[31m${expectedMessage}\e[0m")
-            failures := failures! + 1
+            Failed("\e[31m\e[1mTest should have failed to compile. Expected error message:\n\e[0m\e[31m${expectedMessage}\e[0m")
         }
         (ExpectFail(expectedMessage), Failed(actualMessage)) -> {
             # We don't want to include the exact, machine-dependent path of the file here
@@ -61,13 +82,40 @@ List.for(compileTests, \testFile -> {
             let expectedMessage = regexpReplace("\\$FILE", "${!pwd}/./Main.vega", expectedMessage)
 
             if (expectedMessage == actualMessage) then {
-                print("\e[32m[${testFile}]: passed\e[0m")
+                Passed
             } else {
-                print("\e[1m\e[31m[${testFile}]: FAILED\e[0m\n\e[31m\e[1mExpected error message:\e[0m\e[31m ${expectedMessage}\n\e[1mActual error message:\e[0m\e[31m ${actualMessage}\e[0m")
-                failures := failures! + 1
+                Failed("\e[0m\n\e[31m\e[1mExpected error message:\e[0m\e[31m ${expectedMessage}\n\e[1mActual error message:\e[0m\e[31m ${actualMessage}\e[0m")
             }
         }
     }
+
+}
+
+let numberOfBackends = List.length(backendStrings)
+
+let failures = ref 0
+List.for(compileTests, \testFile -> {
+    if prePrintCases then {
+        print("\e[30m[${testFile}]\e[0m")
+    } else {}
+
+    let failuresForThisTest = List.filterMap(\backend -> 
+        match runTest(backend, testFile) {
+            Passed -> Nothing
+            Failed(message) -> Just((backend, message))
+        }, backendStrings)
+    match failuresForThisTest {
+        [] -> print("\e[32m[${testFile}]: passed\e[0m")
+        _ -> {
+            failures := failures! + 1
+            print("\e[1m\e[31m[${testFile}]: FAILED on ${List.length(failuresForThisTest)}/${numberOfBackends} backends\e[0m")
+            List.for(failuresForThisTest, \(backend, message) -> {
+                print("\e[1m\e[31m[${backend}]:\e[0m ${message}")
+            })
+        }
+    }
+
+
 })
 
 if (failures! == 0) then {
