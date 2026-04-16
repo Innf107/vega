@@ -23,14 +23,15 @@ import System.FilePath (takeDirectory, takeExtension, (</>))
 
 import Data.Sequence (Seq (..))
 import Data.Traversable (for)
-import Effectful.Concurrent (Concurrent)
+import Effectful.Concurrent (Concurrent, forkIO, threadDelay)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
 import TextBuilder qualified
 
 import Data.HashMap.Strict qualified as HashMap
-import Effectful.Exception (try)
+import Effectful.Exception (try, evaluate)
 import Effectful.Process (Process, callProcess)
 import LLVM.Core qualified as LLVM
+import LLVM.Internal.Wrappers (CodeModel (CodeModelDefault), RelocMode (RelocDefault))
 import LLVM.Target qualified
 import Streaming.Prelude qualified as Streaming
 import System.OsPath (osp)
@@ -63,6 +64,8 @@ import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
+import qualified LLVM.Internal.Wrappers as LLVM
+import System.IO.Unsafe (unsafePerformIO)
 
 data CompilationResult
     = CompilationSuccessful
@@ -303,6 +306,10 @@ compileBackend = do
             LLVM.Target.initializeNativeAsmParser
             LLVM.Target.initializeNativeAsmPrinter
             LLVM.Target.initializeNativeDisassembler
+            LLVM.Target.initializeAllTargetMCs
+            LLVM.Target.initializeAllTargets
+            LLVM.Target.initializeAllAsmPrinters
+            LLVM.Target.initializeAllTargetInfos
 
             when initializationError do
                 panic "Unable to initialize native target in LLVM"
@@ -320,7 +327,11 @@ compileBackend = do
                     Just targetMachine -> pure targetMachine
 
             dataLayout <- LLVM.Target.createTargetDataLayout targetMachine
+            LLVM.setTarget llvmModule triple
             LLVM.Target.setModuleDataLayout llvmModule dataLayout
+
+            LLVM.verifyModule llvmModule LLVM.ReturnStatusAction
+            debugEmit llvmModule
 
             -- TODO: be smarter about where to put the output
             LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile

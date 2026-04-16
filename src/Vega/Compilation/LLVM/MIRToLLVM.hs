@@ -145,7 +145,7 @@ forwardDeclareDeclaration = \case
         builder <- LLVMBuilder.createBuilder
         LLVMBuilder.positionBuilderAtEnd builder block
 
-        let arguments = Storable.generate (Strict.length parameters) \i -> LLVM.getParam function i
+        let arguments = Storable.generate (Strict.length parameters) \i -> LLVM.getParam closureWrapper i
         result <- buildCallWithAttributes builder functionTypeWithAttributes function arguments ""
         LLVM.setTailCallKind result LLVM.TailCallKindTail
         LLVM.setInstructionCallConv result LLVM.tailCallConv
