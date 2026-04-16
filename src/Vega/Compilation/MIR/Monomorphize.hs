@@ -16,6 +16,7 @@ import Vega.Panic (panic)
 import Vega.Pretty (pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Syntax qualified as Vega
+import Data.Sequence (Seq(..))
 
 type Monomorphize es =
     ( ?program :: MIR.Program
@@ -32,7 +33,7 @@ type Monomorphize es =
 --  2) We can use (CoreName, Seq Representation) keys to skip generating the monomorphized names when looking up a declaration
 --      but we still keep monomorphized names for the actual declaration and skip needing to traverse them all again at the end
 data MonomorphizedDefinitions = MkMonomorphizedDeclarations
-    { monomorphizedSoFar :: HashMap (CoreName, Seq Representation) CoreName
+    { monomorphizedSoFar :: HashMap (Vega.GlobalName, Seq Representation) Vega.GlobalName
     , declarations :: HashMap CoreName MIR.Declaration
     }
 
@@ -47,10 +48,10 @@ monomorphize program entryPoint = do
                 }
 
     MkMonomorphizedDeclarations{declarations} <- execState initialState $ do
-        monomorphizeDeclaration (Core.Global entryPoint) []
+        monomorphizeDeclaration entryPoint []
     pure (MIR.MkProgram{declarations})
 
-monomorphizeDeclaration :: (State MonomorphizedDefinitions :> es, ?program :: MIR.Program) => CoreName -> Seq Representation -> Eff es CoreName
+monomorphizeDeclaration :: (State MonomorphizedDefinitions :> es, ?program :: MIR.Program) => Vega.GlobalName -> Seq Representation -> Eff es Vega.GlobalName
 monomorphizeDeclaration name argumentRepresentations = do
     MkMonomorphizedDeclarations{monomorphizedSoFar} <- get
     case HashMap.lookup (name, argumentRepresentations) monomorphizedSoFar of
@@ -59,25 +60,27 @@ monomorphizeDeclaration name argumentRepresentations = do
             let instantiationName = monomorphizedName name argumentRepresentations
             modify (\state -> state{monomorphizedSoFar = HashMap.insert (name, argumentRepresentations) instantiationName monomorphizedSoFar})
 
-            let preMonoDeclaration = case HashMap.lookup name ?program.declarations of
+            let preMonoDeclaration = case HashMap.lookup (Core.Global name) ?program.declarations of
                     Just declaration -> declaration
-                    Nothing -> panic $ "Declaration not found: " <> pretty name
-            declaration <- substituteMonomorphizedDeclaration preMonoDeclaration argumentRepresentations
-            modify (\state -> state{declarations = HashMap.insert instantiationName declaration state.declarations})
+                    Nothing -> panic $ "Declaration not found: " <> Vega.prettyGlobal Vega.VarKind name
+            declaration <- substituteMonomorphizedDeclaration instantiationName preMonoDeclaration argumentRepresentations
+            modify (\state -> state{declarations = HashMap.insert (Core.Global instantiationName) declaration state.declarations})
             pure instantiationName
 
-substituteMonomorphizedDeclaration :: (State MonomorphizedDefinitions :> es, ?program :: MIR.Program) => MIR.Declaration -> Seq Representation -> Eff es MIR.Declaration
-substituteMonomorphizedDeclaration declaration arguments = do
+substituteMonomorphizedDeclaration ::
+    (State MonomorphizedDefinitions :> es, ?program :: MIR.Program) =>
+    Vega.GlobalName -> MIR.Declaration -> Seq Representation -> Eff es MIR.Declaration
+substituteMonomorphizedDeclaration instantiationName declaration arguments = do
     let ?arguments = arguments
     case declaration of
-        MIR.DefineFunction{name, parameters, returnRepresentation, init, blocks} -> do
+        MIR.DefineFunction{name = _uninstantiatedName, parameters, returnRepresentation, init, blocks} -> do
             parameters <- for parameters \(name, rep) -> pure (name, substituteRepresentation rep)
 
             returnRepresentation <- pure $ substituteRepresentation returnRepresentation
 
             blocks <- for blocks monomorphizeBlock
 
-            pure (MIR.DefineFunction{name, parameters, returnRepresentation, init, blocks})
+            pure (MIR.DefineFunction{name = Core.Global instantiationName, parameters, returnRepresentation, init, blocks})
 
 monomorphizeBlock :: (Monomorphize es) => MIR.Block -> Eff es MIR.Block
 monomorphizeBlock block = do
@@ -97,7 +100,6 @@ monomorphizeInstruction instruction = case instruction of
     MIR.Identity _ _
     MIR.ArithmeticOperator _ _
     MIR.Box _ _
-    MIR.LoadGlobalClosure _ _
     MIR.LoadIntLiteral _ _
     MIR.LoadSumTag _ _ -> pure instruction
     MIR.AccessField{var, path, target, fieldRepresentation} ->
@@ -110,18 +112,27 @@ monomorphizeInstruction instruction = case instruction of
         pure (MIR.SumConstructor{var, tag, payload, representation = substituteRepresentation representation})
     MIR.AllocClosure{var, closedValues, representation} ->
         pure (MIR.AllocClosure{var, closedValues, representation = substituteRepresentation representation})
-    MIR.LoadGlobal{var, globalName, representation} ->
-        pure (MIR.LoadGlobal{var, globalName, representation = substituteRepresentation representation})
-    MIR.CallDirect{var, functionName, arguments, returnRepresentation} -> do
-        let representationArguments = undefined
-        monomorphizedFunctionName <-
-            monomorphizeDeclaration (Core.Global functionName) representationArguments >>= \case
-                Core.Global globalName -> pure globalName
-                Core.Local{} -> undefined
+    MIR.LoadGlobal{var, globalName, representationArguments, representation} -> do
+        monomorphizedGlobalName <- monomorphizeDeclaration globalName representationArguments
+        pure
+            ( MIR.LoadGlobal
+                { var
+                , globalName = monomorphizedGlobalName
+                , representationArguments = []
+                , representation = substituteRepresentation representation
+                }
+            )
+    MIR.LoadGlobalClosure{var, functionName, representationArguments} -> do
+        monomorphizedFunctionName <- monomorphizeDeclaration functionName representationArguments
+        pure (MIR.LoadGlobalClosure{var, functionName = monomorphizedFunctionName, representationArguments = []})
+    MIR.CallDirect{var, functionName, representationArguments, arguments, returnRepresentation} -> do
+        representationArguments <- for representationArguments \rep -> pure (substituteRepresentation rep)
+        monomorphizedFunctionName <- monomorphizeDeclaration functionName representationArguments
         pure
             ( MIR.CallDirect
                 { var
                 , functionName = monomorphizedFunctionName
+                , representationArguments = []
                 , arguments
                 , returnRepresentation = substituteRepresentation returnRepresentation
                 }
@@ -130,7 +141,27 @@ monomorphizeInstruction instruction = case instruction of
         pure (MIR.CallClosure{var, closure, arguments, returnRepresentation = substituteRepresentation returnRepresentation})
 
 monomorphizeTerminator :: (Monomorphize es) => MIR.Terminator -> Eff es MIR.Terminator
-monomorphizeTerminator = undefined
+monomorphizeTerminator terminator = case terminator of
+    MIR.Return _
+    MIR.Jump _
+    MIR.SwitchInt _ _ _ -> pure terminator
+    MIR.TailCallClosure{closure, arguments, returnRepresentation} -> do
+        pure (MIR.TailCallClosure{closure, arguments, returnRepresentation = substituteRepresentation returnRepresentation})
+    MIR.TailCallDirect
+        { functionName
+        , representationArguments
+        , arguments
+        , returnRepresentation
+        } -> do
+            monomorphizedFunctionName <- monomorphizeDeclaration functionName representationArguments
+            pure
+                ( MIR.TailCallDirect
+                    { functionName = monomorphizedFunctionName
+                    , representationArguments = []
+                    , arguments
+                    , returnRepresentation = substituteRepresentation returnRepresentation
+                    }
+                )
 
 substituteRepresentation :: (?arguments :: Seq Representation) => Representation -> Representation
 substituteRepresentation = \case
@@ -144,14 +175,10 @@ substituteRepresentation = \case
     PrimitiveRep primitive -> PrimitiveRep primitive
 
 -- TODO: maybe don't use naive text representations like this
-monomorphizedName :: CoreName -> Seq Representation -> CoreName
-monomorphizedName coreName representations = do
-    let suffix = "[" <> Text.intercalate "," (fmap renderRepresentation (toList representations)) <> "]"
-    case coreName of
-        Core.Global globalName -> Core.Global (globalName{Vega.name = globalName.name <> suffix})
-        Core.Local (Core.UserProvided localName) -> Core.Local (Core.UserProvided (localName{Vega.name = localName.name <> suffix}))
-        -- TODO: ughh this is really ugly
-        Core.Local (Core.Generated unique) -> undefined
+monomorphizedName :: Vega.GlobalName -> Seq Representation -> Vega.GlobalName
+monomorphizedName globalName = \case
+    Empty -> globalName
+    representations -> globalName{Vega.name = globalName.name <> "[" <> Text.intercalate "," (fmap renderRepresentation (toList representations)) <> "]"}
 
 renderRepresentation :: Representation -> Text
 renderRepresentation representation = TextBuilder.toText $ go representation

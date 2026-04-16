@@ -3,12 +3,14 @@
 module Vega.Compilation.Core.Syntax where
 
 import Data.HashMap.Strict qualified as HashMap
+import Data.Sequence (Seq (..))
 import Data.Unique (Unique)
-import Relude
+import Relude hiding (NonEmpty)
 import Vega.Debruijn qualified as Debruijn
 import Vega.Pretty
 import Vega.Syntax (GlobalName, NameKind (..), prettyGlobal, prettyLocal)
 import Vega.Syntax qualified as Vega
+import Vega.Seq.NonEmpty (NonEmpty)
 
 data CoreName
     = Global GlobalName
@@ -33,13 +35,13 @@ data Declaration
 
 data Expr
     = Value Value
-    | Application {function :: CoreName, arguments :: Seq Value, resultRepresentation :: Representation}
+    | Application {function :: CoreName, representationArguments :: Seq Representation, arguments :: Seq Value, resultRepresentation :: Representation}
     | -- INVARIANT: JumpJoin never occurs in a let
       JumpJoin LocalCoreName (Seq Value)
     | Lambda (Seq (LocalCoreName, Representation)) (Seq Statement) Expr
     | ProductAccess {product :: Value, index :: Int, resultRepresentation :: Representation}
     | Box Value
-    | Unbox {value :: Value, innerRepresentation :: Representation} 
+    | Unbox {value :: Value, innerRepresentation :: Representation}
     | PureOperator PureOperatorExpr
     | ConstructorCase
         { scrutinee :: Value
@@ -81,7 +83,8 @@ data Statement
         }
 
 data Value
-    = Var CoreName
+    = Var {varName :: CoreName}
+    | Instantiation {varName :: CoreName, representationArguments :: NonEmpty Representation}
     | Literal Literal
     | DataConstructorApplication
         { constructor :: DataConstructor
@@ -107,7 +110,7 @@ data Representation
     | PrimitiveRep Vega.PrimitiveRep
     | ParameterRep Debruijn.Index
     deriving stock (Eq, Generic)
-    deriving anyclass Hashable
+    deriving anyclass (Hashable)
 
 nameToCoreName :: Vega.Name -> CoreName
 nameToCoreName = \case
@@ -157,13 +160,17 @@ instance Pretty Statement where
 instance Pretty Expr where
     pretty = \case
         Value value -> pretty value
-        Application funValue argValues representation -> pretty funValue <> arguments argValues <+> keyword ":" <+> pretty representation
+        Application funName representationArguments argValues representation -> do
+            let instantiation = case representationArguments of
+                    Empty -> pretty funName
+                    _ -> pretty funName <> lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty representationArguments) <> rparen "]"
+            instantiation <> arguments argValues <+> keyword ":" <+> pretty representation
         JumpJoin name jumpArguments -> keyword "join" <+> pretty name <> arguments jumpArguments
         Lambda parameters bodyStatements bodyExpr -> keyword "\\" <> typedParameters parameters <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
         ProductAccess tupleValue index returnRepresentation -> do
             pretty tupleValue <> lparen "[" <> number index <> rparen "]" <+> keyword ":" <+> pretty returnRepresentation
         Box value -> keyword "box" <+> pretty value
-        Unbox {value, innerRepresentation} -> keyword "unbox" <+> pretty value <+> keyword ":" <+> pretty innerRepresentation
+        Unbox{value, innerRepresentation} -> keyword "unbox" <+> pretty value <+> keyword ":" <+> pretty innerRepresentation
         ConstructorCase scrutinee representation cases default_ -> do
             let prettyCase (constructor, (locals, bodyStatements, bodyExpr)) =
                     lparen "[" <> number constructor <> rparen "]" <+> arguments locals <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
@@ -212,6 +219,7 @@ instance Pretty PureOperatorExpr where
 instance Pretty Value where
     pretty = \case
         Var name -> pretty name
+        Instantiation name arguments -> pretty name <> lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty arguments) <> rparen "]"
         Literal literal -> pretty literal
         DataConstructorApplication{constructor, arguments, resultRepresentation} ->
             lparen "(" <> prettyConstructorApplication constructor arguments <> keyword " : " <> pretty resultRepresentation <> rparen ")"

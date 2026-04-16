@@ -17,6 +17,7 @@ import Relude hiding (
  )
 import Relude qualified
 
+import Control.Exception qualified
 import Data.HashMap.Strict (alter)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map qualified as Map
@@ -142,16 +143,27 @@ compileExpr expr = do
             (argumentStatements, arguments) <-
                 Seq.unzip <$> for argExprs \argument -> do
                     compileExprToValue_ argument
-            functionVar <- case function of
-                Core.Var name -> pure name
+            (functionVar, representationArguments) <- case function of
+                Core.Var name -> pure (name, [])
+                Core.Instantiation name representationArguments -> pure (name, NonEmpty.toSeq representationArguments)
                 value -> panic $ "function compiled to non-variable value: " <> pretty value <> ". this should have been a type error"
 
-            returnRepresentation <- convertRepresentation returnRepresentation
-            pure (functionStatements <> fold argumentStatements, Core.Application functionVar arguments returnRepresentation, returnRepresentation)
+            resultRepresentation <- convertRepresentation returnRepresentation
+            pure
+                ( functionStatements <> fold argumentStatements
+                , Core.Application
+                    { function = functionVar
+                    , representationArguments
+                    , arguments
+                    , resultRepresentation
+                    }
+                , resultRepresentation
+                )
         Vega.PartialApplication{loc = _, functionExpr, partialArguments} -> do
             (functionStatements, function, _) <- compileExprToValue functionExpr
-            functionName <- case function of
-                Core.Var name -> pure name
+            (functionName, representationArguments) <- case function of
+                Core.Var name -> pure (name, [])
+                Core.Instantiation name representationArguments -> pure (name, NonEmpty.toSeq representationArguments)
                 value -> panic $ "function compiled to non-variable value: " <> pretty value <> ". this should have been a type error"
             (locals, argumentStatements, arguments) <-
                 Util.unzip3Seq <$> for partialArguments \case
@@ -162,7 +174,20 @@ compileExpr expr = do
                     Just vegaExpr -> do
                         (exprStatements, value) <- compileExprToValue_ vegaExpr
                         pure ([], exprStatements, value)
-            pure (functionStatements <> fold argumentStatements, Core.Lambda (fold locals) [] (Core.Application functionName arguments undefined), undefined)
+            pure
+                ( functionStatements <> fold argumentStatements
+                , Core.Lambda
+                    (fold locals)
+                    []
+                    ( Core.Application
+                        { function = functionName
+                        , representationArguments
+                        , arguments
+                        , resultRepresentation = undefined
+                        }
+                    )
+                , undefined
+                )
         Vega.VisibleTypeApplication{} -> deferToValue
         Vega.Lambda{parameters, body} -> do
             let caseTree = PatternMatching.serializeSubPatterns parameters ()
@@ -268,10 +293,15 @@ compileExprToValue expr = do
             name <- newLocal
             pure (statements <> [Core.Let name representation expr], Core.Var (Core.Local name), representation)
     case expr of
-        Vega.Var{loc = _, name, representation = vegaRepresentation} -> do
+        Vega.Var{loc = _, name, instantiatedTypeArguments, representation = vegaRepresentation} -> do
             representation <- convertRepresentation vegaRepresentation
-            pure ([], Core.Var (nameToCoreName name), representation)
-        Vega.DataConstructor _ vegaRepresentation name -> do
+            case instantiatedTypeArguments of
+                Empty -> pure ([], Core.Var (nameToCoreName name), representation)
+                NonEmpty vegaArguments -> do
+                    coreArguments <- for vegaArguments convertRepresentation
+                    pure ([], Core.Instantiation (nameToCoreName name) coreArguments, representation)
+        Vega.DataConstructor{name, valueRepresentation = vegaRepresentation, instantiatedTypeArguments} -> do
+            -- TODO: do we need the instantiatedTypeArguments here?
             representation <- convertRepresentation vegaRepresentation
             arityOfDataConstructor name >>= \case
                 Nothing -> do
@@ -282,7 +312,7 @@ compileExprToValue expr = do
                         )
                 Just _ -> do
                     deferToLet
-        Vega.Application _ returnRepresentation (Vega.DataConstructor _ _representation name) argumentExprs -> do
+        Vega.Application _ returnRepresentation (Vega.DataConstructor{name}) argumentExprs -> do
             (argumentStatements, arguments) <- Seq.unzip <$> for argumentExprs compileExprToValue_
             returnRepresentation <- convertRepresentation returnRepresentation
             (constructorStatements, constructorExpr) <- userDefinedDataConstructorApplication name arguments returnRepresentation
@@ -695,14 +725,14 @@ coalesceStatements substitution = \case
 coalesceExpr :: Substitution -> Core.Expr -> Eff es (Substitution, Substitution -> Core.Expr)
 coalesceExpr substitution = \case
     Core.Value value -> pure (substitution, \substitution -> Core.Value (applySubst substitution value))
-    Core.Application functionName argValues representation ->
+    Core.Application functionName representationArguments argValues representation ->
         pure
             ( substitution
             , \substitution -> do
                 let name = case functionName of
                         Core.Local localName -> Core.Local (getFinalName substitution localName)
                         Core.Global globalName -> Core.Global globalName
-                Core.Application name (fmap (applySubst substitution) argValues) representation
+                Core.Application name representationArguments (fmap (applySubst substitution) argValues) representation
             )
     Core.JumpJoin joinPoint arguments ->
         pure
@@ -822,6 +852,13 @@ applySubst :: Substitution -> Core.Value -> Core.Value
 applySubst substitution = \case
     Core.Var (Core.Global globalName) -> Core.Var (Core.Global globalName)
     Core.Var (Core.Local localName) -> getFinalValue substitution localName
+    Core.Instantiation (Core.Global globalName) representationArguments -> Core.Instantiation (Core.Global globalName) representationArguments
+    Core.Instantiation (Core.Local localName) representationArguments -> case getFinalValue substitution localName of
+        -- No idea if this is actually okay
+        Core.Var name -> Core.Instantiation{varName = name, representationArguments}
+        Core.Instantiation{varName = name, representationArguments = otherRepresentationArguments} -> Control.Exception.assert (representationArguments == otherRepresentationArguments) do
+            Core.Instantiation{varName = name, representationArguments = representationArguments}
+        value -> panic $ "Trying to apply non-variable substitution " <> pretty value <> " to instantiation: " <> pretty (Core.Instantiation (Core.Local localName) representationArguments)
     Core.Literal literal -> Core.Literal literal
     Core.DataConstructorApplication{constructor, arguments, resultRepresentation} ->
         Core.DataConstructorApplication

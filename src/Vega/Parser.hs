@@ -590,11 +590,11 @@ expr = label "expression" exprLogical
                         typeArguments <- type_ `sepBy` (single Comma)
                         endLoc <- single RBracket
                         pure (VisibleTypeApplication (loc <> endLoc) name typeArguments)
-                    , pure (Var{loc, name, representation = ()})
+                    , pure (Var{loc, instantiatedTypeArguments = (), name, representation = ()})
                     ]
             , do
                 (name, loc) <- constructorWithLoc
-                pure (DataConstructor loc () name)
+                pure (DataConstructor{loc, name, valueRepresentation = (), instantiatedTypeArguments = ()})
             , do
                 startLoc <- single Lexer.Lambda
                 typeParameters <- option Empty do
@@ -637,7 +637,7 @@ expr = label "expression" exprLogical
                 _ <- single LBrace
                 cases <- fromList <$> matchCase `sepEndBy` semicolon
                 endLoc <- single RBrace
-                pure (Syntax.Match{loc = startLoc <> endLoc, scrutinee, cases, returnRepresentation=()})
+                pure (Syntax.Match{loc = startLoc <> endLoc, scrutinee, cases, returnRepresentation = ()})
             ]
 
 blockOrRecord :: Parser (Expr Parsed)

@@ -156,10 +156,20 @@ type family XWithRepresentation p a where
     XWithRepresentation Renamed a = a
     XWithRepresentation Typed a = (a, Type)
 
+type family XTypedOnly p a where
+    XTypedOnly Typed a = a
+    XTypedOnly _ _ = ()
+
 data Expr p
-    = Var {loc :: Loc, representation :: XRepresentation p, name :: XName p}
+    = Var
+        { loc :: Loc
+        , instantiatedTypeArguments :: XTypedOnly p (Seq Representation)
+        , representation :: XRepresentation p
+        , name :: XName p
+        }
     | DataConstructor
         { loc :: Loc
+        , instantiatedTypeArguments :: XTypedOnly p (Seq Representation)
         , valueRepresentation :: XRepresentation p
         {- ^ This is the representation of the *fully constructed value* at this instantiation.
 
@@ -461,7 +471,7 @@ data PrimitiveRep
     | IntRep
     | DoubleRep
     deriving stock (Generic, Eq, Ord)
-    deriving anyclass Hashable
+    deriving anyclass (Hashable)
 
 instance Pretty PrimitiveRep where
     pretty = \case

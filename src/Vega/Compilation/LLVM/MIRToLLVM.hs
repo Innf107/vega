@@ -342,7 +342,7 @@ compileInstruction builder = \case
 
         function <-
             LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
-                Nothing -> panic $ "Trying to generate call to non-existent function" <> pretty (Core.Global functionName)
+                Nothing -> panic $ "Trying to generate call to non-existent function " <> pretty (Core.Global functionName)
                 Just function -> pure function
 
         (functionType, _) <- functionLLVMType argumentLayouts returnLayout

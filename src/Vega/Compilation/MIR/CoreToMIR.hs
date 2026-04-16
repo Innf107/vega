@@ -24,6 +24,7 @@ import Vega.Effect.Unique.Static.Local (NewUnique, newUnique)
 import Vega.Panic (panic)
 import Vega.Pretty (pretty)
 import Vega.Pretty qualified as Pretty
+import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax qualified as Vega
 import Vega.Util (assert, forFoldLM, forIndexed_, indexed, mapAccumLM)
 
@@ -125,7 +126,7 @@ compileLet block local representation = \case
     Core.Value value -> do
         (block, target) <- compileValue block value
         addInstruction block (MIR.Identity local target)
-    Core.Application functionName arguments returnRepresentation -> case functionName of
+    Core.Application functionName representationArguments arguments returnRepresentation -> case functionName of
         Core.Local localName -> do
             (closure, _) <- getLocal localName
             (block, arguments) <- compileValues block arguments
@@ -134,12 +135,12 @@ compileLet block local representation = \case
             GraphPersistence.getGlobalRepresentation functionName >>= \case
                 GlobalVar representation -> do
                     closure <- newVar "closure"
-                    block <- addInstruction block (MIR.LoadGlobal{var = closure, globalName = functionName, representation})
+                    block <- addInstruction block (MIR.LoadGlobal{var = closure, representationArguments, globalName = functionName, representation})
                     (block, arguments) <- compileValues block arguments
                     addInstruction block (MIR.CallClosure{var = local, closure, arguments, returnRepresentation})
                 GlobalClosure -> do
                     (block, arguments) <- compileValues block arguments
-                    addInstruction block (MIR.CallDirect{var = local, functionName, arguments, returnRepresentation})
+                    addInstruction block (MIR.CallDirect{var = local, representationArguments, functionName, arguments, returnRepresentation})
     Core.JumpJoin joinPoint _arguments -> do
         panic $ "JumpJoin for join point " <> pretty joinPoint <> " in non-tail position"
     Core.Lambda parameters statements returnExpr -> do
@@ -235,7 +236,7 @@ compileReturn block expr = do
         Core.Value value -> do
             (block, value) <- compileValue block value
             finish block (MIR.Return value)
-        Core.Application functionName arguments returnRepresentation -> case functionName of
+        Core.Application functionName representationArguments arguments returnRepresentation -> case functionName of
             Core.Local localName -> do
                 (closure, _) <- getLocal localName
                 (block, arguments) <- compileValues block arguments
@@ -243,13 +244,14 @@ compileReturn block expr = do
             Core.Global functionName -> do
                 GraphPersistence.getGlobalRepresentation functionName >>= \case
                     GlobalVar representation -> do
+                        assert (representationArguments == [])
                         closure <- newVar "closure"
-                        block <- addInstruction block (MIR.LoadGlobal{var = closure, globalName = functionName, representation})
+                        block <- addInstruction block (MIR.LoadGlobal{var = closure, representationArguments, globalName = functionName, representation})
                         (block, arguments) <- compileValues block arguments
                         finish block (TailCallClosure{closure, arguments, returnRepresentation})
                     GlobalClosure -> do
                         (block, arguments) <- compileValues block arguments
-                        finish block (TailCallDirect{functionName, arguments, returnRepresentation})
+                        finish block (TailCallDirect{functionName, representationArguments, arguments, returnRepresentation})
         Core.JumpJoin joinPoint arguments -> do
             (block, arguments) <- compileValues block arguments
 
@@ -353,9 +355,9 @@ compilePureOperator block var = \case
 compileValues :: (Compile es) => BlockBuilder -> Seq Core.Value -> Eff es (BlockBuilder, Seq MIR.Variable)
 compileValues block values = mapAccumLM compileValue block values
 
-compileValue :: (Compile es) => BlockBuilder -> Core.Value -> Eff es (BlockBuilder, MIR.Variable)
-compileValue block = \case
-    Core.Var var -> case var of
+compileVarInstantiation :: (Compile es) => BlockBuilder -> CoreName -> Seq Core.Representation -> Eff es (BlockBuilder, MIR.Variable)
+compileVarInstantiation block var representationArguments = do
+    case var of
         Core.Local name -> do
             (var, _) <- getLocal name
             pure (block, var)
@@ -364,11 +366,16 @@ compileValue block = \case
             var <- newVar globalName.name
             GraphPersistence.getGlobalRepresentation globalName >>= \case
                 GlobalVar representation -> do
-                    block <- addInstruction block (MIR.LoadGlobal{var, globalName, representation})
+                    block <- addInstruction block (MIR.LoadGlobal{var, representationArguments, globalName, representation})
                     pure (block, var)
                 GlobalClosure -> do
-                    block <- addInstruction block (MIR.LoadGlobalClosure{var, functionName = globalName})
+                    block <- addInstruction block (MIR.LoadGlobalClosure{var, representationArguments, functionName = globalName})
                     pure (block, var)
+
+compileValue :: (Compile es) => BlockBuilder -> Core.Value -> Eff es (BlockBuilder, MIR.Variable)
+compileValue block = \case
+    Core.Var var -> compileVarInstantiation block var []
+    Core.Instantiation var representationArguments -> compileVarInstantiation block var (NonEmpty.toSeq representationArguments)
     Core.Literal literal -> do
         variable <- newVar ""
         case literal of

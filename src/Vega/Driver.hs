@@ -5,6 +5,7 @@ module Vega.Driver (
     execute,
     CompilationResult (..),
     DriverConfig (..),
+    Monomorphized (..),
 ) where
 
 -- TODO: check that imports make sense somewhere
@@ -41,6 +42,7 @@ import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
 import Vega.Compilation.JavaScript.VegaToJavaScript qualified as JavaScript
 import Vega.Compilation.LLVM.MIRToLLVM qualified as MIRToLLVM
 import Vega.Compilation.MIR.CoreToMIR qualified as CoreToMIR
+import Vega.Compilation.MIR.Monomorphize qualified as Monomorphize
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Compilation.MIR.Verify qualified as VerifyMIR
 import Vega.Diff (DiffChange (..))
@@ -61,7 +63,6 @@ import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
-import qualified Vega.Compilation.MIR.Monomorphize as Monomorphize
 
 data CompilationResult
     = CompilationSuccessful
@@ -83,8 +84,12 @@ type Driver es =
     , Trace :> es
     , DebugEmit (Seq Core.Declaration) :> es
     , DebugEmit (Seq MIR.Declaration) :> es
+    , DebugEmit (Monomorphized MIR.Program) :> es
     , DebugEmit LLVM.Module :> es
     )
+
+-- | Newtype wrapper so we can distinguish the two debug emits for MIR programs (pre and post monomorphization)
+newtype Monomorphized a = MkMonomorphized a
 
 findSourceFiles :: (Driver es) => Eff es (Seq FilePath)
 findSourceFiles = do
@@ -280,6 +285,8 @@ compileBackend = do
             let mirProgram = MIR.MkProgram{declarations = mirDeclarations}
 
             monomorphizedMIRProgram <- Monomorphize.monomorphize mirProgram entryPoint
+            debugEmit (MkMonomorphized monomorphizedMIRProgram)
+
             -- TODO: it might be nice to verify the non-monomorphized MIR (especially since that is what we're logging)
             when verifyMIR do
                 VerifyMIR.verify monomorphizedMIRProgram >>= \case

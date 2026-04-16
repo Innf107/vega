@@ -24,7 +24,7 @@ import System.OsPath (osp)
 import Vega.BuildConfig (BuildConfigPresence (..), findBuildConfig)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.MIR.Syntax qualified as MIR
-import Vega.Driver (CompilationResult (..))
+import Vega.Driver (CompilationResult (..), Monomorphized(..))
 import Vega.Effect.DebugEmit
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence.InMemory (runInMemory)
@@ -64,6 +64,7 @@ instance Read DebugEmitOption where
 data DebugEmitConfig = MkDebugEmitConfig
     { debugCore :: DebugEmitOption
     , debugMIR :: DebugEmitOption
+    , debugMonomorphizedMIR :: DebugEmitOption
     , debugLLVM :: DebugEmitOption
     }
 
@@ -103,6 +104,13 @@ buildOptions = do
                 <> value None
                 <> help ("MIR output for debugging. Can be one of: file, stderr, none")
             )
+    debugMonomorphizedMIR <-
+        option
+            auto
+            ( long "debug-monomorphized-mir"
+                <> value None
+                <> help ("Monomorphized MIR output for debugging. Can be one of: file, stderr, none")
+            )
     debugLLVM <-
         option
             auto
@@ -113,7 +121,7 @@ buildOptions = do
             True
             (long "verify-mir" <> help ("Verify that the correctness intermediate MIR language is well-formed. This has a small performance cost and shouldn't be necessary unless the compiler has a bug."))
 
-    pure Build{persistence, includeUnique, debugEmitConfig = MkDebugEmitConfig{debugCore, debugMIR, debugLLVM}, verifyMIR}
+    pure Build{persistence, includeUnique, debugEmitConfig = MkDebugEmitConfig{debugCore, debugMIR, debugMonomorphizedMIR, debugLLVM}, verifyMIR}
 
 runCoreEmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Seq Core.Declaration) : es) a -> Eff es a
 runCoreEmit config cont = case config.debugCore of
@@ -132,6 +140,16 @@ runMIREmit config cont = case config.debugMIR of
                 prettyPlain (intercalateDoc "\n\n" (fmap pretty declarations))
         emitAllToFile render "mir.vegamir" cont
     ToStderr -> emitToStderr (\declarations -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
+
+runMonomorphizedMIREmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Monomorphized MIR.Program) : es) a -> Eff es a
+runMonomorphizedMIREmit config cont = case config.debugMIR of
+    None -> ignoreEmit cont
+    ToFile -> do
+        let render (MkMonomorphized (MIR.MkProgram declarations)) = encodeUtf8 do
+                prettyPlain (intercalateDoc "\n\n" (fmap pretty declarations))
+        emitAllToFile render "monomorphized-mir.vegamir" cont
+    ToStderr -> emitToStderr (\(MkMonomorphized (MIR.MkProgram declarations)) -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
+
 
 runLLVMEmit :: (IOE :> es) => DebugEmitConfig -> Eff (DebugEmit LLVM.Module : es) a -> Eff es a
 runLLVMEmit config cont = case config.debugLLVM of
@@ -169,6 +187,7 @@ run ::
         '[ Reader Driver.DriverConfig
          , DebugEmit (Seq Core.Declaration)
          , DebugEmit (Seq MIR.Declaration)
+         , DebugEmit (Monomorphized MIR.Program)
          , DebugEmit LLVM.Module
          , Concurrent
          , Process
@@ -185,6 +204,7 @@ run driverConfig debugConfig persistence action = case persistence of
             & runReader driverConfig
             & runCoreEmit debugConfig
             & runMIREmit debugConfig
+            & runMonomorphizedMIREmit debugConfig
             & runLLVMEmit debugConfig
             & runConcurrent
             & runProcess
@@ -239,5 +259,14 @@ main = do
                                         PlainError plainError -> pure $ pretty plainError
                                     eprint doc
                             exitFailure
-        Exec{file, mainFunction} -> run driverConfig MkDebugEmitConfig{debugCore = None, debugMIR = None, debugLLVM = None} InMemory do
-            Driver.execute file mainFunction
+        Exec{file, mainFunction} -> run
+            driverConfig
+            MkDebugEmitConfig
+                { debugCore = None
+                , debugMIR = None
+                , debugMonomorphizedMIR = None
+                , debugLLVM = None
+                }
+            InMemory
+            do
+                Driver.execute file mainFunction

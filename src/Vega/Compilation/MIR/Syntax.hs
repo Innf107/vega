@@ -64,11 +64,17 @@ data Instruction
     | ProductConstructor {var :: Variable, values :: Seq Variable, representation :: Representation}
     | SumConstructor {var :: Variable, tag :: Int, payload :: Variable, representation :: Representation}
     | AllocClosure {var :: Variable, closedValues :: Seq Variable, representation :: Representation}
-    | LoadGlobalClosure {var :: Variable, functionName :: Vega.GlobalName}
-    | LoadGlobal {var :: Variable, globalName :: Vega.GlobalName, representation :: Representation}
+    | LoadGlobalClosure {var :: Variable, functionName :: Vega.GlobalName, representationArguments :: Seq Representation}
+    | LoadGlobal {var :: Variable, representationArguments :: Seq Representation, globalName :: Vega.GlobalName, representation :: Representation}
     | LoadIntLiteral {var :: Variable, literal :: Int}
     | LoadSumTag {var :: Variable, sum :: Variable}
-    | CallDirect {var :: Variable, functionName :: Vega.GlobalName, arguments :: (Seq Variable), returnRepresentation :: Representation}
+    | CallDirect
+        { var :: Variable
+        , functionName :: Vega.GlobalName
+        , representationArguments :: Seq Representation
+        , arguments :: (Seq Variable)
+        , returnRepresentation :: Representation
+        }
     | CallClosure {var :: Variable, closure :: Variable, arguments :: (Seq Variable), returnRepresentation :: Representation}
     deriving (Generic)
 
@@ -86,7 +92,12 @@ data Terminator
     = Return Variable
     | Jump BlockDescriptor
     | SwitchInt {var :: Variable, cases :: Seq (Int, BlockDescriptor), default_ :: Maybe BlockDescriptor}
-    | TailCallDirect {functionName :: Vega.GlobalName, arguments :: Seq Variable, returnRepresentation :: Representation}
+    | TailCallDirect
+        { functionName :: Vega.GlobalName
+        , representationArguments :: Seq Representation
+        , arguments :: Seq Variable
+        , returnRepresentation :: Representation
+        }
     | TailCallClosure {closure :: Variable, arguments :: Seq Variable, returnRepresentation :: Representation}
     deriving (Generic)
 
@@ -176,8 +187,11 @@ instance Pretty Instruction where
         AllocClosure{var, closedValues, representation} -> keywordInstruction "allocClosure" var (fmap pretty closedValues <> [pretty representation])
         LoadGlobalClosure{var, functionName} ->
             keywordInstruction "loadGlobalClosure" var [Vega.prettyGlobal Vega.VarKind functionName]
-        LoadGlobal var globalName representation ->
-            keywordInstruction "loadGlobal" var [Vega.prettyGlobal Vega.VarKind globalName, pretty representation]
+        LoadGlobal var representationArguments globalName representation -> do
+            let instantiation = case representationArguments of
+                    [] -> mempty
+                    _ -> lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty representationArguments) <> rparen "]"
+            keywordInstruction "loadGlobal" var [Vega.prettyGlobal Vega.VarKind globalName <> instantiation, pretty representation]
         LoadIntLiteral var int ->
             keywordInstruction "int" var [number int]
         LoadSumTag{var, sum} -> keywordInstruction "loadSumTag" var [pretty sum]
@@ -213,8 +227,11 @@ instance Pretty Terminator where
                         Just defaultBlock -> "  " <> keyword "_" <+> keyword "->" <+> pretty defaultBlock <> "\n"
                    )
                 <> rparen "]"
-        TailCallDirect functionName callArguments returnRepresentation ->
-            keyword "tailcallDirect" <+> Vega.prettyGlobal Vega.VarKind functionName <> arguments callArguments <+> keyword ":" <+> pretty returnRepresentation
+        TailCallDirect functionName representationArguments callArguments returnRepresentation -> do
+            let instantiation = case representationArguments of
+                    Empty -> mempty
+                    _ -> lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty representationArguments) <> rparen "]"
+            keyword "tailcallDirect" <+> Vega.prettyGlobal Vega.VarKind functionName <> instantiation <> arguments callArguments <+> keyword ":" <+> pretty returnRepresentation
         TailCallClosure closure callArguments representation ->
             keyword "tailcallClosure" <+> pretty closure <> arguments callArguments <+> keyword ":" <+> pretty representation
 
