@@ -195,7 +195,11 @@ instance Pretty Instruction where
         LoadIntLiteral var int ->
             keywordInstruction "int" var [number int]
         LoadSumTag{var, sum} -> keywordInstruction "loadSumTag" var [pretty sum]
-        CallDirect{var, functionName, arguments = callArguments} -> keywordInstruction "callDirect" var [Vega.prettyGlobal Vega.VarKind functionName] <> arguments callArguments
+        CallDirect{var, representationArguments, functionName, arguments = callArguments} -> do
+            let instantiation = case representationArguments of
+                    [] -> mempty
+                    _ -> lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty representationArguments) <> rparen "]"
+            keywordInstruction "callDirect" var [Vega.prettyGlobal Vega.VarKind functionName <> instantiation] <> arguments callArguments
         CallClosure{var, closure, arguments = callArguments} -> keywordInstruction "callClosure" var [pretty closure] <> arguments callArguments
 
 instance Pretty ArithmeticExpr where

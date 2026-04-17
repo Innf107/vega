@@ -303,13 +303,7 @@ compileBackend = do
             debugEmit llvmModule
 
             initializationError <- LLVM.initializeNativeTarget
-            LLVM.Target.initializeNativeAsmParser
             LLVM.Target.initializeNativeAsmPrinter
-            LLVM.Target.initializeNativeDisassembler
-            LLVM.Target.initializeAllTargetMCs
-            LLVM.Target.initializeAllTargets
-            LLVM.Target.initializeAllAsmPrinters
-            LLVM.Target.initializeAllTargetInfos
 
             when initializationError do
                 panic "Unable to initialize native target in LLVM"
@@ -331,7 +325,6 @@ compileBackend = do
             LLVM.Target.setModuleDataLayout llvmModule dataLayout
 
             LLVM.verifyModule llvmModule LLVM.ReturnStatusAction
-            debugEmit llvmModule
 
             -- TODO: be smarter about where to put the output
             LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile
