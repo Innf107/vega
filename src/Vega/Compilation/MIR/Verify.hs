@@ -148,32 +148,36 @@ verifyInstruction = \case
         -- IntRep isn't actually correct (might be close enough for now though, the LLVM backend will do something more sensible)
         -- it should be int8/int16/... depending on the number of constructors but we don't actually have that in MIR yet
         insertVarRepresentation var (PrimitiveRep IntRep)
-    MIR.CallDirect{var, functionName, arguments, returnRepresentation} -> do
-        functionSignatures <- ask @FunctionSignatures
-        let (expectedArgumentRepresentations, expectedReturnRepresentation) = case HashMap.lookup (Core.Global functionName) functionSignatures of
-                Nothing -> panic $ "Missing signature for function" <+> pretty (Core.Global functionName)
-                Just signature -> signature
+    MIR.CallDirect{var, functionName, arguments, returnRepresentation}
+        | Vega.isInternalName functionName ->
+            -- We can't currently verify calls to builtins since we don't have their representations here!
+            pure ()
+        | otherwise -> do
+            functionSignatures <- ask @FunctionSignatures
+            let (expectedArgumentRepresentations, expectedReturnRepresentation) = case HashMap.lookup (Core.Global functionName) functionSignatures of
+                    Nothing -> panic $ "Missing signature for function" <+> pretty (Core.Global functionName)
+                    Just signature -> signature
 
-        when (length arguments /= length expectedArgumentRepresentations) do
-            verificationError $
-                "Invalid number of arguments in call to "
-                    <> pretty (Core.Global functionName)
-                    <> "\n  Expected: "
-                    <> number (length expectedArgumentRepresentations)
-                    <> "\n    Actual: "
-                    <> number (length arguments)
-        for_ (Seq.zip arguments expectedArgumentRepresentations) \(argument, representation) -> do
-            checkVarRepresentation argument representation var
+            when (length arguments /= length expectedArgumentRepresentations) do
+                verificationError $
+                    "Invalid number of arguments in call to "
+                        <> pretty (Core.Global functionName)
+                        <> "\n  Expected: "
+                        <> number (length expectedArgumentRepresentations)
+                        <> "\n    Actual: "
+                        <> number (length arguments)
+            for_ (Seq.zip arguments expectedArgumentRepresentations) \(argument, representation) -> do
+                checkVarRepresentation argument representation var
 
-        when (returnRepresentation /= expectedReturnRepresentation) do
-            verificationError $
-                "Invalid return representation expected from call to "
-                    <> pretty (Core.Global functionName)
-                    <> "  Called as: "
-                    <> pretty returnRepresentation
-                    <> "  Function defined as returning "
-                    <> pretty expectedReturnRepresentation
-        insertVarRepresentation var returnRepresentation
+            when (returnRepresentation /= expectedReturnRepresentation) do
+                verificationError $
+                    "Invalid return representation expected from call to "
+                        <> pretty (Core.Global functionName)
+                        <> "  Called as: "
+                        <> pretty returnRepresentation
+                        <> "  Function defined as returning "
+                        <> pretty expectedReturnRepresentation
+            insertVarRepresentation var returnRepresentation
     MIR.CallClosure{var, closure, arguments = _, returnRepresentation} -> do
         -- We can't actually verify that the arguments are correct here
         checkVarRepresentation closure Core.functionRepresentation var

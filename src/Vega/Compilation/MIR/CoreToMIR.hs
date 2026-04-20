@@ -131,16 +131,22 @@ compileLet block local representation = \case
             (closure, _) <- getLocal localName
             (block, arguments) <- compileValues block arguments
             addInstruction block (MIR.CallClosure{var = local, closure, arguments, returnRepresentation})
-        Core.Global functionName -> do
-            GraphPersistence.getGlobalRepresentation functionName >>= \case
-                GlobalVar representation -> do
-                    closure <- newVar "closure"
-                    block <- addInstruction block (MIR.LoadGlobal{var = closure, representationArguments, globalName = functionName, representation})
-                    (block, arguments) <- compileValues block arguments
-                    addInstruction block (MIR.CallClosure{var = local, closure, arguments, returnRepresentation})
-                GlobalClosure -> do
-                    (block, arguments) <- compileValues block arguments
-                    addInstruction block (MIR.CallDirect{var = local, representationArguments, functionName, arguments, returnRepresentation})
+        Core.Global functionName
+            | Vega.isInternalName functionName -> do
+                -- We can assume that all internal functions are real functions and not
+                -- variables that happen to be closures
+                (block, arguments) <- compileValues block arguments
+                addInstruction block (MIR.CallDirect{var = local, representationArguments, functionName, arguments, returnRepresentation})
+            | otherwise -> do
+                GraphPersistence.getGlobalRepresentation functionName >>= \case
+                    GlobalVar representation -> do
+                        closure <- newVar "closure"
+                        block <- addInstruction block (MIR.LoadGlobal{var = closure, representationArguments, globalName = functionName, representation})
+                        (block, arguments) <- compileValues block arguments
+                        addInstruction block (MIR.CallClosure{var = local, closure, arguments, returnRepresentation})
+                    GlobalClosure -> do
+                        (block, arguments) <- compileValues block arguments
+                        addInstruction block (MIR.CallDirect{var = local, representationArguments, functionName, arguments, returnRepresentation})
     Core.JumpJoin joinPoint _arguments -> do
         panic $ "JumpJoin for join point " <> pretty joinPoint <> " in non-tail position"
     Core.Lambda parameters statements returnExpr -> do

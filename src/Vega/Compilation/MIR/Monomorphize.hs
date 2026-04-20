@@ -3,6 +3,7 @@ module Vega.Compilation.MIR.Monomorphize where
 import Relude hiding (State, evalState, execState, get, modify, put, runState, state)
 
 import Data.HashMap.Strict qualified as HashMap
+import Data.Sequence (Seq (..))
 import Data.Text qualified as Text
 import Data.Traversable (for)
 import Effectful (Eff, (:>))
@@ -16,7 +17,6 @@ import Vega.Panic (panic)
 import Vega.Pretty (pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Syntax qualified as Vega
-import Data.Sequence (Seq(..))
 
 type Monomorphize es =
     ( ?program :: MIR.Program
@@ -52,20 +52,22 @@ monomorphize program entryPoint = do
     pure (MIR.MkProgram{declarations})
 
 monomorphizeDeclaration :: (State MonomorphizedDefinitions :> es, ?program :: MIR.Program) => Vega.GlobalName -> Seq Representation -> Eff es Vega.GlobalName
-monomorphizeDeclaration name argumentRepresentations = do
-    MkMonomorphizedDeclarations{monomorphizedSoFar} <- get
-    case HashMap.lookup (name, argumentRepresentations) monomorphizedSoFar of
-        Just instantiationName -> pure instantiationName
-        Nothing -> do
-            let instantiationName = monomorphizedName name argumentRepresentations
-            modify (\state -> state{monomorphizedSoFar = HashMap.insert (name, argumentRepresentations) instantiationName monomorphizedSoFar})
+monomorphizeDeclaration name argumentRepresentations
+    | Vega.isInternalName name = pure name
+    | otherwise = do
+        MkMonomorphizedDeclarations{monomorphizedSoFar} <- get
+        case HashMap.lookup (name, argumentRepresentations) monomorphizedSoFar of
+            Just instantiationName -> pure instantiationName
+            Nothing -> do
+                let instantiationName = monomorphizedName name argumentRepresentations
+                modify (\state -> state{monomorphizedSoFar = HashMap.insert (name, argumentRepresentations) instantiationName monomorphizedSoFar})
 
-            let preMonoDeclaration = case HashMap.lookup (Core.Global name) ?program.declarations of
-                    Just declaration -> declaration
-                    Nothing -> panic $ "Declaration not found: " <> Vega.prettyGlobal Vega.VarKind name
-            declaration <- substituteMonomorphizedDeclaration instantiationName preMonoDeclaration argumentRepresentations
-            modify (\state -> state{declarations = HashMap.insert (Core.Global instantiationName) declaration state.declarations})
-            pure instantiationName
+                let preMonoDeclaration = case HashMap.lookup (Core.Global name) ?program.declarations of
+                        Just declaration -> declaration
+                        Nothing -> panic $ "Declaration not found: " <> Vega.prettyGlobal Vega.VarKind name
+                declaration <- substituteMonomorphizedDeclaration instantiationName preMonoDeclaration argumentRepresentations
+                modify (\state -> state{declarations = HashMap.insert (Core.Global instantiationName) declaration state.declarations})
+                pure instantiationName
 
 substituteMonomorphizedDeclaration ::
     (State MonomorphizedDefinitions :> es, ?program :: MIR.Program) =>

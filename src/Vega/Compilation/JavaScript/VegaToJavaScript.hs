@@ -33,6 +33,7 @@ type Compile es =
     ( Trace :> es
     , IOE :> es
     )
+-- @(ref:aaa)   @(ref:bbb)
 
 compileDeclaration :: (Compile es) => Declaration Typed -> Eff es Text
 compileDeclaration declaration = do

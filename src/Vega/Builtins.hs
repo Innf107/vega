@@ -28,6 +28,7 @@ builtinGlobals = fromList [((name, kind), internalName name) | (name, kind) <- g
         , ("arrayLength", VarKind)
         , ("codePoints", VarKind)
         , ("panic", VarKind)
+        , ("debugInt", VarKind)
         ]
 
 builtinKinds :: HashMap GlobalName Kind
@@ -46,6 +47,7 @@ builtinTypes =
     , (internalName "arrayLength", forall_ "a" \a -> [arrayType @@ [a]] --> intType)
     , (internalName "codePoints", [stringType] --> arrayType @@ [intType])
     , (internalName "panic", forall_ "a" \a -> [stringType] --> a)
+    , (internalName "debugInt", [intType] --> unitType)
     ]
 
 defaultImportScope :: ImportScope
@@ -76,6 +78,9 @@ boolType = TypeConstructor (Global (internalName "Bool"))
 
 arrayType :: Type
 arrayType = TypeConstructor (Global (internalName "Array"))
+
+unitType :: Type
+unitType = Tuple []
 
 (@@) :: Type -> Seq Type -> Type
 (@@) = TypeApplication

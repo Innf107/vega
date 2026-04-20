@@ -335,28 +335,30 @@ compileInstruction builder = \case
 
         tagPointer <- buildGEPOffset builder sumValue (Layout.sumTagOffset sumLayout) "tagptr"
         asVar_ var tagLayout $ LLVMBuilder.buildLoad builder (Layout.llvmType tagLayout) tagPointer
-    MIR.CallDirect{var, functionName, arguments, returnRepresentation} -> do
-        (argumentValueSeq, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
-        let argumentValues = viaList argumentValueSeq
-        returnLayout <- Layout.representationLayout returnRepresentation
+    MIR.CallDirect{var, functionName, arguments, returnRepresentation}
+        | Vega.isInternalName functionName -> compileBuiltinCall builder var functionName arguments returnRepresentation
+        | otherwise -> do
+            (argumentValueSeq, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
+            let argumentValues = viaList argumentValueSeq
+            returnLayout <- Layout.representationLayout returnRepresentation
 
-        function <-
-            LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
-                Nothing -> panic $ "Trying to generate call to non-existent function " <> pretty (Core.Global functionName)
-                Just function -> pure function
+            function <-
+                LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
+                    Nothing -> panic $ "Trying to generate call to non-existent function " <> pretty (Core.Global functionName)
+                    Just function -> pure function
 
-        (functionType, _) <- functionLLVMType argumentLayouts returnLayout
+            (functionType, _) <- functionLLVMType argumentLayouts returnLayout
 
-        callInstr <- case Layout.kind returnLayout of
-            Layout.ZeroSized -> do
-                insertVarMapping var zeroSizedDummyValue returnLayout
-                buildCallWithAttributes builder functionType function argumentValues ""
-            Layout.LLVMScalar _ -> asVar var returnLayout $ buildCallWithAttributes builder functionType function argumentValues
-            Layout.AggregatePointer -> do
-                returnPointer <- asVar var returnLayout $ buildLayoutAlloca builder returnLayout
-                -- The sret parameter is always the first parameter
-                buildCallWithAttributes builder functionType function ([returnPointer] <> argumentValues) ""
-        LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
+            callInstr <- case Layout.kind returnLayout of
+                Layout.ZeroSized -> do
+                    insertVarMapping var zeroSizedDummyValue returnLayout
+                    buildCallWithAttributes builder functionType function argumentValues ""
+                Layout.LLVMScalar _ -> asVar var returnLayout $ buildCallWithAttributes builder functionType function argumentValues
+                Layout.AggregatePointer -> do
+                    returnPointer <- asVar var returnLayout $ buildLayoutAlloca builder returnLayout
+                    -- The sret parameter is always the first parameter
+                    buildCallWithAttributes builder functionType function ([returnPointer] <> argumentValues) ""
+            LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
     MIR.CallClosure{var, closure, arguments, returnRepresentation} -> do
         (closureValue, closureLayout) <- lookupVar closure
         let (functionPointerOffset, _functionPointerLayout) = Layout.productOffsetAndLayout 0 closureLayout
@@ -476,6 +478,61 @@ compileTerminator builder = \case
         _ <- LLVMBuilder.buildBr builder targetLLVMBlock
         pure ()
     _ -> undefined
+
+compileBuiltinCall ::
+    (Compile es) =>
+    LLVMBuilder.Builder ->
+    MIR.Variable ->
+    Vega.GlobalName ->
+    Seq MIR.Variable ->
+    Representation ->
+    Eff es ()
+compileBuiltinCall builder var functionName arguments returnRepresentation = do
+    case functionName.name of
+        "debugInt" -> outOfLineBuiltin builder var "vega_debug_int" arguments returnRepresentation
+        _ -> panic $ "Call to unsupported builtin function: " <> Vega.prettyGlobal Vega.VarKind functionName
+
+{- | Generate a call to a builtin function that is defined in the rust runtime rather than inline
+TODO: it might be nice to have out of line functions defined directly in LLVM IR with tailcc instead of
+having to jump through ccc every time?
+-}
+outOfLineBuiltin ::
+    (Compile es) =>
+    LLVMBuilder.Builder ->
+    MIR.Variable ->
+    forall (functionName :: Symbol) ->
+    (HasField functionName RuntimeDefinitions (LLVM.Value, AttributeFunctionType)) =>
+    Seq MIR.Variable ->
+    Representation ->
+    Eff es ()
+outOfLineBuiltin builder var functionName arguments returnRepresentation = do
+    let (llvmFunctionValue, llvmFunctionType) = getField @functionName ?runtimeDefinitions
+    argumentValues <- for arguments lookupVarValue
+    returnLayout <- Layout.representationLayout returnRepresentation
+
+    compileCCCCall builder var llvmFunctionType llvmFunctionValue (viaList argumentValues) returnLayout
+
+compileCCCCall ::
+    (Compile es) =>
+    LLVMBuilder.Builder ->
+    MIR.Variable ->
+    AttributeFunctionType ->
+    LLVM.Value ->
+    Storable.Vector LLVM.Value ->
+    Layout ->
+    Eff es ()
+compileCCCCall builder var functionType functionValue arguments returnLayout = do
+    callInstr <- case Layout.kind returnLayout of
+        Layout.ZeroSized -> do
+            insertVarMapping var zeroSizedDummyValue returnLayout
+            buildCallWithAttributes builder functionType functionValue arguments ""
+        Layout.LLVMScalar _ -> asVar var returnLayout $ buildCallWithAttributes builder functionType functionValue arguments
+        Layout.AggregatePointer -> do
+            returnPointer <- asVar var returnLayout $ buildLayoutAlloca builder returnLayout
+            -- The sret parameter is always the first parameter
+            buildCallWithAttributes builder functionType functionValue ([returnPointer] <> arguments) ""
+    -- This is technically not necessary since ccc is the default but it's nice to be explicit
+    LLVM.setInstructionCallConv callInstr LLVM.ccallConv
 
 getOrCreateLayoutInfoTablePointer :: (Compile es) => Layout -> Eff es LLVM.Value
 getOrCreateLayoutInfoTablePointer layout = do
