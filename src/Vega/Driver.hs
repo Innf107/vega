@@ -1,4 +1,5 @@
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE NoApplicativeDo #-}
 
 module Vega.Driver (
     rebuild,
@@ -28,12 +29,14 @@ import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
 import TextBuilder qualified
 
 import Data.HashMap.Strict qualified as HashMap
-import Effectful.Exception (try, evaluate)
+import Effectful.Exception (evaluate, try)
 import Effectful.Process (Process, callProcess)
 import LLVM.Core qualified as LLVM
 import LLVM.Internal.Wrappers (CodeModel (CodeModelDefault), RelocMode (RelocDefault))
+import LLVM.Internal.Wrappers qualified as LLVM
 import LLVM.Target qualified
 import Streaming.Prelude qualified as Streaming
+import System.IO.Unsafe (unsafePerformIO)
 import System.OsPath (osp)
 import Vega.BuildConfig (BuildConfig (..))
 import Vega.BuildConfig qualified as BuildConfig
@@ -64,8 +67,6 @@ import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
-import qualified LLVM.Internal.Wrappers as LLVM
-import System.IO.Unsafe (unsafePerformIO)
 
 data CompilationResult
     = CompilationSuccessful
@@ -299,14 +300,18 @@ compileBackend = do
                         let ?config = Pretty.defaultPrettyANSIIConfig
                         Pretty.eprintANSII (Pretty.errorText "MIR VERIFICATION ERROR: " <> error)
 
+            context <- LLVM.contextCreate
+            let ?context = context
             llvmModule <- MIRToLLVM.compile monomorphizedMIRProgram
+            MIRToLLVM.addMainFunction entryPoint llvmModule
             debugEmit llvmModule
 
-            initializationError <- LLVM.initializeNativeTarget
-            LLVM.Target.initializeNativeAsmPrinter
-
-            when initializationError do
-                panic "Unable to initialize native target in LLVM"
+            LLVM.initializeNativeTarget >>= \case
+                False -> pure ()
+                True -> panic "Unable to initialize native target in LLVM"
+            LLVM.Target.initializeNativeAsmPrinter >>= \case
+                False -> pure ()
+                True -> panic "Unable to initialize native asm printer in LLVM"                
 
             -- TODO: for now we're just building for the host machine.
             -- we will eventually want to make this configurable

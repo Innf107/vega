@@ -247,17 +247,23 @@ compileReturn block expr = do
                 (closure, _) <- getLocal localName
                 (block, arguments) <- compileValues block arguments
                 finish block (MIR.TailCallClosure{closure, arguments, returnRepresentation})
-            Core.Global functionName -> do
-                GraphPersistence.getGlobalRepresentation functionName >>= \case
-                    GlobalVar representation -> do
-                        assert (representationArguments == [])
-                        closure <- newVar "closure"
-                        block <- addInstruction block (MIR.LoadGlobal{var = closure, representationArguments, globalName = functionName, representation})
-                        (block, arguments) <- compileValues block arguments
-                        finish block (TailCallClosure{closure, arguments, returnRepresentation})
-                    GlobalClosure -> do
-                        (block, arguments) <- compileValues block arguments
-                        finish block (TailCallDirect{functionName, representationArguments, arguments, returnRepresentation})
+            Core.Global functionName
+                | Vega.isInternalName functionName -> do
+                    -- We can assume that all internal functions are real functions and not
+                    -- variables that happen to be closures
+                    (block, arguments) <- compileValues block arguments
+                    finish block (TailCallDirect{functionName, representationArguments, arguments, returnRepresentation})
+                | otherwise ->
+                    GraphPersistence.getGlobalRepresentation functionName >>= \case
+                        GlobalVar representation -> do
+                            assert (representationArguments == [])
+                            closure <- newVar "closure"
+                            block <- addInstruction block (MIR.LoadGlobal{var = closure, representationArguments, globalName = functionName, representation})
+                            (block, arguments) <- compileValues block arguments
+                            finish block (TailCallClosure{closure, arguments, returnRepresentation})
+                        GlobalClosure -> do
+                            (block, arguments) <- compileValues block arguments
+                            finish block (TailCallDirect{functionName, representationArguments, arguments, returnRepresentation})
         Core.JumpJoin joinPoint arguments -> do
             (block, arguments) <- compileValues block arguments
 

@@ -6,7 +6,7 @@
 -- ImplicitParams with do blocks quite a lot here and we don't actually need ApplicativeDo
 {-# LANGUAGE NoApplicativeDo #-}
 
-module Vega.Compilation.LLVM.MIRToLLVM (compile) where
+module Vega.Compilation.LLVM.MIRToLLVM (compile, addMainFunction) where
 
 import Relude hiding (State, evalState, get, modify, put)
 
@@ -68,10 +68,8 @@ type Compile es =
     , State DeclarationState :> es
     )
 
-compile :: (IOE :> es) => MIR.Program -> Eff es LLVM.Module
+compile :: (?context :: LLVM.Context, IOE :> es) => MIR.Program -> Eff es LLVM.Module
 compile program = do
-    context <- liftIO LLVM.contextCreate
-    let ?context = context
     module_ <- LLVM.moduleCreateWithName "idkwhattoputhereyet"
     runtimeDefinitions <- declareRuntimeDefinitions module_
     let ?module_ = module_
@@ -89,7 +87,23 @@ compile program = do
         evalState initialState $ compileDeclaration declaration
     pure module_
 
-type AttributeApplication = LLVM.Value -> IO ()
+addMainFunction :: (?context :: LLVM.Context, IOE :> es) => Vega.GlobalName -> LLVM.Module -> Eff es ()
+addMainFunction entryPoint module_ = do
+    main <- LLVM.addFunction module_ "main" (LLVM.functionType [] LLVM.int32Type False)
+    LLVM.setFunctionCallConv main LLVM.ccallConv
+
+    builder <- LLVMBuilder.createBuilder
+    initialBlock <- LLVM.appendBasicBlock main ""
+    LLVMBuilder.positionBuilderAtEnd builder initialBlock
+
+    entryPointFunction <-
+        LLVM.getNamedFunction module_ (renderLLVMName (Core.Global entryPoint)) >>= \case
+            Nothing -> panic $ "Entry point not found: " <> Vega.prettyGlobal Vega.VarKind entryPoint
+            Just entryPointFunction -> pure entryPointFunction
+    callInstruction <- LLVMBuilder.buildCall builder (LLVM.functionType [] LLVM.voidType False) entryPointFunction [] ""
+    LLVM.setInstructionCallConv callInstruction LLVM.tailCallConv
+    _ <- LLVMBuilder.buildRet builder (LLVM.constInt LLVM.int32Type 0 False)
+    pure ()
 
 functionLLVMType ::
     (?context :: LLVM.Context, IOE :> es) =>
@@ -336,7 +350,9 @@ compileInstruction builder = \case
         tagPointer <- buildGEPOffset builder sumValue (Layout.sumTagOffset sumLayout) "tagptr"
         asVar_ var tagLayout $ LLVMBuilder.buildLoad builder (Layout.llvmType tagLayout) tagPointer
     MIR.CallDirect{var, functionName, arguments, returnRepresentation}
-        | Vega.isInternalName functionName -> compileBuiltinCall builder var functionName arguments returnRepresentation
+        | Vega.isInternalName functionName -> do
+            returnLayout <- Layout.representationLayout returnRepresentation
+            asVar_ var returnLayout $ compileBuiltinCall builder functionName arguments returnRepresentation
         | otherwise -> do
             (argumentValueSeq, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
             let argumentValues = viaList argumentValueSeq
@@ -413,20 +429,7 @@ compileTerminator builder = \case
     MIR.Return variable -> do
         (value, layout) <- lookupVar variable
 
-        case Layout.kind layout of
-            Layout.ZeroSized -> do
-                _ <- LLVMBuilder.buildRetVoid builder
-                pure ()
-            Layout.LLVMScalar _ -> do
-                _ <- LLVMBuilder.buildRet builder value
-                pure ()
-            Layout.AggregatePointer -> do
-                case ?functionEnv.sretVariable of
-                    Nothing -> panic $ "Returning AggregatePointer layout from a function without sret variable: " <> show layout
-                    Just (sretVariable, _) -> do
-                        buildComplexStore builder layout value sretVariable
-                        _ <- LLVMBuilder.buildRetVoid builder
-                        pure ()
+        buildComplexReturn builder layout value
     MIR.SwitchInt scrutinee alternatives default_ -> do
         (scrutineeValue, layout) <- lookupVar scrutinee
         let llvmType = Layout.llvmType layout
@@ -442,37 +445,42 @@ compileTerminator builder = \case
 
         _ <- LLVMBuilder.buildSwitch builder scrutineeValue cases defaultBlock
         pure ()
-    MIR.TailCallDirect{functionName, arguments, returnRepresentation} -> do
-        (argumentValueSeq, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
-        let argumentValues = viaList argumentValueSeq
-        returnLayout <- Layout.representationLayout returnRepresentation
+    MIR.TailCallDirect{functionName, arguments, returnRepresentation}
+        | Vega.isInternalName functionName -> do
+            resultLayout <- Layout.representationLayout returnRepresentation
+            result <- compileBuiltinCall builder functionName arguments returnRepresentation "ret"
+            buildComplexReturn builder resultLayout result
+        | otherwise -> do
+            (argumentValueSeq, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
+            let argumentValues = viaList argumentValueSeq
+            returnLayout <- Layout.representationLayout returnRepresentation
 
-        function <-
-            LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
-                Nothing -> panic $ "Trying to generate call to non-existent function" <> pretty (Core.Global functionName)
-                Just function -> pure function
+            function <-
+                LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
+                    Nothing -> panic $ "Trying to generate call to non-existent function " <> pretty (Core.Global functionName)
+                    Just function -> pure function
 
-        (functionType, _) <- functionLLVMType argumentLayouts returnLayout
+            (functionType, _) <- functionLLVMType argumentLayouts returnLayout
 
-        callInstr <- case Layout.kind returnLayout of
-            Layout.ZeroSized -> do
-                callInstr <- buildCallWithAttributes builder functionType function argumentValues ""
-                _ <- LLVMBuilder.buildRetVoid builder
-                pure callInstr
-            Layout.LLVMScalar _ -> do
-                result <- buildCallWithAttributes builder functionType function argumentValues "ret"
-                _ <- LLVMBuilder.buildRet builder result
-                pure result
-            Layout.AggregatePointer -> do
-                let sretPointer = case ?functionEnv.sretVariable of
-                        Nothing -> panic "Trying to return AggregatePointer from function without sret variable"
-                        Just (variable, _) -> variable
+            callInstr <- case Layout.kind returnLayout of
+                Layout.ZeroSized -> do
+                    callInstr <- buildCallWithAttributes builder functionType function argumentValues ""
+                    _ <- LLVMBuilder.buildRetVoid builder
+                    pure callInstr
+                Layout.LLVMScalar _ -> do
+                    result <- buildCallWithAttributes builder functionType function argumentValues "ret"
+                    _ <- LLVMBuilder.buildRet builder result
+                    pure result
+                Layout.AggregatePointer -> do
+                    let sretPointer = case ?functionEnv.sretVariable of
+                            Nothing -> panic "Trying to return AggregatePointer from function without sret variable"
+                            Just (variable, _) -> variable
 
-                callInstr <- buildCallWithAttributes builder functionType function ([sretPointer] <> argumentValues) ""
-                _ <- LLVMBuilder.buildRetVoid builder
-                pure callInstr
-        LLVM.setTailCallKind callInstr LLVM.TailCallKindTail
-        LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
+                    callInstr <- buildCallWithAttributes builder functionType function ([sretPointer] <> argumentValues) ""
+                    _ <- LLVMBuilder.buildRetVoid builder
+                    pure callInstr
+            LLVM.setTailCallKind callInstr LLVM.TailCallKindTail
+            LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
     MIR.Jump targetBlock -> do
         targetLLVMBlock <- registerNewBlock targetBlock
         _ <- LLVMBuilder.buildBr builder targetLLVMBlock
@@ -482,14 +490,14 @@ compileTerminator builder = \case
 compileBuiltinCall ::
     (Compile es) =>
     LLVMBuilder.Builder ->
-    MIR.Variable ->
     Vega.GlobalName ->
     Seq MIR.Variable ->
     Representation ->
-    Eff es ()
-compileBuiltinCall builder var functionName arguments returnRepresentation = do
+    Text ->
+    Eff es LLVM.Value
+compileBuiltinCall builder functionName arguments returnRepresentation varName = do
     case functionName.name of
-        "debugInt" -> outOfLineBuiltin builder var "vega_debug_int" arguments returnRepresentation
+        "debugInt" -> outOfLineBuiltin builder "vega_debug_int" arguments returnRepresentation varName
         _ -> panic $ "Call to unsupported builtin function: " <> Vega.prettyGlobal Vega.VarKind functionName
 
 {- | Generate a call to a builtin function that is defined in the rust runtime rather than inline
@@ -499,40 +507,44 @@ having to jump through ccc every time?
 outOfLineBuiltin ::
     (Compile es) =>
     LLVMBuilder.Builder ->
-    MIR.Variable ->
     forall (functionName :: Symbol) ->
     (HasField functionName RuntimeDefinitions (LLVM.Value, AttributeFunctionType)) =>
     Seq MIR.Variable ->
     Representation ->
-    Eff es ()
-outOfLineBuiltin builder var functionName arguments returnRepresentation = do
+    Text ->
+    Eff es LLVM.Value
+outOfLineBuiltin builder functionName arguments returnRepresentation varName = do
     let (llvmFunctionValue, llvmFunctionType) = getField @functionName ?runtimeDefinitions
     argumentValues <- for arguments lookupVarValue
     returnLayout <- Layout.representationLayout returnRepresentation
 
-    compileCCCCall builder var llvmFunctionType llvmFunctionValue (viaList argumentValues) returnLayout
+    buildCCCCall builder llvmFunctionType llvmFunctionValue (viaList argumentValues) returnLayout varName
 
-compileCCCCall ::
+buildCCCCall ::
     (Compile es) =>
     LLVMBuilder.Builder ->
-    MIR.Variable ->
     AttributeFunctionType ->
     LLVM.Value ->
     Storable.Vector LLVM.Value ->
     Layout ->
-    Eff es ()
-compileCCCCall builder var functionType functionValue arguments returnLayout = do
-    callInstr <- case Layout.kind returnLayout of
+    Text ->
+    Eff es LLVM.Value
+buildCCCCall builder functionType functionValue arguments returnLayout varName = do
+    (returnValue, callInstr) <- case Layout.kind returnLayout of
         Layout.ZeroSized -> do
-            insertVarMapping var zeroSizedDummyValue returnLayout
-            buildCallWithAttributes builder functionType functionValue arguments ""
-        Layout.LLVMScalar _ -> asVar var returnLayout $ buildCallWithAttributes builder functionType functionValue arguments
+            callInstr <- buildCallWithAttributes builder functionType functionValue arguments ""
+            pure (zeroSizedDummyValue, callInstr)
+        Layout.LLVMScalar _ -> do
+            callInstr <- buildCallWithAttributes builder functionType functionValue arguments varName
+            pure (callInstr, callInstr)
         Layout.AggregatePointer -> do
-            returnPointer <- asVar var returnLayout $ buildLayoutAlloca builder returnLayout
+            returnPointer <- buildLayoutAlloca builder returnLayout varName
             -- The sret parameter is always the first parameter
-            buildCallWithAttributes builder functionType functionValue ([returnPointer] <> arguments) ""
+            callInstr <- buildCallWithAttributes builder functionType functionValue ([returnPointer] <> arguments) ""
+            pure (returnPointer, callInstr)
     -- This is technically not necessary since ccc is the default but it's nice to be explicit
     LLVM.setInstructionCallConv callInstr LLVM.ccallConv
+    pure returnValue
 
 getOrCreateLayoutInfoTablePointer :: (Compile es) => Layout -> Eff es LLVM.Value
 getOrCreateLayoutInfoTablePointer layout = do
@@ -606,6 +618,23 @@ buildComplexStore builder layout value pointer = do
             _ <- LLVMBuilder.buildMemCpy builder pointer alignment value alignment size
             pure ()
         Layout.ZeroSized -> pure ()
+
+buildComplexReturn :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Eff es ()
+buildComplexReturn builder layout value = do
+    case Layout.kind layout of
+        Layout.ZeroSized -> do
+            _ <- LLVMBuilder.buildRetVoid builder
+            pure ()
+        Layout.LLVMScalar _ -> do
+            _ <- LLVMBuilder.buildRet builder value
+            pure ()
+        Layout.AggregatePointer -> do
+            case ?functionEnv.sretVariable of
+                Nothing -> panic $ "Trying to return AggregatePointer layout from a function without sret variable: " <> show layout
+                Just (sretVariable, _) -> do
+                    buildComplexStore builder layout value sretVariable
+                    _ <- LLVMBuilder.buildRetVoid builder
+                    pure ()
 
 buildLoadOrKeepPointer :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
 buildLoadOrKeepPointer builder layout value varName = case Layout.kind layout of
