@@ -1,5 +1,6 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE NoApplicativeDo #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Vega.Driver (
     rebuild,
@@ -18,7 +19,7 @@ module Vega.Driver (
 import Relude hiding (Reader, ask, trace)
 
 import Effectful
-import Effectful.FileSystem (FileSystem, createDirectoryIfMissing, doesDirectoryExist, listDirectory)
+import Effectful.FileSystem (FileSystem, createDirectoryIfMissing, doesDirectoryExist, listDirectory, findExecutable, removeFile)
 import Effectful.Reader.Static
 import System.FilePath (takeDirectory, takeExtension, (</>))
 
@@ -30,7 +31,7 @@ import TextBuilder qualified
 
 import Data.HashMap.Strict qualified as HashMap
 import Effectful.Exception (evaluate, try)
-import Effectful.Process (Process, callProcess)
+import Effectful.Process (Process, callProcess, runProcess)
 import LLVM.Core qualified as LLVM
 import LLVM.Internal.Wrappers (CodeModel (CodeModelDefault), RelocMode (RelocDefault))
 import LLVM.Internal.Wrappers qualified as LLVM
@@ -67,6 +68,7 @@ import Vega.Rename qualified as Rename
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (viaList)
+import Data.FileEmbed (embedFile)
 
 data CompilationResult
     = CompilationSuccessful
@@ -75,6 +77,7 @@ data CompilationResult
 
 data DriverConfig = MkDriverConfig
     { verifyMIR :: Bool
+    , linker :: Text
     }
 
 -- TODO: distinguish between new and repeated errors
@@ -333,10 +336,30 @@ compileBackend = do
 
             -- TODO: be smarter about where to put the output
             LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile
+
+            MkDriverConfig{linker} <- ask
+            linkerCommand <- case linker of
+                    "auto" -> findLinker
+                    path -> pure $ toString path
+            
+            -- TODO: put this somewhere more sensible
+            writeFileBS "libvega_runtime.a" runtimeArchive
+
+            runProcess $ callProcess linkerCommand ["out.o", "libvega_runtime.a"]
+            removeFile "out.o"
+            removeFile "libvega_runtime.a"
         _ -> undefined
 
 execute :: FilePath -> Text -> Eff es ()
 execute = undefined
+
+findLinker :: (FileSystem :> es, Error Error.DriverError :> es) =>  Eff es FilePath
+findLinker = do
+    findExecutable "clang" >>= \case
+        Just path -> pure path
+        Nothing -> findExecutable "gcc" >>= \case
+            Just path -> pure path
+            Nothing -> throwError_ $ Error.NoLinkerFound
 
 getLastKnownRenamed :: (Driver es) => DeclarationName -> Eff es (Maybe (Declaration Renamed))
 getLastKnownRenamed name = do
@@ -428,3 +451,6 @@ writeBuildFile localPath contents = do
 
     createDirectoryIfMissing True (takeDirectory filePath)
     writeFileText filePath contents
+
+runtimeArchive :: ByteString
+runtimeArchive = $(embedFile ".build/libvega_runtime.a")

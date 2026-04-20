@@ -33,7 +33,7 @@ import Vega.Loc (HasLoc, Loc (..), getLoc)
 import Vega.Panic qualified as Panic
 import Vega.Parser (AdditionalParseError (..))
 import Vega.Parser qualified as Parser
-import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, lparen, note, number, plain, rparen, vsep, (<+>))
+import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, lparen, note, number, plain, quote, rparen, vsep, (<+>))
 import Vega.Syntax (GlobalName (..), IntSum, Kind, LocalName, MetaVar, Name, NameKind (..), Type (..), prettyGlobal, prettyGlobalText, prettyLocal, prettyName)
 import Vega.Util (viaList)
 import Vega.Util qualified as Util
@@ -187,6 +187,7 @@ newtype TypeErrorSet = MkTypeErrorSet (Seq TypeError)
 
 data DriverError
     = EntryPointNotFound GlobalName
+    | NoLinkerFound
     deriving stock (Generic)
 
 data ErrorMessageWithLoc = MkErrorMessageWithLoc
@@ -501,6 +502,16 @@ renderCompilationError = \case
                             <> note "  Note: To change the entry point, set the" <+> localIdentText "entry-point" <+> note "field in your "
                             <> keyword "vega.yaml"
                             <> note " file"
+        NoLinkerFound ->
+            PlainError $
+                MkPlainErrorMessage $
+                    align $
+                        emphasis "No"
+                            <+> quote (localIdentText "clang")
+                            <+> emphasis "or"
+                            <+> quote (localIdentText "gcc")
+                            <+> emphasis "executable found.\n"
+                            <> "  Use" <+> keyword "--linker" <+> "to set a custom linker command"
     Panic exception -> do
         let message = case fromException @Panic.Panic exception of
                 Just (Panic.Panic callStack prettyMessage) -> prettyMessage <> "\n" <> align (Panic.prettyCallStack callStack)

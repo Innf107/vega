@@ -24,7 +24,7 @@ import System.OsPath (osp)
 import Vega.BuildConfig (BuildConfigPresence (..), findBuildConfig)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.MIR.Syntax qualified as MIR
-import Vega.Driver (CompilationResult (..), Monomorphized(..))
+import Vega.Driver (CompilationResult (..), Monomorphized (..))
 import Vega.Effect.DebugEmit
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence.InMemory (runInMemory)
@@ -40,6 +40,7 @@ data PersistenceBackend
 data Options
     = Build
         { persistence :: PersistenceBackend
+        , linker :: Text
         , includeUnique :: Bool
         , debugEmitConfig :: DebugEmitConfig
         , verifyMIR :: Bool
@@ -82,6 +83,7 @@ buildOptions = do
                         <> toString (Text.intercalate ", " (toList $ constructorNames @PersistenceBackend))
                     )
             )
+    linker <- option auto (long "linker" <> metavar "PATH" <> value "auto" <> showDefault <> help "The executable to use for linking. This should be a C compiler or similar that already links in system libraries. Setting it to 'auto' will automatically use clang or gcc from the PATH if available.")
     includeUnique <-
         flag
             False
@@ -121,7 +123,7 @@ buildOptions = do
             True
             (long "verify-mir" <> help ("Verify that the correctness intermediate MIR language is well-formed. This has a small performance cost and shouldn't be necessary unless the compiler has a bug."))
 
-    pure Build{persistence, includeUnique, debugEmitConfig = MkDebugEmitConfig{debugCore, debugMIR, debugMonomorphizedMIR, debugLLVM}, verifyMIR}
+    pure Build{persistence, linker, includeUnique, debugEmitConfig = MkDebugEmitConfig{debugCore, debugMIR, debugMonomorphizedMIR, debugLLVM}, verifyMIR}
 
 runCoreEmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Seq Core.Declaration) : es) a -> Eff es a
 runCoreEmit config cont = case config.debugCore of
@@ -149,7 +151,6 @@ runMonomorphizedMIREmit config cont = case config.debugMIR of
                 prettyPlain (intercalateDoc "\n\n" (fmap pretty declarations))
         emitAllToFile render "monomorphized-mir.vegamir" cont
     ToStderr -> emitToStderr (\(MkMonomorphized (MIR.MkProgram declarations)) -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
-
 
 runLLVMEmit :: (IOE :> es) => DebugEmitConfig -> Eff (DebugEmit LLVM.Module : es) a -> Eff es a
 runLLVMEmit config cont = case config.debugLLVM of
@@ -223,6 +224,7 @@ main = do
     let driverConfig =
             Driver.MkDriverConfig
                 { verifyMIR = options.verifyMIR
+                , linker = options.linker
                 }
     case options of
         Build{persistence, debugEmitConfig} -> run driverConfig debugEmitConfig persistence do
