@@ -15,6 +15,8 @@ import Vega.Panic (panic)
 import Vega.Pretty (Ann, Doc, Pretty, align, indent, intercalateDoc, keyword, lparen, number, pretty, rparen, vsep, (<+>))
 import Vega.Seq.NonEmpty
 import Vega.Syntax
+import qualified Vega.VectorMap as VectorMap
+import Vega.Util (viaList)
 
 data CaseTree goal
     = Leaf goal
@@ -177,7 +179,10 @@ compileSinglePattern pattern_ leaf = case pattern_ of
         let subTree = serializeSubPatternsWithLeaf (fmap fst tupleSubPatterns) leaf
         TupleCase (fmap snd tupleSubPatterns) subTree
     RecordPattern{loc = _, fields} -> do
-        undefined
+        -- TODO: this is kind of inefficient isn't it?
+        let sortedSubPatterns = viaList $ VectorMap.sortedValues (VectorMap.fromList (toList fields))
+        let subTree = serializeSubPatternsWithLeaf (fmap fst sortedSubPatterns) leaf
+        TupleCase (fmap snd sortedSubPatterns) subTree
     TypePattern _ inner _ -> compileSinglePattern inner leaf
     OrPattern _ alternatives -> do
         mergeAll $ fmap (\pattern_ -> compileSinglePattern pattern_ leaf) alternatives

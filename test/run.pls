@@ -75,10 +75,14 @@ let parseTestKind(testFile) = {
 
 let runCompiledProgram(backend, testName) = match backend {
     Release -> {
-        !./a.out
+        try { !./a.out } with {
+            CommandFailure(failure) -> failure.stdout
+        }
     }
     JavaScript -> {
-        !node "${testName}.js"
+        try !node "${testName}.js" with {
+            CommandFailure(failure) -> failure.stdout
+        }
     }
 }
 

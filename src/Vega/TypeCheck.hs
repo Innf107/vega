@@ -389,8 +389,9 @@ checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <>
                         Just type_ -> pure type_
                         Nothing -> dummyTypeMeta
                     (fieldPattern, envTrans) <- checkPattern env type_ fieldPattern
-                    pure ((fieldName, fieldPattern), envTrans)
-            pure (RecordPattern loc fieldPatterns, Util.compose envTransformers)
+                    representation <- representationOfType loc env type_
+                    pure ((fieldName, (fieldPattern, representation)), envTrans)
+            pure (RecordPattern { loc = loc, fields = fieldPatterns }, Util.compose envTransformers)
 
 inferPattern :: (TypeCheck es) => Env -> Pattern Renamed -> Eff es (Pattern Typed, Type, Env -> Env)
 inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadConstructor pattern_) $ case pattern_ of
@@ -493,7 +494,11 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
             (subPattern, type_, envTrans) <- inferPattern env subPattern
             pure (fieldName, (subPattern, type_, envTrans))
 
-        let pattern_ = RecordPattern{loc, fields = fmap (\(name, (subPattern, _, _)) -> (name, subPattern)) fieldsWithTypes}
+        fields <- for fieldsWithTypes \(name, (subPattern, type_, _)) -> do
+            representation <- representationOfType loc env type_
+            pure (name, (subPattern, representation))
+
+        let pattern_ = RecordPattern{loc, fields}
         let type_ = Record (VectorMap.fromList $ toList (fmap (\(name, (_, type_, _)) -> (name, type_)) fieldsWithTypes))
         let envTransformer = Util.compose $ fmap (\(_name, (_, _, transformer)) -> transformer) fieldsWithTypes
 

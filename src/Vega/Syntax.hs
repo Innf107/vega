@@ -301,7 +301,7 @@ data Pattern p
         }
     | RecordPattern
         { loc :: Loc
-        , fields :: NonEmpty (Text, Pattern p)
+        , fields :: NonEmpty (Text, XWithRepresentation p (Pattern p))
         }
     | TypePattern Loc (Pattern p) (TypeSyntax p)
     | OrPattern Loc (NonEmpty (Pattern p))
