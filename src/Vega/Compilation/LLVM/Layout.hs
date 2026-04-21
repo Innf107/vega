@@ -83,17 +83,17 @@ size layout = layout.size
 alignment :: Layout -> Vega.Alignment
 alignment layout = layout.alignment
 
-llvmParameterType :: (?context :: LLVM.Context, HasCallStack) => Layout -> (LLVM.Type, Seq LLVM.Attribute)
+llvmParameterType :: (?context :: LLVM.Context, HasCallStack) => Layout -> Maybe (LLVM.Type, Seq LLVM.Attribute)
 llvmParameterType layout = case layout.kind of
-    LLVMScalar type_ -> (type_, [])
+    LLVMScalar type_ -> Just (type_, [])
     AggregatePointer -> unsafePerformIO do
         byvalAttributeKind <- LLVM.getEnumAttributeKindForName "byval"
         byvalAttribute <- LLVM.createTypeAttribute byvalAttributeKind (llvmType layout)
 
         alignmentAttributeKind <- LLVM.getEnumAttributeKindForName "align"
         alignmentAttribute <- LLVM.createEnumAttribute alignmentAttributeKind (fromIntegral (Alignment.toInt layout.alignment))
-        pure (LLVM.pointerType, [byvalAttribute, alignmentAttribute])
-    ZeroSized -> panic "Trying to access LLVM type of zero-sized layout"
+        pure (Just (LLVM.pointerType, [byvalAttribute, alignmentAttribute]))
+    ZeroSized -> Nothing
 
 llvmType :: (?context :: LLVM.Context, HasCallStack) => Layout -> LLVM.Type
 llvmType layout = case layout.kind of

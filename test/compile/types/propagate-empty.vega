@@ -4,8 +4,11 @@ data Void
 absurd : forall a. Void -> a
 absurd(x) = match x {}
 
+propagate : forall a. Void -> a
+propagate(x) = absurd(x)
+
 ignore : forall a. a -> ()
 ignore(_) = ()
 
 main : () -> ()
-main() = { ignore(absurd) }
+main() = { ignore(propagate) }

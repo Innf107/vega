@@ -47,6 +47,7 @@ import Vega.Syntax (renderPackageName)
 import Vega.Syntax qualified as Vega
 import Vega.Util (forIndexed_, viaList, type (?))
 import Vega.Util qualified as Util
+import Witherable qualified
 
 data DeclarationState = MkDeclarationState
     { registeredBlocks :: HashMap MIR.BlockDescriptor LLVM.BasicBlock
@@ -111,7 +112,7 @@ functionLLVMType ::
     Layout ->
     Eff es (AttributeFunctionType, "sretParameter" ? Maybe (Int, Layout))
 functionLLVMType parameters returnLayout = do
-    let baseParameterTypes = fmap Layout.llvmParameterType parameters
+    let baseParameterTypes = Witherable.mapMaybe Layout.llvmParameterType parameters
 
     (parameterTypes, returnType, usesSRet) <- case Layout.kind returnLayout of
         Layout.AggregatePointer -> do
@@ -484,6 +485,9 @@ compileTerminator builder = \case
     MIR.Jump targetBlock -> do
         targetLLVMBlock <- registerNewBlock targetBlock
         _ <- LLVMBuilder.buildBr builder targetLLVMBlock
+        pure ()
+    MIR.Unreachable -> do
+        _ <- LLVMBuilder.buildUnreachable builder
         pure ()
     _ -> undefined
 

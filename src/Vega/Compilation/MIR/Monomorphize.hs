@@ -1,4 +1,4 @@
-module Vega.Compilation.MIR.Monomorphize where
+module Vega.Compilation.MIR.Monomorphize (monomorphize) where
 
 import Relude hiding (State, evalState, execState, get, modify, put, runState, state)
 
@@ -115,7 +115,7 @@ monomorphizeInstruction instruction = case instruction of
     MIR.AllocClosure{var, closedValues, representation} ->
         pure (MIR.AllocClosure{var, closedValues, representation = substituteRepresentation representation})
     MIR.LoadGlobal{var, globalName, representationArguments, representation} -> do
-        monomorphizedGlobalName <- monomorphizeDeclaration globalName representationArguments
+        monomorphizedGlobalName <- monomorphizeDeclaration globalName (fmap substituteRepresentation representationArguments)
         pure
             ( MIR.LoadGlobal
                 { var
@@ -125,11 +125,10 @@ monomorphizeInstruction instruction = case instruction of
                 }
             )
     MIR.LoadGlobalClosure{var, functionName, representationArguments} -> do
-        monomorphizedFunctionName <- monomorphizeDeclaration functionName representationArguments
+        monomorphizedFunctionName <- monomorphizeDeclaration functionName (fmap substituteRepresentation representationArguments)
         pure (MIR.LoadGlobalClosure{var, functionName = monomorphizedFunctionName, representationArguments = []})
     MIR.CallDirect{var, functionName, representationArguments, arguments, returnRepresentation} -> do
-        representationArguments <- for representationArguments \rep -> pure (substituteRepresentation rep)
-        monomorphizedFunctionName <- monomorphizeDeclaration functionName representationArguments
+        monomorphizedFunctionName <- monomorphizeDeclaration functionName (fmap substituteRepresentation representationArguments)
         pure
             ( MIR.CallDirect
                 { var
@@ -145,6 +144,7 @@ monomorphizeInstruction instruction = case instruction of
 monomorphizeTerminator :: (Monomorphize es) => MIR.Terminator -> Eff es MIR.Terminator
 monomorphizeTerminator terminator = case terminator of
     MIR.Return _
+    MIR.Unreachable
     MIR.Jump _
     MIR.SwitchInt _ _ _ -> pure terminator
     MIR.TailCallClosure{closure, arguments, returnRepresentation} -> do
@@ -155,7 +155,7 @@ monomorphizeTerminator terminator = case terminator of
         , arguments
         , returnRepresentation
         } -> do
-            monomorphizedFunctionName <- monomorphizeDeclaration functionName representationArguments
+            monomorphizedFunctionName <- monomorphizeDeclaration functionName (fmap substituteRepresentation representationArguments)
             pure
                 ( MIR.TailCallDirect
                     { functionName = monomorphizedFunctionName

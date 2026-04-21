@@ -90,6 +90,7 @@ data ArithmeticExpr
 
 data Terminator
     = Return Variable
+    | Unreachable
     | Jump BlockDescriptor
     | SwitchInt {var :: Variable, cases :: Seq (Int, BlockDescriptor), default_ :: Maybe BlockDescriptor}
     | TailCallDirect
@@ -185,8 +186,11 @@ instance Pretty Instruction where
         SumConstructor{var, tag, payload, representation} ->
             pretty var <+> keyword "=" <+> keyword "sum" <+> lparen "[" <> number tag <> rparen "]" <> lparen "(" <> pretty payload <> rparen ")" <+> pretty representation
         AllocClosure{var, closedValues, representation} -> keywordInstruction "allocClosure" var (fmap pretty closedValues <> [pretty representation])
-        LoadGlobalClosure{var, functionName} ->
-            keywordInstruction "loadGlobalClosure" var [Vega.prettyGlobal Vega.VarKind functionName]
+        LoadGlobalClosure{var, functionName, representationArguments} -> do
+            let instantiation = case representationArguments of
+                    [] -> mempty
+                    _ -> lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty representationArguments) <> rparen "]"
+            keywordInstruction "loadGlobalClosure" var [Vega.prettyGlobal Vega.VarKind functionName <> instantiation]
         LoadGlobal var representationArguments globalName representation -> do
             let instantiation = case representationArguments of
                     [] -> mempty
@@ -220,6 +224,7 @@ keywordInstruction name var arguments =
 instance Pretty Terminator where
     pretty = \case
         Return value -> keyword "return" <+> pretty value
+        Unreachable -> keyword "unreachable"
         Jump block -> keyword "jump" <+> pretty block
         SwitchInt value targets default_ ->
             keyword "switchInt" <+> pretty value <+> lparen "["

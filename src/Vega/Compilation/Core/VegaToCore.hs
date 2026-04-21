@@ -437,7 +437,7 @@ unitLiteral = Core.DataConstructorApplication (Core.TupleConstructor 0) [] (Core
 
 compilePatternMatch :: (Compile es) => Vega.Expr Typed -> Seq (Vega.Pattern Typed, Vega.Expr Typed) -> Eff es (Seq Core.Statement, Core.Expr)
 compilePatternMatch scrutinee = \case
-    Empty -> undefined
+    Empty -> pure ([], Core.Unreachable)
     NonEmpty cases -> do
         (scrutineeStatements, scrutineeValue, _) <- compileExprToValue scrutinee
 
@@ -725,6 +725,7 @@ coalesceStatements substitution = \case
 coalesceExpr :: Substitution -> Core.Expr -> Eff es (Substitution, Substitution -> Core.Expr)
 coalesceExpr substitution = \case
     Core.Value value -> pure (substitution, \substitution -> Core.Value (applySubst substitution value))
+    Core.Unreachable -> pure (substitution, \_ -> Core.Unreachable)
     Core.Application functionName representationArguments argValues representation ->
         pure
             ( substitution

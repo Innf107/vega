@@ -35,6 +35,7 @@ data Declaration
 
 data Expr
     = Value Value
+    | Unreachable
     | Application {function :: CoreName, representationArguments :: Seq Representation, arguments :: Seq Value, resultRepresentation :: Representation}
     | -- INVARIANT: JumpJoin never occurs in a let
       JumpJoin LocalCoreName (Seq Value)
@@ -160,6 +161,7 @@ instance Pretty Statement where
 instance Pretty Expr where
     pretty = \case
         Value value -> pretty value
+        Unreachable -> keyword "unreachable"
         Application funName representationArguments argValues representation -> do
             let instantiation = case representationArguments of
                     Empty -> pretty funName

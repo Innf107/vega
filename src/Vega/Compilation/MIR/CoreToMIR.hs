@@ -126,6 +126,11 @@ compileLet block local representation = \case
     Core.Value value -> do
         (block, target) <- compileValue block value
         addInstruction block (MIR.Identity local target)
+    Core.Unreachable -> do
+        finish block MIR.Unreachable
+        -- TODO: this is kind of silly. Ideally we would stop execution after this but that's not how compileLet currently works
+        dummyNextBlock <- newBlock
+        pure dummyNextBlock
     Core.Application functionName representationArguments arguments returnRepresentation -> case functionName of
         Core.Local localName -> do
             (closure, _) <- getLocal localName
@@ -242,6 +247,8 @@ compileReturn block expr = do
         Core.Value value -> do
             (block, value) <- compileValue block value
             finish block (MIR.Return value)
+        Core.Unreachable -> do
+            finish block MIR.Unreachable
         Core.Application functionName representationArguments arguments returnRepresentation -> case functionName of
             Core.Local localName -> do
                 (closure, _) <- getLocal localName

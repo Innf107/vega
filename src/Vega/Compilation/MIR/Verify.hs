@@ -256,6 +256,7 @@ verifyTerminator = \case
     MIR.Return var -> do
         MkVerifyState{returnRepresentation} <- get
         checkVarRepresentation var returnRepresentation var
+    MIR.Unreachable -> pure ()
     MIR.Jump block -> pure ()
     MIR.SwitchInt{var, cases = _} -> do
         -- TODO: this also needs to work for other, smaller int representations
