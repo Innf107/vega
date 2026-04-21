@@ -1,11 +1,14 @@
+-- type: print(4)
 
-f : () -> exists (a : Type(IntRep)). (Int -> a, a -> String);
-f() = (\_ -> 3, \_ -> "a");
+import internal:Internal (debugInt)
+
+f : () -> exists (a : Type(IntRep)). (Int -> a, a -> Int);
+f() = (\_ -> 3, \x -> x + 1);
 
 main : () -> ();
 main() = {
     let (makeA, render) = f();
     let blah = makeA(5);
-    let _ = render(blah);
+    debugInt(render(blah));
 }
 

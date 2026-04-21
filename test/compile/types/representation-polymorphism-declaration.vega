@@ -1,4 +1,4 @@
-
+-- type: compile
 
 idBoxed : forall (a : Type(Boxed)). a -> a;
 idBoxed(x) = x;

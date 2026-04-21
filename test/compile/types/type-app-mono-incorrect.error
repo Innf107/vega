@@ -1,5 +1,5 @@
 $FILE:7:13: ERROR:
-Parametric type variable r cannot be monomorphized
+Parametric type variable r@1 cannot be monomorphized
   Only type variables bound in monomorphizable bindings can appear in kinds of bound type variables
   or be used to instantiate monomorphizable bindings
   ┃ 

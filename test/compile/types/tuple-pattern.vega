@@ -1,5 +1,10 @@
-f : ((Int, String)) -> String;
+-- type: print(6)
+import internal:Internal (debugInt)
+
+f : ((Int, Int)) -> Int;
 f((_, y)) = y;
 
 main : () -> ();
-main() = ();
+main() = {
+    debugInt(f((5, 6)))
+};

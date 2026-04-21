@@ -1,6 +1,6 @@
-$FILE:4:3: ERROR:
+$FILE:5:3: ERROR:
 Constructor pattern binds 1 parameter but its type expects it to bind 0
     The parameters are supposed to have types ()
   ┃ 
-4 ┃ f(A(_)) = ();
+5 ┃ f(A(_)) = ();
   ┃   ▔▔▔▔

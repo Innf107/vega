@@ -1,3 +1,4 @@
+-- type: error
 
 f : (Int -> Int) -> ()
 f(_) = ()

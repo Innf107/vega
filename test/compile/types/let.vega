@@ -1,4 +1,5 @@
-
+-- type: print(5)
+import internal:Internal (debugInt)
 
 f : Int -> Int;
 f(x) = {
@@ -7,4 +8,6 @@ f(x) = {
 };
 
 main : () -> ();
-main() = ();
+main() = {
+    debugInt(f(5))
+};

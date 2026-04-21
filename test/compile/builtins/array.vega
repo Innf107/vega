@@ -1,3 +1,4 @@
+-- type: compile
 import internal:Internal (replicateArray, readArray)
 
 main : () -> ();

@@ -1,3 +1,4 @@
+-- type: error
 
 idWrong : forall (r : Rep) (a : Type(r)). a -> a;
 idWrong(x) = x;

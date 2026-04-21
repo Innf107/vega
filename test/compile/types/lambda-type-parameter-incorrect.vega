@@ -1,6 +1,7 @@
+-- type: error
 
 f : forall (a : Type(Boxed)). () -> forall (b : Type(Boxed)). b -> a;
 f() = \[b](x : b) -> x;
 
 main : () -> ();
-main() = main();
+main() = {};

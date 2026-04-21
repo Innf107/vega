@@ -1,3 +1,4 @@
+-- type: compile
 
 f : Int -> Int;
 f(x) = x;

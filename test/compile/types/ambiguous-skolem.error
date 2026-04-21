@@ -1,8 +1,8 @@
-$FILE:3:12: ERROR:
+$FILE:4:12: ERROR:
 Type mismatch
   Unable to unify
     expected type a
       actual type a1
   ┃ 
-3 ┃ f() = \[a](x : a) -> x;
+4 ┃ f() = \[a](x : a) -> x;
   ┃            ▔▔▔▔▔

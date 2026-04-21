@@ -1,6 +1,7 @@
+-- type: compile
 
 f : forall (a : Type(Boxed)). () -> forall (b : Type(Boxed)). b -> b;
 f() = \[b](x : b) -> x;
 
 main : () -> ();
-main() = main();
+main() = {};

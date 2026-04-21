@@ -1,4 +1,4 @@
-
+-- type: compile
 f : forall *(r : Rep) (a : Type(r)). a -> a;
 f(x) = x;
 

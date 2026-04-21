@@ -1,4 +1,4 @@
-
+-- type: error
 f : { x : Int, y : Int } -> Int
 f(r) = 0
 

@@ -1,10 +1,16 @@
-f : Int -> ()
+-- type: print(10)
+
+import internal:Internal (debugInt)
+
+f : Int -> Int
 f(i) = {
     if i >= 10 then 
-        ()
+        i
     else
         f(i + 1)
 }
 
 main : () -> ()
-main() = ()
+main() = {
+    debugInt(f(0))
+}

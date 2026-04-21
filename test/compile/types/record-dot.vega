@@ -1,6 +1,8 @@
-
+-- type: print(5)
 f : { x : Int, y : Int } -> Int
 f(r) = r.x
 
 main : () -> ()
-main() = ()
+main() = {
+    debugInt(f({x = 1, y = 2}))
+}

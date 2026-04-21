@@ -1,3 +1,4 @@
+-- type: compile
 
 f : forall {a : Type(Boxed)} (b : Type(Boxed)). a -> a;
 f(x) = x;

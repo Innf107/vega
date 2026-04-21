@@ -1,4 +1,4 @@
-
+-- type: error
 malformed;
 malformed = very invalid;
 

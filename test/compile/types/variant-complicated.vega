@@ -1,4 +1,4 @@
-
+-- type: compile
 data X(a) = X(Y(a));
 
 data Y(a) = F(Z(X(a)));

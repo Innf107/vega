@@ -1,9 +1,13 @@
+-- type: print(5)
+import internal:Internal (debugInt)
 
 idMono : forall *(r : Rep) (a : Type(r)). a -> a;
 idMono(x) = x;
 
-usage : forall (a : Type(Boxed)). a -> a;
+usage : forall (a : Type(IntRep)). a -> a;
 usage(x) = idMono(x);
 
 main : () -> ();
-main() = main();
+main() = {
+    debugInt(usage(5))
+};

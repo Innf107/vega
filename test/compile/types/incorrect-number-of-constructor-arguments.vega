@@ -1,3 +1,4 @@
+-- type: error
 data A = A(Int, Int)
 
 f : A -> ();

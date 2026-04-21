@@ -1,4 +1,4 @@
-
+-- type: error
 
 f : forall (a : Type(Boxed)) (b : Type(Boxed)). a -> b;
 f(x) = x;

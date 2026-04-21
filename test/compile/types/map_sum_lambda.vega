@@ -1,4 +1,6 @@
--- type: compile
+-- type: print(6)
+
+import internal:Internal (debugInt)
 
 data List(a) =
     | Nil
@@ -10,9 +12,15 @@ map(f, list) = match list {
    Cons(x, xs) -> Cons(f(x), map(f,xs))
 }
 
+sum : List(Int) -> Int
+sum(list) = match list {
+    Nil -> 0
+    Cons(x, xs) -> x + sum(xs)
+}
+
 main : () -> ()
 main() = {
     let list = map(\x -> x, Cons(1,Cons(2,Cons(3,Nil))))
-    ()
+    debugInt(sum(list))
 }
 

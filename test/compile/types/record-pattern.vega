@@ -1,6 +1,10 @@
+-- type: print(1)
+import internal:Internal (debugInt)
 
 f : { x : Int, y : Int } -> Int
 f({ y, x }) = x
 
 main : () -> ()
-main() = ()
+main() = {
+    debugInt(f({x = 1, y = 2}))
+}

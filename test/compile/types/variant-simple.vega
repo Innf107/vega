@@ -1,4 +1,4 @@
-
+-- type: compile
 data MyBool = True | False;
 
 f : MyBool -> ();

@@ -1,3 +1,4 @@
+-- type: compile
 data Void
 
 absurd : forall a. Void -> a

@@ -1,3 +1,5 @@
+-- type: error
+
 main : () -> ()
 main() = {
     let x = 1
