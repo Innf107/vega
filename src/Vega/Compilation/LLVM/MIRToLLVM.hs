@@ -355,7 +355,10 @@ compileInstruction builder = \case
             returnLayout <- Layout.representationLayout returnRepresentation
             asVar_ var returnLayout $ compileBuiltinCall builder functionName arguments returnRepresentation
         | otherwise -> do
-            (argumentValueSeq, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
+            let isNotZeroSized (_, layout) = case Layout.kind layout of
+                    Layout.ZeroSized -> False
+                    _ -> True
+            (argumentValueSeq, argumentLayouts) <- Seq.unzip . Seq.filter isNotZeroSized <$> for arguments lookupVar
             let argumentValues = viaList argumentValueSeq
             returnLayout <- Layout.representationLayout returnRepresentation
 
@@ -386,7 +389,10 @@ compileInstruction builder = \case
         pointerToPayload <- buildGEPOffset builder closureValue payloadOffset ""
         payload <- buildLoadOrKeepPointer builder payloadLayout pointerToPayload "payload"
 
-        (argumentValuesWithoutPayload, argumentLayoutsWithoutPayload) <- Seq.unzip <$> for arguments lookupVar
+        let isNotZeroSized (_, layout) = case Layout.kind layout of
+                Layout.ZeroSized -> False
+                _ -> True
+        (argumentValuesWithoutPayload, argumentLayoutsWithoutPayload) <- Seq.unzip . Seq.filter isNotZeroSized <$> for arguments lookupVar
 
         let argumentLayouts = viaList $ argumentLayoutsWithoutPayload <> [Layout.boxedLayout]
 
@@ -452,7 +458,10 @@ compileTerminator builder = \case
             result <- compileBuiltinCall builder functionName arguments returnRepresentation "ret"
             buildComplexReturn builder resultLayout result
         | otherwise -> do
-            (argumentValueSeq, argumentLayouts) <- Seq.unzip <$> for arguments lookupVar
+            let isNotZeroSized (_, layout) = case Layout.kind layout of
+                    Layout.ZeroSized -> False
+                    _ -> True
+            (argumentValueSeq, argumentLayouts) <- Seq.unzip . Seq.filter isNotZeroSized <$> for arguments lookupVar
             let argumentValues = viaList argumentValueSeq
             returnLayout <- Layout.representationLayout returnRepresentation
 
