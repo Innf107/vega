@@ -4,6 +4,7 @@ import Relude
 
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
+import Data.Sequence qualified as Seq
 import Data.Text.Internal.StrictBuilder qualified as TextBuilder
 import Data.Traversable (for)
 import Data.Unique (hashUnique, newUnique)
@@ -187,9 +188,14 @@ compileValue = \case
         Core.IntLiteral int -> pure (JS.IntLiteral int)
         Core.DoubleLiteral rational -> pure (JS.DoubleLiteral rational)
         Core.StringLiteral string -> pure (JS.StringLiteral string)
-    Core.DataConstructorApplication{constructor = _, arguments, resultRepresentation = _} -> do
-        -- TODO: we should actually use the index here
-        undefined
+    Core.ProductConstructor{arguments, resultRepresentation = _} -> do
+        fields <- forIndexed arguments \argument i -> do
+            jsArgument <- compileValue argument
+            pure ("x" <> show i, jsArgument)
+        pure (JS.ObjectLiteral fields)
+    Core.SumConstructor{constructorIndex, payload, resultRepresentation = _} -> do
+        jsPayload <- compileValue payload
+        pure (JS.ObjectLiteral [("tag", JS.IntLiteral (fromIntegral constructorIndex)), ("payload", jsPayload)])
 
 -- It turns out that representing products as objects with uniformly named keys
 -- is actually *much* more efficient than using (heterogeneous) arrays

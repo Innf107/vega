@@ -305,11 +305,8 @@ compileExprToValue expr = do
             representation <- convertRepresentation vegaRepresentation
             arityOfDataConstructor name >>= \case
                 Nothing -> do
-                    pure
-                        ( []
-                        , Core.DataConstructorApplication (Core.UserDefinedConstructor name) [] representation
-                        , representation
-                        )
+                    (statements, value) <- userDefinedDataConstructorApplication name [] representation
+                    pure (statements, value, representation)
                 Just _ -> do
                     deferToLet
         Vega.Application _ returnRepresentation (Vega.DataConstructor{name}) argumentExprs -> do
@@ -334,7 +331,7 @@ compileExprToValue expr = do
             let representation = Core.ProductRep elementRepresentations
             pure
                 ( fold statements
-                , Core.DataConstructorApplication (Core.TupleConstructor (length elementValues)) elementValues representation
+                , Core.ProductConstructor elementValues representation
                 , representation
                 )
         Vega.RecordLiteral _loc fields -> do
@@ -343,7 +340,7 @@ compileExprToValue expr = do
             let representation = Core.ProductRep (fromList elementRepresentations)
             pure
                 ( fold statements
-                , Core.DataConstructorApplication (Core.TupleConstructor (length elementValues)) (fromList elementValues) representation
+                , Core.ProductConstructor (fromList elementValues) representation
                 , representation
                 )
         Vega.BinaryOperator{} -> deferToLet
@@ -369,7 +366,13 @@ userDefinedDataConstructorApplication name arguments representation = do
             else
                 pure (statements, argument)
 
-    pure (statements, Core.DataConstructorApplication (Core.UserDefinedConstructor name) newArguments representation)
+    let payload = case newArguments of
+            [singleArgument] -> singleArgument
+            _ -> Core.ProductConstructor newArguments representation
+
+    GraphPersistence.getDataConstructorIndex name >>= \case
+        GraphPersistence.OnlyConstructor -> pure (statements, payload)
+        GraphPersistence.MultiConstructor constructorIndex -> pure (statements, Core.SumConstructor{constructorIndex, payload, resultRepresentation = representation})
 
 -- | Like 'compileStatements' but discards the representation
 compileStatements_ ::
@@ -385,7 +388,7 @@ compileStatements ::
     Seq (Vega.Statement Typed) ->
     Eff es (Seq Core.Statement, Core.Expr, Core.Representation)
 compileStatements = \case
-    Empty -> pure ([], Core.Value unitLiteral, Core.ProductRep [])
+    Empty -> pure ([], Core.Value Core.unitValue, Core.ProductRep [])
     [Vega.Run _ expr] -> compileExpr expr
     (Vega.Run _ expr :<| rest) -> do
         local <- newLocal
@@ -431,9 +434,6 @@ compileStatements = \case
             , finalRepresentation
             )
     (Vega.Use{} :<| _) -> undefined
-
-unitLiteral :: Core.Value
-unitLiteral = Core.DataConstructorApplication (Core.TupleConstructor 0) [] (Core.ProductRep [])
 
 compilePatternMatch :: (Compile es) => Vega.Expr Typed -> Seq (Vega.Pattern Typed, Vega.Expr Typed) -> Eff es (Seq Core.Statement, Core.Expr)
 compilePatternMatch scrutinee = \case
@@ -861,10 +861,12 @@ applySubst substitution = \case
             Core.Instantiation{varName = name, representationArguments = representationArguments}
         value -> panic $ "Trying to apply non-variable substitution " <> pretty value <> " to instantiation: " <> pretty (Core.Instantiation (Core.Local localName) representationArguments)
     Core.Literal literal -> Core.Literal literal
-    Core.DataConstructorApplication{constructor, arguments, resultRepresentation} ->
-        Core.DataConstructorApplication
-            { arguments = (fmap (applySubst substitution) arguments)
-            , constructor
+    Core.ProductConstructor{arguments, resultRepresentation} ->
+        Core.ProductConstructor{arguments = fmap (applySubst substitution) arguments, resultRepresentation}
+    Core.SumConstructor{constructorIndex, payload, resultRepresentation} ->
+        Core.SumConstructor
+            { payload = applySubst substitution payload
+            , constructorIndex
             , resultRepresentation
             }
 

@@ -8,9 +8,9 @@ import Data.Unique (Unique)
 import Relude hiding (NonEmpty)
 import Vega.Debruijn qualified as Debruijn
 import Vega.Pretty
+import Vega.Seq.NonEmpty (NonEmpty)
 import Vega.Syntax (GlobalName, NameKind (..), prettyGlobal, prettyLocal)
 import Vega.Syntax qualified as Vega
-import Vega.Seq.NonEmpty (NonEmpty)
 
 data CoreName
     = Global GlobalName
@@ -87,16 +87,15 @@ data Value
     = Var {varName :: CoreName}
     | Instantiation {varName :: CoreName, representationArguments :: NonEmpty Representation}
     | Literal Literal
-    | DataConstructorApplication
-        { constructor :: DataConstructor
-        , arguments :: Seq Value
+    | ProductConstructor
+        { arguments :: Seq Value
         , resultRepresentation :: Representation
         }
-
-data DataConstructor
-    = UserDefinedConstructor Vega.Name
-    | TupleConstructor {size :: Int}
-    deriving (Generic, Show, Eq, Hashable)
+    | SumConstructor
+        { constructorIndex :: Int
+        , payload :: Value
+        , resultRepresentation :: Representation
+        }
 
 data Literal
     = IntLiteral Integer
@@ -223,15 +222,9 @@ instance Pretty Value where
         Var name -> pretty name
         Instantiation name arguments -> pretty name <> lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty arguments) <> rparen "]"
         Literal literal -> pretty literal
-        DataConstructorApplication{constructor, arguments, resultRepresentation} ->
-            lparen "(" <> prettyConstructorApplication constructor arguments <> keyword " : " <> pretty resultRepresentation <> rparen ")"
-
-prettyConstructorApplication :: (Pretty a) => DataConstructor -> Seq a -> Doc Ann
-prettyConstructorApplication constructor constructorArguments = case constructor of
-    UserDefinedConstructor name -> Vega.prettyName Vega.DataConstructorKind name <> arguments constructorArguments
-    TupleConstructor count
-        | count == length constructorArguments -> arguments constructorArguments
-        | otherwise -> errorText ("Tuple(" <> show count <> ")") <> arguments constructorArguments
+        ProductConstructor{arguments = constructorArguments} -> arguments constructorArguments
+        SumConstructor{constructorIndex, payload, resultRepresentation} ->
+            lparen "[" <> number constructorIndex <> rparen "]" <> lparen "(" <> pretty payload <> rparen ")" <+> keyword ":" <+> pretty resultRepresentation
 
 instance Pretty Literal where
     pretty = \case
@@ -278,16 +271,20 @@ boolRepresentation = SumRep [ProductRep [], ProductRep []]
 
 trueValue :: Value
 trueValue =
-    DataConstructorApplication
-        { constructor = UserDefinedConstructor (Vega.Global (Vega.internalName "True"))
-        , arguments = []
+    SumConstructor
+        { constructorIndex = 0
+        , payload = unitValue
         , resultRepresentation = boolRepresentation
         }
 
 falseValue :: Value
 falseValue =
-    DataConstructorApplication
-        { constructor = UserDefinedConstructor (Vega.Global (Vega.internalName "False"))
-        , arguments = []
+    SumConstructor
+        { constructorIndex = 1
+        , payload = unitValue
         , resultRepresentation = boolRepresentation
         }
+
+
+unitValue :: Value
+unitValue = ProductConstructor{arguments = [], resultRepresentation = ProductRep []}

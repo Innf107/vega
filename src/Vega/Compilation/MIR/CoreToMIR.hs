@@ -396,37 +396,24 @@ compileValue block = \case
     Core.Var var -> compileVarInstantiation block var []
     Core.Instantiation var representationArguments -> compileVarInstantiation block var (NonEmpty.toSeq representationArguments)
     Core.Literal literal -> do
-        variable <- newVar ""
+        var <- newVar ""
         case literal of
             Core.IntLiteral value -> do
                 -- TODO: check the size properly etc.
-                block <- addInstruction block (MIR.LoadIntLiteral variable (fromIntegral value))
-                pure (block, variable)
+                block <- addInstruction block (MIR.LoadIntLiteral var (fromIntegral value))
+                pure (block, var)
             _ -> undefined
-    Core.DataConstructorApplication constructor arguments representation -> do
+    Core.ProductConstructor arguments representation -> do
         (block, arguments) <- compileValues block arguments
-        variable <- newVar ""
-        builder <- case constructor of
-            Core.TupleConstructor size -> do
-                assert (size == length arguments)
-                addInstruction block (MIR.ProductConstructor{var = variable, values = arguments, representation = representation})
-            Core.UserDefinedConstructor constructorName -> do
-                GraphPersistence.getDataConstructorIndex constructorName >>= \case
-                    OnlyConstructor -> addInstruction block (MIR.ProductConstructor{var = variable, values = arguments, representation = representation})
-                    MultiConstructor tag ->
-                        case arguments of
-                            [singleArgument] -> addInstruction block (MIR.SumConstructor{var = variable, tag, payload = singleArgument, representation})
-                            _ -> do
-                                product <- newVar ""
-                                let payloadRepresentation = case representation of
-                                        Core.SumRep inner -> case Seq.lookup tag inner of
-                                            Just payloadRep -> payloadRep
-                                            Nothing -> panic $ "Tag " <> Pretty.number tag <> " out of bounds for sum with " <> Pretty.number (length inner) <> " constructors"
-                                        _ -> panic "Trying to compile constructor application with non-sum representation"
+        var <- newVar ""
+        block <- addInstruction block (MIR.ProductConstructor{var, values = arguments, representation})
+        pure (block, var)
+    Core.SumConstructor constructorIndex payload resultRepresentation -> do
+        var <- newVar ""
+        (block, payload) <- compileValue block payload
 
-                                block <- addInstruction block (MIR.ProductConstructor{var = product, values = arguments, representation = payloadRepresentation})
-                                addInstruction block (MIR.SumConstructor{var = variable, tag, payload = product, representation})
-        pure (builder, variable)
+        addInstruction block (MIR.SumConstructor{var, tag = constructorIndex, payload, representation = resultRepresentation})
+        pure (block, var)
 
 compileLambda :: (Compile es) => BlockBuilder -> MIR.Variable -> Seq (LocalCoreName, Core.Representation) -> Core.Representation -> Seq Core.Statement -> Core.Expr -> Eff es BlockBuilder
 compileLambda block local parameters returnRepresentation statements returnExpr = do
