@@ -44,7 +44,8 @@ import Vega.BuildConfig qualified as BuildConfig
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.Core.VegaToCore qualified as VegaToCore
 import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
-import Vega.Compilation.JavaScript.VegaToJavaScript qualified as JavaScript
+import Vega.Compilation.JavaScript.CoreToJavaScript qualified as JavaScript
+import Vega.Compilation.JavaScript.Syntax qualified as JavaScript.Syntax
 import Vega.Compilation.LLVM.MIRToLLVM qualified as MIRToLLVM
 import Vega.Compilation.MIR.CoreToMIR qualified as CoreToMIR
 import Vega.Compilation.MIR.Monomorphize qualified as Monomorphize
@@ -419,13 +420,13 @@ typecheck name =
 
 compileToJS :: (Driver es) => DeclarationName -> Eff es ()
 compileToJS name =
-    GraphPersistence.getTyped name >>= \case
+    GraphPersistence.getCompiledCore name >>= \case
         -- TODOOOO
         Missing{} -> pure () -- error $ "missing typed in compilation to JS: " <> show name
-        Failed{} -> pure () -- If the previous stage errored, we won't try to compile it
-        Ok typedDeclaration -> do
-            compiled <- JavaScript.compileDeclaration typedDeclaration
-            GraphPersistence.setCompiledJS name compiled
+        Ok core -> do
+            statements <- fold <$> for core JavaScript.compileDeclaration
+            let rendered = TextBuilder.toText $ JavaScript.Syntax.renderStatements $ toList statements
+            GraphPersistence.setCompiledJS name rendered
 
 compileToCore :: (Driver es) => DeclarationName -> Eff es ()
 compileToCore name =

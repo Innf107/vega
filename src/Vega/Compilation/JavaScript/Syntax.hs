@@ -7,20 +7,25 @@ module Vega.Compilation.JavaScript.Syntax (
     compileGlobalName,
     compileLocalName,
     compileName,
+    compileLocalCoreName,
+    compileCoreName,
 ) where
 
 import Data.Char qualified as Char
 import Data.Text qualified as Text
+import Data.Unique (hashUnique)
 import Numeric (showHex)
-import Relude hiding (Const)
+import Relude hiding (Const, Undefined)
 import TextBuilder (TextBuilder)
 import TextBuilder qualified
+import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Syntax qualified as Vega
 
 type Name = Text
 
 data Statement
     = Const Name Expr
+    | Let Name (Maybe Expr)
     | Function Name (Seq Name) (Seq Statement)
     | Return Expr
     | If Expr (Seq Statement) (Seq Statement)
@@ -29,8 +34,14 @@ data Statement
         , cases :: Seq (Text, Seq Statement)
         , default_ :: Maybe (Seq Statement)
         }
+    | SwitchInt
+        { scrutinee :: Expr
+        , intCases :: Seq (Int, Seq Statement)
+        , default_ :: Maybe (Seq Statement)
+        }
     | DestructureArray (Seq Name) Expr
     | Panic Expr
+    | Assign Expr Expr
 
 data Expr
     = IIFE (Seq Statement)
@@ -45,6 +56,7 @@ data Expr
     | ArrayLiteral (Seq Expr)
     | ObjectLiteral (Seq (Name, Expr))
     | BinaryOperator Expr BinaryOperator Expr
+    | Undefined
 
 data BinaryOperator
     = Add
@@ -64,6 +76,10 @@ data BinaryOperator
 renderStatement :: Statement -> TextBuilder
 renderStatement = \case
     Const name expr -> "const " <> TextBuilder.text name <> " = " <> renderExpr expr
+    Let name initializer ->
+        ("let " <> TextBuilder.text name) <> case initializer of
+            Just initializer -> " = " <> renderExpr initializer
+            _ -> ""
     Function name parameters body ->
         "function "
             <> (TextBuilder.text name)
@@ -97,8 +113,25 @@ renderStatement = \case
             <> intercalateMap "\n" renderCase cases
             <> renderedDefault
             <> "}\n"
+    SwitchInt{scrutinee, intCases, default_} -> do
+        let renderCase (int, body) =
+                "case "
+                    <> show int
+                    <> ":\n"
+                    <> renderStatements body
+                    <> "\nbreak;"
+        let renderedDefault = case default_ of
+                Nothing -> ""
+                Just statements -> "default:\n" <> renderStatements statements
+        "switch("
+            <> renderExpr scrutinee
+            <> "){\n"
+            <> intercalateMap "\n" renderCase intCases
+            <> renderedDefault
+            <> "}\n"
     DestructureArray bindings arrayExpr -> "const [" <> intercalateMap ", " TextBuilder.text bindings <> "] = " <> renderExpr arrayExpr
     Panic message -> "throw new Error('PANIC: ' + (" <> renderExpr message <> "))"
+    Assign expr1 expr2 -> renderExpr expr1 <> " = " <> renderExpr expr2
 
 renderStatements :: (Foldable f) => f Statement -> TextBuilder
 renderStatements statements = intercalateMap ";\n" renderStatement statements
@@ -117,6 +150,7 @@ renderExpr = \case
     ArrayLiteral elements -> "[" <> intercalateMap ", " renderExpr elements <> "]"
     ObjectLiteral bindings -> "{" <> intercalateMap ", " (\(name, expr) -> TextBuilder.text name <> ": " <> renderExpr expr) bindings <> "}"
     BinaryOperator left operator right -> "(" <> renderExpr left <> " " <> renderBinaryOperator operator <> " " <> renderExpr right <> ")"
+    Undefined -> "undefined"
 
 renderBinaryOperator :: BinaryOperator -> TextBuilder
 renderBinaryOperator = \case
@@ -154,12 +188,20 @@ compileLocalName (Vega.MkLocalName{parent = _, name, count}) =
         0 -> name
         _ -> name <> "$$" <> show count
 
+compileLocalCoreName :: Core.LocalCoreName -> Name
+compileLocalCoreName = \case
+    Core.UserProvided local -> compileLocalName local
+    Core.Generated unique -> "$x" <> show (hashUnique unique)
+
 compileName :: Vega.Name -> Name
 compileName = \case
     Vega.Local localName -> compileLocalName localName
     Vega.Global globalName -> compileGlobalName globalName
 
-
+compileCoreName :: Core.CoreName -> Name
+compileCoreName = \case
+    Core.Local localName -> compileLocalCoreName localName
+    Core.Global globalName -> compileGlobalName globalName
 
 -- TODO
 escapeString :: Text -> TextBuilder

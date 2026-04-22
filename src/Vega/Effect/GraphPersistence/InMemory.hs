@@ -463,7 +463,7 @@ remainingWorkItems :: (InMemory es) => Backend -> DeclarationName -> Declaration
 remainingWorkItems backend name data_ = do
     -- TODO: ughhhh i hope this gets better once we switch to the work queue API
     let remainingCompilation = case backend of
-            JavaScript -> [CompileToJS name]
+            JavaScript -> [CompileToCore name, CompileToJS name]
             NativeRelease -> [CompileToCore name]
             _ -> []
     readIORef data_.renamed >>= \case
@@ -475,16 +475,15 @@ remainingWorkItems backend name data_ = do
                 Missing{} -> pure $ [TypeCheck name] <> remainingCompilation
                 Failed{} -> pure []
                 Ok _ -> do
-                    case backend of
-                        JavaScript -> do
-                            readIORef data_.compiledJS >>= \case
-                                Missing{} -> pure [CompileToJS name]
-                                Ok{} -> pure []
-                        NativeRelease -> do
-                            readIORef data_.compiledCore >>= \case
-                                Missing{} -> pure [CompileToCore name]
-                                Ok{} -> pure []
-                        _ -> undefined
+                        readIORef data_.compiledCore >>= \case
+                            Missing{} -> pure remainingCompilation
+                            Ok{} -> case backend of
+                                JavaScript -> do
+                                    readIORef data_.compiledJS >>= \case
+                                        Missing{} -> pure [CompileToJS name]
+                                        Ok{} -> pure []
+                                NativeRelease -> pure []
+                                _ -> undefined
 
 getRemainingWork :: (InMemory es) => Backend -> Eff es (Seq WorkItem)
 getRemainingWork backend = do
