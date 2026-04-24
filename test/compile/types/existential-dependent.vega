@@ -1,4 +1,5 @@
 -- type: error
+-- KNOWN
 
 f : () -> exists (r : Kind) (a : Type(r)). a;
 f() = 5;

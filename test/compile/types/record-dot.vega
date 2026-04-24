@@ -1,4 +1,5 @@
 -- type: print(5)
+-- KNOWN
 f : { x : Int, y : Int } -> Int
 f(r) = r.x
 

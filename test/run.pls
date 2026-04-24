@@ -2,7 +2,8 @@
 options {
     "--pre-print-cases" as prePrintCases: "Print the name of a test case before running it. This is useful to find infinite loops in tests"
     "--backend" (*) as backendStrings: "The backend to run tests on. Can be specified multiple times. 'all' will run all backends. Default: 'all'"
-    "--hide-passing" as hidePassing: "Only print immediate output for failing tests"
+    "--hide-passing" as hidePassing: "Don't print immediate output for passing tests"
+    "--hide-known" as hideKnown: "Don't print immediate output for known failures"
 }
 
 module List = import("@std/list.pls")
@@ -140,9 +141,21 @@ let runTest(backend, testFile) = {
     }
 }
 
+let isKnownFailure(testFile) = {
+    match regexpMatch("--\\s*KNOWN", !cat testFile) {
+        [] -> false
+        _ -> true
+    }
+}
+
 let numberOfBackends = List.length(backends)
 
 let failures = ref 0
+let knownFailures = ref 0
+let knownFixed = ref 0
+
+
+let baseDirectory = !readlink "-f" "."
 List.for(compileTests, \testFile -> {
     if prePrintCases then {
         print("\e[30m[${testFile}]\e[0m")
@@ -153,24 +166,47 @@ List.for(compileTests, \testFile -> {
             Passed -> Nothing
             Failed(message) -> Just((backend, message))
         }, backends)
+    chdir(baseDirectory)
+    let knownFailure = isKnownFailure(testFile)
     match failuresForThisTest {
-        [] -> if not hidePassing then {
-            print("\e[32m[${testFile}]: passed\e[0m")
-        } else {}
+        [] -> {
+            if knownFailure then {
+                knownFixed := knownFixed! + 1
+                print("\e[93m[${testFile}]: previously known failure passed\e[0m")
+            } else if not hidePassing then {
+                print("\e[32m[${testFile}]: passed\e[0m")
+            } else {}
+        }
         _ -> {
-            failures := failures! + 1
-            print("\e[1m\e[31m[${testFile}]: FAILED on ${List.length(failuresForThisTest)}/${numberOfBackends} backends\e[0m")
-            List.for(failuresForThisTest, \(backend, message) -> {
-                print("\e[1m\e[31m[${backendToString(backend)}]:\e[0m ${message}")
-            })
+            if knownFailure then {
+                knownFailures := knownFailures! + 1
+                if not hideKnown then {
+                    print("\e[35m[${testFile}]: known failure on ${List.length(failuresForThisTest)}/${numberOfBackends} backends\e[0m")
+                    List.for(failuresForThisTest, \(backend, message) -> {
+                        print("\e[1m\e[35m[${backendToString(backend)}]:\e[0m ${message}")
+                    })
+                } else {}
+            } else {
+
+                failures := failures! + 1
+                print("\e[1m\e[31m[${testFile}]: FAILED on ${List.length(failuresForThisTest)}/${numberOfBackends} backends\e[0m")
+                List.for(failuresForThisTest, \(backend, message) -> {
+                    print("\e[1m\e[31m[${backendToString(backend)}]:\e[0m ${message}")
+                })
+            }
         }
     }
 
 
 })
 
+let knownSuffix = if knownFailures! == 0 then "" else " (${knownFailures!} known failures)"
 if (failures! == 0) then {
-    print("\n\e[1m\e[32mAll tests passed.\e[0m")
+    print("\n\e[1m\e[32mAll tests passed${knownSuffix}.\e[0m")
 } else {
-    print("\n\e[1m\e[31m${failures!}/${List.length(compileTests)} TESTS FAILED\e[0m")
+    print("\n\e[1m\e[31m${failures!}/${List.length(compileTests)} TESTS FAILED${knownSuffix}\e[0m")
 }
+
+if knownFixed! != 0 then {
+    print("\n\e[1m\e[93m${knownFixed!} known failures have been fixed")
+} else {}

@@ -1,4 +1,5 @@
 -- type: compile
+-- KNOWN
 import internal:Internal (replicateArray, readArray)
 
 main : () -> ();

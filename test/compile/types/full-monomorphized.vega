@@ -1,4 +1,5 @@
 -- type: compile
+-- KNOWN
 idVeryMono : forall *(r : Rep) *(a : Type(r)). a -> a;
 idVeryMono(x) = x;
 
