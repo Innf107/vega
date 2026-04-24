@@ -14,10 +14,3 @@ function internal$codePoints(string) {
     }
     return array
 }
-
-function internal$readArray(array, index) {
-    if (index < 0 || index >= array.length) {
-        throw new Error("readArray: Index " + index + " out of range for array of size " + array.length)
-    }
-    return array[index]
-}

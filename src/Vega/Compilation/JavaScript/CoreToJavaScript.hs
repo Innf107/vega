@@ -14,9 +14,9 @@ import Vega.Compilation.JavaScript.Syntax qualified as JS
 import Vega.Effect.Trace (Trace)
 import Vega.Panic (panic)
 import Vega.Pretty (pretty)
+import Vega.Pretty qualified as Pretty
 import Vega.Syntax qualified as Vega
 import Vega.Util (forIndexed)
-import qualified Vega.Pretty as Pretty
 
 type Compile es =
     ( Trace :> es
@@ -267,6 +267,18 @@ isUnitRepresentation = \case
 
 primops :: HashMap Text (Int, Seq JS.Expr -> Eff es (Seq JS.Statement, JS.Expr))
 primops =
-    [ ("debugInt", (1, \arguments -> pure $ ([], JS.Application (JS.Var "console.log") arguments)))
+    [ ("debugInt", asJSFunction 1 "console.log")
+    , ("replicateArray", asJSFunction 2 "internal$replicateArray")
+    , ("codePoints", asJSFunction 1 "internal$codePoints")
+    ,
+        ( "readArray"
+        ,
+            ( 2
+            , \arguments -> case arguments of
+                [array, index] -> pure ([], JS.Index array index)
+                _ -> error "unreachable"
+            )
+        )
     ]
-
+  where
+    asJSFunction arity name = (arity, \arguments -> pure ([], JS.Application (JS.Var name) arguments))
