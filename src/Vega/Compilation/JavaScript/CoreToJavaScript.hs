@@ -68,35 +68,10 @@ compileStatements = \case
         pure $ (JS.Function (JS.compileLocalCoreName name) jsParameters jsBody) :<| remainingStatements
 
 compileFunctionBody :: (Compile es) => Seq Core.Statement -> Core.Expr -> Eff es (Seq JS.Statement)
-compileFunctionBody statements returnExpr = case statements of
-    Empty -> do
-        (returnStatements, returnExpr) <- compileExpr returnExpr
-        pure (returnStatements <> [JS.Return returnExpr])
-    Core.Let _ _ Core.Unreachable :<| _rest -> do
-        pure [JS.Panic (JS.StringLiteral "unreachable code evaluated")]
-    Core.Let name _representation expr :<| rest -> do
-        (statements, expr) <- compileExpr expr
-        remainingStatements <- compileFunctionBody rest returnExpr
-        pure (statements <> [JS.Const (JS.compileLocalCoreName name) expr] <> remainingStatements)
-    Core.LetFunction
-        { name
-        , parameters
-        , returnRepresentation = _
-        , statements
-        , result
-        }
-        :<| rest -> do
-            let jsParameters = fmap (\(name, _) -> JS.compileLocalCoreName name) parameters
-
-            jsBody <- compileFunctionBody statements result
-
-            remainingStatements <- compileFunctionBody rest result
-            pure $ (JS.Function (JS.compileLocalCoreName name) jsParameters jsBody) :<| remainingStatements
-    Core.LetJoin{name, parameters, statements, result} :<| rest -> do
-        let jsParameters = fmap (\(name, _) -> JS.compileLocalCoreName name) parameters
-        jsBody <- compileFunctionBody statements result
-        remainingStatements <- compileFunctionBody rest result
-        pure $ (JS.Function (JS.compileLocalCoreName name) jsParameters jsBody) :<| remainingStatements
+compileFunctionBody statements returnExpr = do
+    jsStatements <- compileStatements statements
+    (returnStatements, returnExpr) <- compileExpr returnExpr
+    pure (jsStatements <> returnStatements <> [JS.Return returnExpr])
 
 compileExpr :: (Compile es) => Core.Expr -> Eff es (Seq JS.Statement, JS.Expr)
 compileExpr = \case
