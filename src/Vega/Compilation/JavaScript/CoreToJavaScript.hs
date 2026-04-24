@@ -181,12 +181,13 @@ compileExpr = \case
                 (Nothing, Nothing, Nothing) -> pure ([JS.Panic (JS.StringLiteral "empty case evaluated")], JS.Undefined)
         | otherwise -> do
             jsScrutinee <- compileValue scrutinee
+            let jsTag = JS.FieldAccess jsScrutinee "tag"
             resultVar <- newVar
 
             intCases <-
                 fromList <$> for (HashMap.toList cases) \(key, (parameters, statements, expr)) -> do
                     accessStatements <- forIndexed parameters \parameter index -> do
-                        pure (JS.Const (JS.compileLocalCoreName parameter) $ productFieldAccess jsScrutinee index)
+                        pure (JS.Const (JS.compileLocalCoreName parameter) $ productFieldAccess (JS.FieldAccess jsScrutinee "payload") index)
                     bodyStatements <- compileStatements statements
                     (exprStatements, jsExpr) <- compileExpr expr
                     pure (key, accessStatements <> bodyStatements <> exprStatements <> [JS.Assign (JS.Var resultVar) jsExpr])
@@ -196,7 +197,7 @@ compileExpr = \case
                 (exprStatements, jsExpr) <- compileExpr expr
                 pure (bodyStatements <> exprStatements <> [JS.Assign (JS.Var resultVar) jsExpr])
 
-            pure ([JS.Let resultVar Nothing] <> [JS.SwitchInt{scrutinee = jsScrutinee, intCases, default_}], JS.Var resultVar)
+            pure ([JS.Let resultVar Nothing] <> [JS.SwitchInt{scrutinee = jsTag, intCases, default_}], JS.Var resultVar)
     Core.IntCase{scrutinee, intCases, default_} -> do
         jsScrutinee <- compileValue scrutinee
         resultVar <- newVar
