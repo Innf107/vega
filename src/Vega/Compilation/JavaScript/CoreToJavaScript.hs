@@ -13,8 +13,10 @@ import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.JavaScript.Syntax qualified as JS
 import Vega.Effect.Trace (Trace)
 import Vega.Panic (panic)
-import Vega.Pretty qualified as Pretty
+import Vega.Pretty (pretty)
+import Vega.Syntax qualified as Vega
 import Vega.Util (forIndexed)
+import qualified Vega.Pretty as Pretty
 
 type Compile es =
     ( Trace :> es
@@ -103,9 +105,17 @@ compileExpr = \case
         pure ([], jsExpr)
     Core.Unreachable -> do
         pure ([JS.Panic (JS.StringLiteral "unreachable code evaluated")], JS.Undefined)
-    Core.Application{function, representationArguments = _, arguments, resultRepresentation = _} -> do
-        jsArguments <- for arguments compileValue
-        pure ([], JS.Application (JS.Var (JS.compileCoreName function)) jsArguments)
+    Core.Application{function, representationArguments = _, arguments, resultRepresentation = _}
+        | Core.Global globalName <- function
+        , Vega.isInternalName globalName -> do
+            case HashMap.lookup globalName.name primops of
+                Nothing -> panic $ "Unimplemented builtin function: " <> pretty function
+                Just (_arity, makeBody) -> do
+                    jsArguments <- for arguments compileValue
+                    makeBody jsArguments
+        | otherwise -> do
+            jsArguments <- for arguments compileValue
+            pure ([], JS.Application (JS.Var (JS.compileCoreName function)) jsArguments)
     Core.JumpJoin name arguments -> do
         jsArguments <- for arguments compileValue
         pure ([], JS.Application (JS.Var (JS.compileLocalCoreName name)) jsArguments)
@@ -115,7 +125,7 @@ compileExpr = \case
         pure ([], JS.Lambda jsParameters bodyStatements)
     Core.ProductAccess{product, index} -> do
         jsProduct <- compileValue product
-        pure ([], JS.Index jsProduct (JS.IntLiteral (fromIntegral index)))
+        pure ([], JS.FieldAccess jsProduct ("x" <> show index))
     Core.Box x -> do
         jsExpr <- compileValue x
         pure ([], jsExpr)
@@ -228,7 +238,16 @@ compilePureOperatorExpr = \case
 
 compileValue :: (Compile es) => Core.Value -> Eff es JS.Expr
 compileValue = \case
-    Core.Var varName -> pure $ JS.Var (JS.compileCoreName varName)
+    Core.Var varName
+        | Core.Global globalName <- varName
+        , Vega.isInternalName globalName -> do
+            case HashMap.lookup globalName.name primops of
+                Nothing -> panic $ "Unimplemented builtin function: " <> pretty varName
+                Just (arity, makeBody) -> do
+                    variables <- fromList <$> replicateM arity newVar
+                    (bodyStatements, bodyExpr) <- makeBody (fmap JS.Var variables)
+                    pure (JS.Lambda variables (bodyStatements <> [JS.Return bodyExpr]))
+        | otherwise -> pure $ JS.Var (JS.compileCoreName varName)
     Core.Instantiation{varName, representationArguments = _} -> pure $ JS.Var (JS.compileCoreName varName)
     Core.Literal literal -> case literal of
         Core.IntLiteral int -> pure (JS.IntLiteral int)
@@ -244,7 +263,7 @@ compileValue = \case
             case constructorIndex of
                 0 -> pure $ JS.BoolLiteral False
                 1 -> pure $ JS.BoolLiteral True
-                _ -> panic $ "Invalid sum constructor index " <> Pretty.number constructorIndex <> " of supposedly boolean-like representation " <> Pretty.pretty resultRepresentation
+                _ -> panic $ "Invalid sum constructor index " <> Pretty.number constructorIndex <> " of supposedly boolean-like representation " <> pretty resultRepresentation
         | otherwise -> do
             jsPayload <- compileValue payload
             pure (JS.ObjectLiteral [("tag", JS.IntLiteral (fromIntegral constructorIndex)), ("payload", jsPayload)])
@@ -269,3 +288,9 @@ isUnitRepresentation :: Core.Representation -> Bool
 isUnitRepresentation = \case
     Core.ProductRep [] -> True
     _ -> False
+
+primops :: HashMap Text (Int, Seq JS.Expr -> Eff es (Seq JS.Statement, JS.Expr))
+primops =
+    [ ("debugInt", (1, \arguments -> pure $ ([], JS.Application (JS.Var "console.log") arguments)))
+    ]
+
