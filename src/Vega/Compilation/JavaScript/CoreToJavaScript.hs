@@ -12,6 +12,8 @@ import Effectful (Eff, IOE, type (:>))
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.JavaScript.Syntax qualified as JS
 import Vega.Effect.Trace (Trace)
+import Vega.Panic (panic)
+import Vega.Pretty qualified as Pretty
 import Vega.Util (forIndexed)
 
 type Compile es =
@@ -123,24 +125,68 @@ compileExpr = \case
     Core.PureOperator pureOperatorExpr -> do
         jsExpr <- compilePureOperatorExpr pureOperatorExpr
         pure ([], jsExpr)
-    Core.ConstructorCase{scrutinee, scrutineeRepresentation = _, cases, default_} -> do
-        jsScrutinee <- compileValue scrutinee
-        resultVar <- newVar
+    Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases, default_}
+        | usesBooleans scrutineeRepresentation -> do
+            jsScrutinee <- compileValue scrutinee
+            resultVar <- newVar
+            let thenBranch = HashMap.lookup 1 cases
+            let elseBranch = HashMap.lookup 0 cases
 
-        intCases <-
-            fromList <$> for (HashMap.toList cases) \(key, (parameters, statements, expr)) -> do
-                accessStatements <- forIndexed parameters \parameter index -> do
-                    pure (JS.Const (JS.compileLocalCoreName parameter) $ productFieldAccess jsScrutinee index)
+            let ifThenElse (thenStatements, thenExpr) (elseStatements, elseExpr) = do
+                    thenJSStatements <- compileStatements thenStatements
+                    (thenReturnStatements, thenReturnExpr) <- compileExpr thenExpr
+                    elseJSStatements <- compileStatements elseStatements
+                    (elseReturnStatements, elseReturnExpr) <- compileExpr elseExpr
+                    pure
+                        (
+                            [ JS.If
+                                jsScrutinee
+                                (thenJSStatements <> thenReturnStatements <> [JS.Assign (JS.Var resultVar) thenReturnExpr])
+                                (elseJSStatements <> elseReturnStatements <> [JS.Assign (JS.Var resultVar) elseReturnExpr])
+                            ]
+                        , JS.Var resultVar
+                        )
+
+            let singleBranch (statements, expr) = do
+                    jsStatements <- compileStatements statements
+                    (returnStatements, returnExpr) <- compileExpr expr
+                    pure (jsStatements <> returnStatements, returnExpr)
+
+            case (thenBranch, elseBranch, default_) of
+                (Just (_, thenStatements, thenExpr), Just (_, elseStatements, elseExpr), _) -> do
+                    -- If both branches are set, we can ignore the default even if there is one
+                    ifThenElse (thenStatements, thenExpr) (elseStatements, elseExpr)
+                (Just (_, thenStatements, thenExpr), Nothing, Just default_) -> do
+                    ifThenElse (thenStatements, thenExpr) default_
+                (Nothing, Just (_, elseStatements, elseExpr), Just default_) -> do
+                    ifThenElse default_ (elseStatements, elseExpr)
+                (Just (_, thenStatements, thenExpr), Nothing, Nothing) -> do
+                    -- Here we can assume that everything but the then branch is impossible
+                    singleBranch (thenStatements, thenExpr)
+                (Nothing, Just (_, elseStatements, elseExpr), Nothing) -> do
+                    -- Here we can assume that everything but the else branch is impossible
+                    singleBranch (elseStatements, elseExpr)
+                (Nothing, Nothing, Just default_) -> do
+                    singleBranch default_
+                (Nothing, Nothing, Nothing) -> pure ([JS.Panic (JS.StringLiteral "empty case evaluated")], JS.Undefined)
+        | otherwise -> do
+            jsScrutinee <- compileValue scrutinee
+            resultVar <- newVar
+
+            intCases <-
+                fromList <$> for (HashMap.toList cases) \(key, (parameters, statements, expr)) -> do
+                    accessStatements <- forIndexed parameters \parameter index -> do
+                        pure (JS.Const (JS.compileLocalCoreName parameter) $ productFieldAccess jsScrutinee index)
+                    bodyStatements <- compileStatements statements
+                    (exprStatements, jsExpr) <- compileExpr expr
+                    pure (key, accessStatements <> bodyStatements <> exprStatements <> [JS.Assign (JS.Var resultVar) jsExpr])
+
+            default_ <- for default_ \(statements, expr) -> do
                 bodyStatements <- compileStatements statements
                 (exprStatements, jsExpr) <- compileExpr expr
-                pure (key, accessStatements <> bodyStatements <> exprStatements <> [JS.Assign (JS.Var resultVar) jsExpr])
+                pure (bodyStatements <> exprStatements <> [JS.Assign (JS.Var resultVar) jsExpr])
 
-        default_ <- for default_ \(statements, expr) -> do
-            bodyStatements <- compileStatements statements
-            (exprStatements, jsExpr) <- compileExpr expr
-            pure (bodyStatements <> exprStatements <> [JS.Assign (JS.Var resultVar) jsExpr])
-
-        pure ([JS.Let resultVar Nothing] <> [JS.SwitchInt{scrutinee = jsScrutinee, intCases, default_}], JS.Var resultVar)
+            pure ([JS.Let resultVar Nothing] <> [JS.SwitchInt{scrutinee = jsScrutinee, intCases, default_}], JS.Var resultVar)
     Core.IntCase{scrutinee, intCases, default_} -> do
         jsScrutinee <- compileValue scrutinee
         resultVar <- newVar
@@ -193,11 +239,33 @@ compileValue = \case
             jsArgument <- compileValue argument
             pure ("x" <> show i, jsArgument)
         pure (JS.ObjectLiteral fields)
-    Core.SumConstructor{constructorIndex, payload, resultRepresentation = _} -> do
-        jsPayload <- compileValue payload
-        pure (JS.ObjectLiteral [("tag", JS.IntLiteral (fromIntegral constructorIndex)), ("payload", jsPayload)])
+    Core.SumConstructor{constructorIndex, payload, resultRepresentation}
+        | usesBooleans resultRepresentation -> do
+            case constructorIndex of
+                0 -> pure $ JS.BoolLiteral False
+                1 -> pure $ JS.BoolLiteral True
+                _ -> panic $ "Invalid sum constructor index " <> Pretty.number constructorIndex <> " of supposedly boolean-like representation " <> Pretty.pretty resultRepresentation
+        | otherwise -> do
+            jsPayload <- compileValue payload
+            pure (JS.ObjectLiteral [("tag", JS.IntLiteral (fromIntegral constructorIndex)), ("payload", jsPayload)])
 
 -- It turns out that representing products as objects with uniformly named keys
 -- is actually *much* more efficient than using (heterogeneous) arrays
 productFieldAccess :: JS.Expr -> Int -> JS.Expr
 productFieldAccess product index = JS.FieldAccess product ("x" <> show index)
+
+-- If a sum consists of exactly two constructors with unit payloads, we represent
+-- it as a boolean. This means that our vega-level boolean representation will nicely
+-- map onto javascript booleans and additionally gives us a nice little performance boost
+-- for anything else that happens to fit the same shape.
+--
+-- In particular, matching on this kind of value can use if statements instead of a full switch.
+usesBooleans :: Core.Representation -> Bool
+usesBooleans = \case
+    Core.SumRep constructors -> length constructors == 2 && all isUnitRepresentation constructors
+    _ -> False
+
+isUnitRepresentation :: Core.Representation -> Bool
+isUnitRepresentation = \case
+    Core.ProductRep [] -> True
+    _ -> False

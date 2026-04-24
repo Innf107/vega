@@ -53,6 +53,7 @@ data Expr
     | StringLiteral Text
     | IntLiteral Integer
     | DoubleLiteral Rational
+    | BoolLiteral Bool
     | ArrayLiteral (Seq Expr)
     | ObjectLiteral (Seq (Name, Expr))
     | BinaryOperator Expr BinaryOperator Expr
@@ -147,6 +148,8 @@ renderExpr = \case
     StringLiteral string -> "\"" <> escapeString string <> "\""
     IntLiteral int -> show int
     DoubleLiteral rational -> undefined
+    BoolLiteral True -> "true"
+    BoolLiteral False -> "false"
     ArrayLiteral elements -> "[" <> intercalateMap ", " renderExpr elements <> "]"
     ObjectLiteral bindings -> "{" <> intercalateMap ", " (\(name, expr) -> TextBuilder.text name <> ": " <> renderExpr expr) bindings <> "}"
     BinaryOperator left operator right -> "(" <> renderExpr left <> " " <> renderBinaryOperator operator <> " " <> renderExpr right <> ")"
