@@ -38,7 +38,7 @@ import Vega.Effect.Meta.Static qualified as Meta
 import Vega.Effect.Trace (Category (CoreRep, Patterns), Trace, trace, withTrace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
 import Vega.Panic (panic)
-import Vega.Pretty (align, indent, intercalateDoc, keyword, pretty, (<+>))
+import Vega.Pretty (align, indent, intercalateDoc, keyword, number, pretty, (<+>))
 import Vega.Seq.NonEmpty (pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax (Pass (..))
@@ -366,13 +366,22 @@ userDefinedDataConstructorApplication name arguments representation = do
             else
                 pure (statements, argument)
 
-    let payload = case newArguments of
+    let payload payloadRepresentation = case newArguments of
             [singleArgument] -> singleArgument
-            _ -> Core.ProductConstructor newArguments representation
+            _ -> Core.ProductConstructor newArguments payloadRepresentation
 
     GraphPersistence.getDataConstructorIndex name >>= \case
-        GraphPersistence.OnlyConstructor -> pure (statements, payload)
-        GraphPersistence.MultiConstructor constructorIndex -> pure (statements, Core.SumConstructor{constructorIndex, payload, resultRepresentation = representation})
+        GraphPersistence.OnlyConstructor -> do
+            case representation of
+                Core.SumRep [onlyRepresentation] -> pure (statements, payload onlyRepresentation)
+                _ -> panic $ "Non-single constructor sum representation " <> pretty representation <> " for only sum constructor " <> Vega.prettyName Vega.DataConstructorKind name
+        GraphPersistence.MultiConstructor constructorIndex -> do
+            let payloadRepresentation = case representation of
+                    Core.SumRep inner -> case Seq.lookup constructorIndex inner of
+                        Just payloadRepresentation -> payloadRepresentation
+                        Nothing -> panic $ "Sum constructor index " <> number constructorIndex <> " out of range for representation " <> pretty representation
+                    _ -> panic $ "Sum constructor of non-sum representation " <> pretty representation
+            pure (statements, Core.SumConstructor{constructorIndex, payload = payload payloadRepresentation, resultRepresentation = representation})
 
 -- | Like 'compileStatements' but discards the representation
 compileStatements_ ::

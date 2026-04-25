@@ -222,7 +222,7 @@ instance Pretty Value where
         Var name -> pretty name
         Instantiation name arguments -> pretty name <> lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty arguments) <> rparen "]"
         Literal literal -> pretty literal
-        ProductConstructor{arguments = constructorArguments} -> arguments constructorArguments
+        ProductConstructor{arguments = constructorArguments, resultRepresentation} -> arguments constructorArguments <+> keyword ":" <+> pretty resultRepresentation
         SumConstructor{constructorIndex, payload, resultRepresentation} ->
             lparen "[" <> number constructorIndex <> rparen "]" <> lparen "(" <> pretty payload <> rparen ")" <+> keyword ":" <+> pretty resultRepresentation
 
