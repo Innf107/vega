@@ -36,7 +36,7 @@ import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.MultiSet (MultiSet)
 import Vega.MultiSet qualified as MultiSet
 import Vega.Panic (panic)
-import Vega.Pretty (align, emphasis, errorText, keyword, note, pretty, (<+>))
+import Vega.Pretty (align, emphasis, errorText, intercalateDoc, keyword, lparen, note, pretty, rparen, (<+>))
 import Vega.Seq.NonEmpty (NonEmpty (..), toSeq)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.TypeCheck.IntSum (asIntSum, asIntSumMaybe, freshIntSum, readIntSum)
@@ -391,7 +391,7 @@ checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <>
                     (fieldPattern, envTrans) <- checkPattern env type_ fieldPattern
                     representation <- representationOfType loc env type_
                     pure ((fieldName, (fieldPattern, representation)), envTrans)
-            pure (RecordPattern { loc = loc, fields = fieldPatterns }, Util.compose envTransformers)
+            pure (RecordPattern{loc = loc, fields = fieldPatterns}, Util.compose envTransformers)
 
 inferPattern :: (TypeCheck es) => Env -> Pattern Renamed -> Eff es (Pattern Typed, Type, Env -> Env)
 inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadConstructor pattern_) $ case pattern_ of
@@ -631,6 +631,7 @@ infer env ambientEffect expr = do
     go = case expr of
         Var{loc, name, representation = ()} -> do
             (type_, instantiatedTypeArguments) <- instantiate loc env =<< varType env name
+            trace TypeCheck $ "instantiate " <> prettyName VarKind name <> keyword " -> " <> prettyName VarKind name <> lparen "[" <> intercalateDoc ", " (fmap pretty instantiatedTypeArguments) <> rparen "]"
             representation <- representationOfType loc env type_
             pure (type_, Var{loc, instantiatedTypeArguments, name, representation})
         DataConstructor{loc, name} -> do
@@ -686,7 +687,11 @@ infer env ambientEffect expr = do
             (type_, visiblyInstantiatedTypeArguments) <- (instantiateWith loc env type_ typeArguments)
             (type_, instantiatedTypeArguments) <- instantiate loc env type_
             -- TODO: not quite sure what to do about the instantiated type arguments here
-            pure (type_, VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax})
+            let finalRepresentationArguments = visiblyInstantiatedTypeArguments <> instantiatedTypeArguments
+
+            representation <- representationOfType loc env type_
+
+            pure (type_, VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax, finalRepresentationArguments, representation})
         Lambda loc typeParameters parameters body -> do
             case typeParameters of
                 [] -> pure ()

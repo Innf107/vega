@@ -320,8 +320,13 @@ compileExprToValue expr = do
                 )
         Vega.Application{} -> deferToLet
         Vega.PartialApplication{} -> deferToLet
-        -- We can erase type applications since Core is untyped
-        Vega.VisibleTypeApplication{varName} -> pure ([], Core.Var (nameToCoreName varName), undefined)
+        Vega.VisibleTypeApplication{varName, finalRepresentationArguments, representation} -> do
+            representation <- convertRepresentation representation
+            case finalRepresentationArguments of
+                Empty -> pure ([], Core.Var (nameToCoreName varName), representation)
+                NonEmpty representationArguments -> do
+                    representationArguments <- for representationArguments convertRepresentation
+                    pure ([], Core.Instantiation{varName = nameToCoreName varName, representationArguments = representationArguments}, representation)
         Vega.Lambda{} -> deferToLet
         Vega.StringLiteral _loc literal -> pure ([], Core.Literal (Core.StringLiteral literal), stringRepresentation)
         Vega.IntLiteral _loc literal -> pure ([], Core.Literal (Core.IntLiteral literal), Core.PrimitiveRep Vega.IntRep)

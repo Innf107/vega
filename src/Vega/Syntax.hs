@@ -193,6 +193,8 @@ data Expr p
         { loc :: Loc
         , varName :: XName p
         , typeArguments :: Seq (TypeSyntax p)
+        , finalRepresentationArguments :: XTypedOnly p (Seq Representation)
+        , representation :: XRepresentation p
         }
     | Lambda
         { loc :: Loc

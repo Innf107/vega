@@ -123,9 +123,9 @@ representationAtPath baseRepresentation fullPath = go baseRepresentation fullPat
 instance Pretty Declaration where
     pretty :: Declaration -> Doc Ann
     pretty = \case
-        DefineFunction{name, parameters, init, blocks} -> do
+        DefineFunction{name, parameters, returnRepresentation, init, blocks} -> do
             pretty name
-                <> typedArguments parameters
+                <> typedArguments parameters <+> keyword ":" <+> pretty returnRepresentation
                     <+> keyword "="
                     <+> lparen "{"
                 <> "\n  "

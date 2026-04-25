@@ -13,8 +13,9 @@ import Vega.Compilation.Core.Syntax (CoreName, Representation (..))
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Debruijn qualified as DeBruijn
+import Vega.Effect.Trace (Category (Monomorphization), Trace, trace, withTrace)
 import Vega.Panic (panic)
-import Vega.Pretty (pretty)
+import Vega.Pretty (intercalateDoc, lparen, pretty, rparen)
 import Vega.Pretty qualified as Pretty
 import Vega.Syntax qualified as Vega
 
@@ -22,6 +23,7 @@ type Monomorphize es =
     ( ?program :: MIR.Program
     , ?arguments :: Seq Representation
     , State MonomorphizedDefinitions :> es
+    , Trace :> es
     )
 
 -- We split MonomorphizedDefinitions up into the names of definitions we monomorphized and their actual
@@ -37,7 +39,7 @@ data MonomorphizedDefinitions = MkMonomorphizedDeclarations
     , declarations :: HashMap CoreName MIR.Declaration
     }
 
-monomorphize :: MIR.Program -> Vega.GlobalName -> Eff es MIR.Program
+monomorphize :: (Trace :> es) => MIR.Program -> Vega.GlobalName -> Eff es MIR.Program
 monomorphize program entryPoint = do
     let ?program = program
 
@@ -51,10 +53,10 @@ monomorphize program entryPoint = do
         monomorphizeDeclaration entryPoint []
     pure (MIR.MkProgram{declarations})
 
-monomorphizeDeclaration :: (State MonomorphizedDefinitions :> es, ?program :: MIR.Program) => Vega.GlobalName -> Seq Representation -> Eff es Vega.GlobalName
+monomorphizeDeclaration :: (State MonomorphizedDefinitions :> es, ?program :: MIR.Program, Trace :> es) => Vega.GlobalName -> Seq Representation -> Eff es Vega.GlobalName
 monomorphizeDeclaration name argumentRepresentations
     | Vega.isInternalName name = pure name
-    | otherwise = do
+    | otherwise = withTrace Monomorphization ("monomorphizeDeclaration " <> Vega.prettyGlobal Vega.VarKind name <> lparen "[" <> intercalateDoc ", " (fmap pretty argumentRepresentations) <> rparen "]") do
         MkMonomorphizedDeclarations{monomorphizedSoFar} <- get
         case HashMap.lookup (name, argumentRepresentations) monomorphizedSoFar of
             Just instantiationName -> pure instantiationName
@@ -70,8 +72,14 @@ monomorphizeDeclaration name argumentRepresentations
                 pure instantiationName
 
 substituteMonomorphizedDeclaration ::
-    (State MonomorphizedDefinitions :> es, ?program :: MIR.Program) =>
-    Vega.GlobalName -> MIR.Declaration -> Seq Representation -> Eff es MIR.Declaration
+    ( State MonomorphizedDefinitions :> es
+    , Trace :> es
+    , ?program :: MIR.Program
+    ) =>
+    Vega.GlobalName ->
+    MIR.Declaration ->
+    Seq Representation ->
+    Eff es MIR.Declaration
 substituteMonomorphizedDeclaration instantiationName declaration arguments = do
     let ?arguments = arguments
     case declaration of
