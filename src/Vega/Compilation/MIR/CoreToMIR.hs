@@ -412,7 +412,7 @@ compileValue block = \case
         var <- newVar ""
         (block, payload) <- compileValue block payload
 
-        addInstruction block (MIR.SumConstructor{var, tag = constructorIndex, payload, representation = resultRepresentation})
+        block <- addInstruction block (MIR.SumConstructor{var, tag = constructorIndex, payload, representation = resultRepresentation})
         pure (block, var)
 
 compileLambda :: (Compile es) => BlockBuilder -> MIR.Variable -> Seq (LocalCoreName, Core.Representation) -> Core.Representation -> Seq Core.Statement -> Core.Expr -> Eff es BlockBuilder
