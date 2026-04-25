@@ -160,11 +160,7 @@ prettyBlock descriptor MkBlock{phis = MkPhis phiMap, instructions, terminator} =
                             <> "\n"
                )
             <> "  "
-            <> align
-                ( intercalateDoc "\n" (fmap pretty instructions)
-                    <> "\n"
-                    <> pretty terminator
-                )
+            <> align (intercalateDoc "\n" (fmap pretty instructions <> [pretty terminator]))
 
 deriving via Generically PathSegment instance Pretty PathSegment
 
