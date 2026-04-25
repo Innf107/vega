@@ -1,0 +1,10 @@
+-- type: error
+
+f : (exists a. a) -> ()
+f() = ()
+
+g : (exists *(a : Type(Boxed)). a) -> ()
+g() = ()
+
+h : (exists {a : Integer}. Int) -> ()
+h() = ()

@@ -30,11 +30,12 @@ import Text.Megaparsec (ErrorFancy (..), ErrorItem (..), ParseError (..), ParseE
 import Text.Megaparsec.Error (ParseErrorBundle (..))
 import Vega.Lexer.Token (Token)
 import Vega.Loc (HasLoc, Loc (..), getLoc)
+import Vega.Panic (panic)
 import Vega.Panic qualified as Panic
 import Vega.Parser (AdditionalParseError (..))
 import Vega.Parser qualified as Parser
 import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, lparen, note, number, plain, quote, rparen, vsep, (<+>))
-import Vega.Syntax (GlobalName (..), IntSum, Kind, LocalName, MetaVar, Name, NameKind (..), Type (..), prettyGlobal, prettyGlobalText, prettyLocal, prettyName)
+import Vega.Syntax (BinderVisibility (..), ForallBinderS (..), GlobalName (..), IntSum, Kind, LocalName, MetaVar, Monomorphization (..), Name, NameKind (..), Type (..), prettyGlobal, prettyGlobalText, prettyLocal, prettyName)
 import Vega.Util (viaList)
 import Vega.Util qualified as Util
 import Vega.VectorMap (VectorMap)
@@ -567,10 +568,33 @@ generateFancyParseErrorMessage = \case
     ErrorCustom error ->
         MkErrorMessageWithLoc
             { location = getLoc error
-            , contents =
-                "Parse Error:" <+> case error of
-                    MismatchedFunctionName{typeSignature, definition} -> undefined
-                    _ -> undefined
+            , contents = case error of
+                MismatchedFunctionName{typeSignature, definition} ->
+                    emphasis "Mismatched function name"
+                        <> "\n  "
+                        <> align
+                            ( "Its type signature refers to it as" <+> globalIdentText typeSignature
+                                <> "\n"
+                                <> "       but its definition calls it" <+> globalIdentText definition
+                            )
+                NonVarInFunctionDefinition _loc ->
+                    emphasis "Non-variable pattern in function definition"
+                InvalidExistentialBinder binder -> case binder of
+                    UnspecifiedBinderS{} -> do
+                        emphasis "Unspecified existential binder\n"
+                            <> "  Type variables bound in existentials need a kind signature."
+                    TypeVarBinderS{monomorphization, visibility} -> do
+                        let reason = case (monomorphization, visibility) of
+                                (Monomorphized, Inferred) -> "monomorphizable or invisible"
+                                (Monomorphized, _) -> "monomorphizable"
+                                (_, Inferred) -> "invisible"
+                                _ -> panic "no reason for invalid existential binder found"
+                        emphasis "Invalid existential binder"
+                            <> "\n  Type variables bound in existentials cannot be"
+                            <+> reason
+                NonLiteralMultiplication{} -> do
+                    emphasis "Non-literal type-level multiplication"
+                        <> "\n  at least one argument of a type level multiplication must be an integer literal."
             }
 
 prettyErrorItem :: ErrorItem (Token, Loc) -> Doc Ann

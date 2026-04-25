@@ -1,0 +1,18 @@
+$FILE:3:13: ERROR:
+Unspecified existential binder
+  Type variables bound in existentials need a kind signature.
+  ┃ 
+3 ┃ f : (exists a. a) -> ()
+  ┃             ▔
+$FILE:6:14: ERROR:
+Invalid existential binder
+  Type variables bound in existentials cannot be monomorphizable
+  ┃ 
+6 ┃ g : (exists *(a : Type(Boxed)). a) -> ()
+  ┃              ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+$FILE:9:13: ERROR:
+Invalid existential binder
+  Type variables bound in existentials cannot be invisible
+  ┃ 
+9 ┃ h : (exists {a : Integer}. Int) -> ()
+  ┃             ▔▔▔▔▔▔▔▔▔▔▔▔▔

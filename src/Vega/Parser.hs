@@ -24,7 +24,6 @@ data AdditionalParseError
         , typeSignature :: Text
         , definition :: Text
         }
-    | UnknowNamedKind Loc Text
     | NonVarInFunctionDefinition Loc
     | InvalidExistentialBinder (ForallBinderS Parsed)
     | NonLiteralMultiplication {loc :: Loc}

@@ -1,1 +1,7 @@
-
+$FILE:3:1: ERROR:
+Mismatched function name
+  Its type signature refers to it as f
+         but its definition calls it g
+  ┃ 
+3 ┃ f : () -> ()
+  ┃ ▔
