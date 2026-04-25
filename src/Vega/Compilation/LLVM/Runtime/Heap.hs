@@ -5,7 +5,8 @@ module Vega.Compilation.LLVM.Runtime.Heap where
 
 import Data.Word (Word64)
 import GHC.Generics (Generic)
-import Vega.Compilation.LLVM.Runtime.ToLLVMConstant (ToLLVMConstant, CUnion (..), CStruct(..), CEnum (..))
+import Relude (Int)
+import Vega.Compilation.LLVM.Runtime.ToLLVMConstant (CEnum (..), CStruct (..), CUnion (..), ToLLVMConstant)
 
 data InfoTable = MkInfoTable
     { objectType :: ObjectType
@@ -38,9 +39,11 @@ data BoxedLayout = MkBoxedLayout
     deriving (ToLLVMConstant) via CStruct BoxedLayout
 
 data ArrayLayout = MkArrayLayout
-    { sizeInElements :: Word64
-    , elementStrideInBytes :: Word64
+    { elementStrideInBytes :: Word64
     , elementBoxedCount :: Word64
     }
     deriving stock (Generic)
     deriving (ToLLVMConstant) via CStruct ArrayLayout
+
+arrayContentOffset :: Int
+arrayContentOffset = 8

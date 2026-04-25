@@ -26,6 +26,7 @@ import GHC.Records (HasField, getField)
 import GHC.TypeLits (Symbol)
 import LLVM.Core qualified as LLVM
 import LLVM.Core.Context qualified as LLVM
+import LLVM.Core.Phi qualified as LLVM.Phi
 import LLVM.InstructionBuilder qualified as LLVMBuilder
 import System.IO.Unsafe (unsafePerformIO)
 import Vega.Alignment (Alignment)
@@ -43,6 +44,7 @@ import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
 import Vega.Pretty (pretty)
+import Vega.Pretty qualified as Pretty
 import Vega.Syntax (renderPackageName)
 import Vega.Syntax qualified as Vega
 import Vega.Util (forIndexed_, viaList, type (?))
@@ -517,9 +519,54 @@ compileBuiltinCall ::
     Text ->
     Eff es LLVM.Value
 compileBuiltinCall builder functionName arguments returnRepresentation varName = do
+    argumentValues <- for arguments lookupVarValue
     case functionName.name of
-        "debugInt" -> outOfLineBuiltin builder "vega_debug_int" arguments returnRepresentation varName
+        "debugInt" -> do
+            outOfLineBuiltin builder "vega_debug_int" argumentValues returnRepresentation varName
+        "unsafeReadArray" -> compileReadArray builder arguments returnRepresentation varName
+        "replicateArray" -> compileReplicateArray builder arguments returnRepresentation varName
         _ -> panic $ "Call to unsupported builtin function: " <> Vega.prettyGlobal Vega.VarKind functionName
+
+compileReadArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileReadArray builder arguments returnRepresentation varName = case arguments of
+    [array, index] -> do
+        valueLayout <- Layout.representationLayout returnRepresentation
+        array <- lookupVarValue array
+        index <- lookupVarValue index
+        
+        buildArrayLoad builder valueLayout array index varName
+    _ -> panic $ "unsafeReadArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
+
+compileReplicateArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileReplicateArray builder arguments returnRepresentation varName = case arguments of
+    [size, initialMIRValue] -> do
+        sizeValue <- lookupVarValue size
+        (initialValue, valueLayout) <- lookupVar initialMIRValue
+
+        incomingBlock <- LLVMBuilder.getInsertBlock builder
+
+        infoTable <- getOrCreateArrayInfoTablePointer valueLayout
+
+        array <- outOfLineBuiltin builder "vega_allocate_uninitialized_array" [infoTable, sizeValue] returnRepresentation varName
+        loopBlock <- LLVM.appendBasicBlock ?function "replicate"
+        completedBlock <- LLVM.appendBasicBlock ?function ""
+        isZero <- LLVMBuilder.buildICmp builder LLVM.IntEQ sizeValue (LLVM.constInt LLVM.int64Type 0 False) "isZero"
+        _ <- LLVMBuilder.buildCondBr builder isZero completedBlock loopBlock
+
+        LLVMBuilder.positionBuilderAtEnd builder loopBlock
+
+        index <- LLVMBuilder.buildPhi builder LLVM.int64Type [(LLVM.constInt LLVM.int64Type 0 False, incomingBlock)] "index"
+
+        _ <- buildArrayStore builder valueLayout array index initialValue
+
+        incremented <- LLVMBuilder.buildNUWAdd builder index (LLVM.constInt LLVM.int64Type 1 False) ""
+        LLVM.Phi.addIncoming index [(incremented, loopBlock)]
+        isInRange <- LLVMBuilder.buildICmp builder LLVM.IntULT incremented sizeValue ""
+        _ <- LLVMBuilder.buildCondBr builder isInRange loopBlock completedBlock
+
+        LLVMBuilder.positionBuilderAtEnd builder completedBlock
+        pure array
+    _ -> panic $ "replicateArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
 {- | Generate a call to a builtin function that is defined in the rust runtime rather than inline
 TODO: it might be nice to have out of line functions defined directly in LLVM IR with tailcc instead of
@@ -530,16 +577,15 @@ outOfLineBuiltin ::
     LLVMBuilder.Builder ->
     forall (functionName :: Symbol) ->
     (HasField functionName RuntimeDefinitions (LLVM.Value, AttributeFunctionType)) =>
-    Seq MIR.Variable ->
+    Seq LLVM.Value ->
     Representation ->
     Text ->
     Eff es LLVM.Value
 outOfLineBuiltin builder functionName arguments returnRepresentation varName = do
     let (llvmFunctionValue, llvmFunctionType) = getField @functionName ?runtimeDefinitions
-    argumentValues <- for arguments lookupVarValue
     returnLayout <- Layout.representationLayout returnRepresentation
 
-    buildCCCCall builder llvmFunctionType llvmFunctionValue (viaList argumentValues) returnLayout varName
+    buildCCCCall builder llvmFunctionType llvmFunctionValue (viaList arguments) returnLayout varName
 
 buildCCCCall ::
     (Compile es) =>
@@ -591,6 +637,31 @@ getOrCreateLayoutInfoTablePointer layout = do
             LLVM.setInitializer llvmInfoTableGlobal infoTableConstant
             pure (LLVM.globalAsValue llvmInfoTableGlobal)
 
+getOrCreateArrayInfoTablePointer :: (Compile es) => Layout -> Eff es LLVM.Value
+getOrCreateArrayInfoTablePointer elementLayout = do
+    let identifier = "info_array_" <> Layout.identifier elementLayout
+    LLVM.getNamedGlobal ?module_ identifier >>= \case
+        Just global -> pure (LLVM.globalAsValue global)
+        Nothing -> do
+            let infoTable =
+                    Heap.MkInfoTable
+                        { objectType = Heap.Array
+                        , layout =
+                            Heap.ArrayLayout
+                                ( Heap.MkArrayLayout
+                                    { elementStrideInBytes = fromIntegral $ Layout.strideInBytes elementLayout
+                                    -- TODO
+                                    , elementBoxedCount = 0
+                                    }
+                                )
+                        }
+            (infoTableLLVMType, infoTableConstant) <- toLLVMConstant infoTable
+
+            llvmInfoTableGlobal <- LLVM.addGlobal ?module_ infoTableLLVMType identifier
+            LLVM.setInitializer llvmInfoTableGlobal infoTableConstant
+            pure (LLVM.globalAsValue llvmInfoTableGlobal)
+
+
 buildRuntimeCall ::
     (Compile es) =>
     LLVMBuilder.Builder ->
@@ -627,18 +698,44 @@ buildProduct builder values layout varName = do
     pure productPointer
 
 buildComplexStore :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> LLVM.Value -> Eff es ()
-buildComplexStore builder layout value pointer = do
-    case Layout.kind layout of
-        Layout.LLVMScalar _scalar -> do
-            store <- LLVMBuilder.buildStore builder value pointer
-            LLVM.setAlignment store (Alignment.toInt (Layout.alignment layout))
-            pure ()
-        Layout.AggregatePointer -> do
-            let alignment = Alignment.toInt (Layout.alignment layout)
-            let size = LLVM.constInt LLVM.int64Type (fromIntegral (Layout.sizeInBytes layout)) False
-            _ <- LLVMBuilder.buildMemCpy builder pointer alignment value alignment size
-            pure ()
-        Layout.ZeroSized -> pure ()
+buildComplexStore builder layout value pointer = case Layout.kind layout of
+    Layout.LLVMScalar _scalar -> do
+        store <- LLVMBuilder.buildStore builder value pointer
+        LLVM.setAlignment store (Alignment.toInt (Layout.alignment layout))
+        pure ()
+    Layout.AggregatePointer -> do
+        let alignment = Alignment.toInt (Layout.alignment layout)
+        let size = LLVM.constInt LLVM.int64Type (fromIntegral (Layout.sizeInBytes layout)) False
+        _ <- LLVMBuilder.buildMemCpy builder pointer alignment value alignment size
+        pure ()
+    Layout.ZeroSized -> pure ()
+
+buildArrayStore :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> LLVM.Value -> LLVM.Value -> Eff es ()
+buildArrayStore builder layout array index value = case Layout.kind layout of
+    Layout.LLVMScalar scalar -> do
+        contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
+        pointer <- LLVMBuilder.buildGetElementPtr builder scalar contents [index] ""
+        _ <- LLVMBuilder.buildStore builder value pointer
+        pure ()
+    Layout.AggregatePointer -> do
+        contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
+        pointer <- LLVMBuilder.buildGetElementPtr builder (LLVM.arrayType LLVM.int8Type (Layout.sizeInBytes layout)) contents [index] ""
+        buildComplexStore builder layout value pointer
+        pure ()
+    Layout.ZeroSized -> pure ()
+
+buildArrayLoad :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> LLVM.Value -> Text ->Eff es LLVM.Value
+buildArrayLoad builder layout array index varName = case Layout.kind layout of
+    Layout.LLVMScalar scalar -> do
+        contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
+        pointer <- LLVMBuilder.buildGetElementPtr builder scalar contents [index] ""
+        LLVMBuilder.buildLoad builder scalar pointer varName 
+    Layout.AggregatePointer -> do
+        contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
+        pointer <- LLVMBuilder.buildGetElementPtr builder (LLVM.arrayType LLVM.int8Type (Layout.sizeInBytes layout)) contents [index] ""
+        buildComplexLoad builder layout pointer varName
+    Layout.ZeroSized -> pure zeroSizedDummyValue
+
 
 buildComplexReturn :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Eff es ()
 buildComplexReturn builder layout value = do

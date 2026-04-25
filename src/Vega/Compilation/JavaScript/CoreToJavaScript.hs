@@ -271,7 +271,7 @@ primops =
     , ("replicateArray", asJSFunction 2 "internal$replicateArray")
     , ("codePoints", asJSFunction 1 "internal$codePoints")
     ,
-        ( "readArray"
+        ( "unsafeReadArray"
         ,
             ( 2
             , \arguments -> case arguments of

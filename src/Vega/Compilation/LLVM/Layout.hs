@@ -14,6 +14,7 @@ module Vega.Compilation.LLVM.Layout (
     -- * Layout Properties
     sizeInBits,
     sizeInBytes,
+    strideInBytes,
     alignment,
     llvmParameterType,
     llvmType,
@@ -89,6 +90,9 @@ sizeInBits layout = layout.sizeInBits
 sizeInBytes :: Layout -> Int
 sizeInBytes layout = bitsAsBytes (sizeInBits layout)
 
+strideInBytes :: Layout -> Int
+strideInBytes layout = Alignment.align (alignment layout) (sizeInBytes layout)
+
 alignment :: Layout -> Vega.Alignment
 alignment layout = layout.alignment
 
@@ -163,8 +167,10 @@ representationLayout = \case
     Core.SumRep constructors -> do
         constructorLayouts <- for constructors representationLayout
         pure (sumLayout constructorLayouts)
-    Core.ArrayRep elements -> do
-        undefined
+    Core.ArrayRep _elementRep -> do
+        -- Currently, arrays are just boxed pointers (pointing to an array heap object).
+        -- This will probably change in the future so that we don't need to dereference the array to access its size
+        pure boxedLayout
     Core.FunctionPointerRep ->
         pure (MkLayout{sizeInBits = 8 * 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive})
     rep@Core.ParameterRep{} -> panic $ "Non-monomorphized parameter representation in layout generation: " <> pretty rep

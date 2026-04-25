@@ -14,6 +14,10 @@ impl HeapObject {
     pub fn data(object: *const HeapObject) -> *mut u8 {
         unsafe { object.byte_add(HeapObject::HEADER_SIZE_IN_BYTES) as *mut u8 }
     }
+
+    pub fn as_arry_object_unchecked(object: *const HeapObject) -> *const ArrayHeapObject {
+        object as *const ArrayHeapObject
+    }
 }
 
 #[repr(C)]
@@ -48,7 +52,6 @@ impl BoxedLayout {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ArrayLayout {
-    size_in_elements: usize,
     element_stride_in_bytes: usize,
     element_boxed_count: usize,
 }
@@ -60,6 +63,21 @@ pub enum ObjectType {
     Array,
 }
 
+#[repr(C)]
+pub struct ArrayHeapObject {
+    pub base: HeapObject,
+    pub size: usize,
+}
+
+impl ArrayHeapObject {
+    pub fn as_base(object: *const ArrayHeapObject) -> *const HeapObject {
+        object as *const HeapObject
+    }
+    pub fn contents(object: *const ArrayHeapObject) -> *mut u8 {
+        unsafe { object.byte_add(size_of::<ArrayHeapObject>()) as *mut u8 }
+    }
+}
+
 /// Allocate a box for the given info table and return a pointer to the (uninitialized) *data*.
 /// To access the heap object header, use [HeapObject::from_data].
 // TODO: eventually we will want to inline this directly into the generated code but
@@ -69,8 +87,12 @@ pub enum ObjectType {
 pub unsafe extern "C" fn vega_allocate_boxed(info_table: *const InfoTable) -> *mut u8 {
     let layout = unsafe { (*info_table).layout.boxed };
 
-    let object_pointer = unsafe { libc::malloc(HeapObject::HEADER_SIZE_IN_BYTES + layout.size_in_bytes) as *mut HeapObject };
-    unsafe { *object_pointer = HeapObject {info_table}; };
+    let object_pointer = unsafe {
+        libc::malloc(HeapObject::HEADER_SIZE_IN_BYTES + layout.size_in_bytes) as *mut HeapObject
+    };
+    unsafe {
+        *object_pointer = HeapObject { info_table };
+    };
     HeapObject::data(object_pointer)
 }
 
@@ -79,4 +101,27 @@ pub unsafe extern "C" fn vega_allocate_boxed(info_table: *const InfoTable) -> *m
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vega_debug_int(int: i64) {
     println!("{}", int);
-} 
+}
+
+// SAFETY: This assumes that array_info_table points to a valid array info table (with object_type = Array)
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vega_allocate_uninitialized_array(
+    array_info_table: *const InfoTable,
+    size_in_elements: usize,
+) -> *mut u8 {
+    let stride_in_bytes = unsafe { (*array_info_table).layout.array.element_stride_in_bytes };
+    let size_in_bytes = size_in_elements * stride_in_bytes;
+
+    let object_pointer =
+        unsafe { libc::malloc(size_of::<ArrayHeapObject>() + size_in_bytes as usize) }
+            as *mut ArrayHeapObject;
+    unsafe {
+        (*object_pointer).base = HeapObject {
+            info_table: array_info_table,
+        }
+    };
+
+    unsafe { (*object_pointer).size = size_in_elements };
+
+    HeapObject::data(ArrayHeapObject::as_base(object_pointer))
+}

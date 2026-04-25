@@ -1,9 +1,9 @@
--- type: compile
--- KNOWN
-import internal:Internal (replicateArray, readArray)
+-- type: print(1)
 
-main : () -> ();
+import internal:Internal (replicateArray, unsafeReadArray, debugInt)
+
+main : () -> ()
 main() = {
-    let array = replicateArray(5, "a");
-    let _ = readArray(array, 2);
+    let array = replicateArray(5, 1)
+    debugInt(unsafeReadArray(array, 2))
 }
