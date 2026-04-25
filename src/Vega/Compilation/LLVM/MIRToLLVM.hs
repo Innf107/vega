@@ -326,7 +326,7 @@ compileInstruction builder = \case
 
         sumPointer <- asVar var layout $ buildLayoutAlloca builder layout
 
-        let tagLLVMType = LLVM.intType (Layout.sumTagSizeInBytes layout * 8)
+        let tagLLVMType = LLVM.intType (Layout.sumTagSizeInBits layout)
         let tagValue = LLVM.constInt tagLLVMType (fromIntegral tag) False
         case Layout.sumTagOffset layout of
             Nothing -> do
@@ -579,7 +579,7 @@ getOrCreateLayoutInfoTablePointer layout = do
                         , layout =
                             Heap.BoxedLayout
                                 ( Heap.MkBoxedLayout
-                                    { sizeInBytes = fromIntegral (Layout.size layout)
+                                    { sizeInBytes = fromIntegral (Layout.sizeInBytes layout)
                                     , -- TODO: fill this in properly
                                       boxedCount = 0
                                     }
@@ -635,7 +635,7 @@ buildComplexStore builder layout value pointer = do
             pure ()
         Layout.AggregatePointer -> do
             let alignment = Alignment.toInt (Layout.alignment layout)
-            let size = LLVM.constInt LLVM.int64Type (fromIntegral (Layout.size layout)) False
+            let size = LLVM.constInt LLVM.int64Type (fromIntegral (Layout.sizeInBytes layout)) False
             _ <- LLVMBuilder.buildMemCpy builder pointer alignment value alignment size
             pure ()
         Layout.ZeroSized -> pure ()
@@ -669,7 +669,7 @@ buildComplexLoad builder layout pointer varName = case Layout.kind layout of
     Layout.AggregatePointer -> do
         localMemory <- buildLayoutAlloca builder layout ""
         let alignment = Alignment.toInt (Layout.alignment layout)
-        let size = LLVM.constInt LLVM.int64Type (fromIntegral (Layout.size layout)) False
+        let size = LLVM.constInt LLVM.int64Type (fromIntegral (Layout.sizeInBytes layout)) False
         _ <- LLVMBuilder.buildMemCpy builder localMemory alignment pointer alignment size
         pure localMemory
     Layout.ZeroSized -> pure zeroSizedDummyValue

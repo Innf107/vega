@@ -12,7 +12,8 @@ module Vega.Compilation.LLVM.Layout (
     boolLayout,
 
     -- * Layout Properties
-    size,
+    sizeInBits,
+    sizeInBytes,
     alignment,
     llvmParameterType,
     llvmType,
@@ -24,6 +25,7 @@ module Vega.Compilation.LLVM.Layout (
     -- ** Sums
     sumOffsetAndLayout,
     sumTagOffset,
+    sumTagSizeInBits,
     sumTagSizeInBytes,
 
     -- ** Low level details
@@ -53,7 +55,7 @@ import Vega.Pretty (number, pretty)
 import Vega.Syntax qualified as Vega
 
 data Layout = MkLayout
-    { size :: Int
+    { sizeInBits :: Int
     , alignment :: Vega.Alignment
     , kind :: LayoutKind
     , details :: LayoutDetails
@@ -76,8 +78,16 @@ data LayoutDetails
     | Primitive
     deriving (Generic, Show)
 
-size :: Layout -> Int
-size layout = layout.size
+bitsAsBytes :: Int -> Int
+bitsAsBytes inBits
+    | inBits `mod` 8 == 0 = inBits `div` 8
+    | otherwise = inBits `div` 8 + 1
+
+sizeInBits :: Layout -> Int
+sizeInBits layout = layout.sizeInBits
+
+sizeInBytes :: Layout -> Int
+sizeInBytes layout = bitsAsBytes (sizeInBits layout)
 
 alignment :: Layout -> Vega.Alignment
 alignment layout = layout.alignment
@@ -97,7 +107,7 @@ llvmParameterType layout = case layout.kind of
 llvmType :: (?context :: LLVM.Context, HasCallStack) => Layout -> LLVM.Type
 llvmType layout = case layout.kind of
     LLVMScalar type_ -> type_
-    AggregatePointer -> LLVM.arrayType LLVM.int8Type layout.size
+    AggregatePointer -> LLVM.arrayType LLVM.int8Type (sizeInBytes layout)
     ZeroSized -> panic "Trying to access LLVM type of zero-sized layout"
 
 kind :: Layout -> LayoutKind
@@ -121,20 +131,24 @@ sumOffsetAndLayout constructorIndex layout = case layout.details of
         Just value -> (0, value)
     _ -> panic $ "trying to access sumOffsetAndLayout on non-sum layout " <> showHeadConstructor layout.details
 
--- | The offset at which the sum tag is stored. 
--- This returns Nothing if the value itself is already the tag
--- See NOTE: [Sum tags]
+{- | The offset at which the sum tag is stored.
+This returns Nothing if the value itself is already the tag
+See NOTE: [Sum tags]
+-}
 sumTagOffset :: Layout -> Maybe Int
 sumTagOffset layout = case layout.kind of
-    AggregatePointer -> Just (layout.size - sumTagSizeInBytes layout)
+    AggregatePointer -> Just (sizeInBytes layout - sumTagSizeInBytes layout)
     LLVMScalar _scalar -> Nothing
     ZeroSized -> Nothing
 
-sumTagSizeInBytes :: Layout -> Int
-sumTagSizeInBytes layout = case layout.details of
+sumTagSizeInBits :: Layout -> Int
+sumTagSizeInBits layout = case layout.details of
     SumLayout{tagSizeInBytes} -> tagSizeInBytes
-    Primitive -> layout.size
+    Primitive -> sizeInBits layout
     _ -> panic $ "trying to access sum tag size on non-sum layout " <> showHeadConstructor layout.details
+
+sumTagSizeInBytes :: Layout -> Int
+sumTagSizeInBytes layout = bitsAsBytes (sumTagSizeInBits layout)
 
 type LayoutGen es = (?context :: LLVM.Context) :: Constraint
 
@@ -152,29 +166,29 @@ representationLayout = \case
     Core.ArrayRep elements -> do
         undefined
     Core.FunctionPointerRep ->
-        pure (MkLayout{size = 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive})
+        pure (MkLayout{sizeInBits = 8 * 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive})
     rep@Core.ParameterRep{} -> panic $ "Non-monomorphized parameter representation in layout generation: " <> pretty rep
 
 productLayout :: (?context :: LLVM.Context) => Seq Layout -> Layout
 productLayout elementLayouts = do
     case elementLayouts of
-        Empty -> MkLayout{size = 0, alignment = Alignment.fromValue 1, kind = ZeroSized, details = Primitive}
+        Empty -> MkLayout{sizeInBits = 0, alignment = Alignment.fromValue 1, kind = ZeroSized, details = Primitive}
         _ -> do
             let go currentSize currentAlignment offsetsAndLayouts = \case
                     Empty -> (currentSize, currentAlignment, offsetsAndLayouts)
                     nextLayout :<| rest -> do
                         let offset = Alignment.align nextLayout.alignment currentSize
 
-                        go (offset + nextLayout.size) (max currentAlignment nextLayout.alignment) (offsetsAndLayouts :|> (offset, nextLayout)) rest
-            let (size, alignment, offsetsAndElementLayouts) = go 0 (Alignment.fromValue 1) [] elementLayouts
+                        go (offset + sizeInBytes nextLayout) (max currentAlignment nextLayout.alignment) (offsetsAndLayouts :|> (offset, nextLayout)) rest
+            let (sizeInBytes, alignment, offsetsAndElementLayouts) = go 0 (Alignment.fromValue 1) [] elementLayouts
 
-            MkLayout{size, alignment, kind = AggregatePointer, details = ProductLayout{offsetsAndElementLayouts}}
+            MkLayout{sizeInBits = sizeInBytes * 8, alignment, kind = AggregatePointer, details = ProductLayout{offsetsAndElementLayouts}}
 
 -- TODO: make sure the tag is *last* element
 sumLayout :: (?context :: LLVM.Context) => Seq Layout -> Layout
 sumLayout payloads = do
     case payloads of
-        Empty -> (MkLayout{size = 0, alignment = Alignment.fromValue 1, kind = ZeroSized, details = Primitive})
+        Empty -> (MkLayout{sizeInBits = 0, alignment = Alignment.fromValue 1, kind = ZeroSized, details = Primitive})
         _ -> do
             let tagSizeInBits = smallestPowerOfTwoFitting (length payloads)
             -- TODO: it would be nice to pack the bits into niches when possible but for now it's easier to
@@ -184,10 +198,10 @@ sumLayout payloads = do
 
             let sumAlignment = maximum (tagAlignment :| (map alignment (toList payloads)))
 
-            let size = maximum (tagSizeInBytes :| [Alignment.align payload.alignment tagSizeInBytes + payload.size | payload <- toList payloads])
+            let totalSizeInBytes = maximum (tagSizeInBytes :| [Alignment.align payload.alignment tagSizeInBytes + sizeInBytes payload | payload <- toList payloads])
 
             MkLayout
-                { size
+                { sizeInBits = totalSizeInBytes * 8
                 , alignment = sumAlignment
                 , kind = AggregatePointer
                 , details =
@@ -201,25 +215,24 @@ primitiveLayout :: (?context :: LLVM.Context) => Vega.PrimitiveRep -> Eff es Lay
 primitiveLayout = \case
     Vega.BoxedRep -> pure boxedLayout
     Vega.IntRep -> pure intLayout
-    Vega.DoubleRep -> pure $ MkLayout{size = 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.doubleType, details = Primitive}
+    Vega.DoubleRep -> pure $ MkLayout{sizeInBits = 8 * 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.doubleType, details = Primitive}
 
 intLayout :: (?context :: LLVM.Context) => Layout
 intLayout = sizedIntLayoutInBytes 8
 
 sizedIntLayoutInBytes :: (?context :: LLVM.Context) => Int -> Layout
-sizedIntLayoutInBytes size = MkLayout{size, alignment = Alignment.fromValue size, kind = LLVMScalar (LLVM.intType (size * 8)), details = Primitive}
+sizedIntLayoutInBytes size = MkLayout{sizeInBits = size * 8, alignment = Alignment.fromValue size, kind = LLVMScalar (LLVM.intType (size * 8)), details = Primitive}
 
--- TODO: we might be able to give heap pointers a different address space from unmanaged pointers?
 boxedLayout :: (?context :: LLVM.Context) => Layout
-boxedLayout = MkLayout{size = 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive}
+boxedLayout = MkLayout{sizeInBits = 8 * 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive}
 
 -- TODO: i don't think the way we're treating booleans in the frontend actually lets us use i1 here
 boolLayout :: (?context :: LLVM.Context) => Layout
-boolLayout = MkLayout{size = 1, alignment = Alignment.fromValue 1, kind = LLVMScalar LLVM.int1Type, details = Primitive}
+boolLayout = MkLayout{sizeInBits = 1, alignment = Alignment.fromValue 1, kind = LLVMScalar LLVM.int1Type, details = Primitive}
 
 -- TODO: This pointer should not count as boxed since it doesn't need to be followed by the GC
 functionPointerLayout :: (?context :: LLVM.Context) => Layout
-functionPointerLayout = MkLayout{size = 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive}
+functionPointerLayout = MkLayout{sizeInBits = 8 * 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive}
 
 closureLayout :: (?context :: LLVM.Context) => Layout -> Layout
 closureLayout payloadLayout = productLayout [functionPointerLayout, payloadLayout]
@@ -231,7 +244,7 @@ smallestPowerOfTwoFitting n = Bits.finiteBitSize n - Bits.countLeadingZeros (n -
 identifier :: Layout -> Text
 identifier layout = do
     -- TODO: include information about pointers
-    "layout[" <> Relude.show layout.size <> "," <> Relude.show (Alignment.toInt layout.alignment) <> "]"
+    "layout[" <> Relude.show (sizeInBytes layout) <> "," <> Relude.show (Alignment.toInt layout.alignment) <> "]"
 
 {- NOTE [Sum tags]:
 For now, the tag of a sum is always the last element in the layout.
