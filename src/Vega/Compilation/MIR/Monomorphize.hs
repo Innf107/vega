@@ -165,7 +165,7 @@ monomorphizeTerminator terminator = case terminator of
                     }
                 )
 
-substituteRepresentation :: (?arguments :: Seq Representation) => Representation -> Representation
+substituteRepresentation :: (HasCallStack, ?arguments :: Seq Representation) => Representation -> Representation
 substituteRepresentation = \case
     ParameterRep index -> case DeBruijn.lookup index ?arguments of
         Just substitution -> substitution

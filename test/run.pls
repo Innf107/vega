@@ -4,6 +4,7 @@ options {
     "--backend" (*) as backendStrings: "The backend to run tests on. Can be specified multiple times. 'all' will run all backends. Default: 'all'"
     "--hide-passing" as hidePassing: "Don't print immediate output for passing tests"
     "--hide-known" as hideKnown: "Don't print immediate output for known failures"
+    "--skip-mir-verification" as skipMIRVerification: "Do not run MIR verification on the native backend. This might be desirable if you want to see what LLVM is generated for something that MIR verification doesn't implement correctly yet"
 }
 
 module List = import("@std/list.pls")
@@ -102,7 +103,7 @@ let runTest(backend, testFile) = {
 
     chdir("./run")
     let compileResult = try {
-        let _ = !bash "-c" "${vega} build 2>&1"
+        let _ = !bash "-c" "${vega} build ${if skipMIRVerification then "" else "--verify-mir"} 2>&1"
         Compiled
     } with {
         CommandFailure(failure) -> {
