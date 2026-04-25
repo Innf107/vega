@@ -326,18 +326,24 @@ compileInstruction builder = \case
 
         sumPointer <- asVar var layout $ buildLayoutAlloca builder layout
 
-        -- Store the tag
         let tagLLVMType = LLVM.intType (Layout.sumTagSizeInBytes layout * 8)
-        tagPointer <- buildGEPOffset builder sumPointer (Layout.sumTagOffset layout) ""
-        _ <- LLVMBuilder.buildStore builder (LLVM.constInt tagLLVMType (fromIntegral tag) False) tagPointer
+        let tagValue = LLVM.constInt tagLLVMType (fromIntegral tag) False
+        case Layout.sumTagOffset layout of
+            Nothing -> do
+                -- This sum is directly represented by its tag
+                insertVarMapping var tagValue layout
+            Just tagOffset -> do
+                -- Store the tag
+                tagPointer <- buildGEPOffset builder sumPointer tagOffset ""
+                _ <- LLVMBuilder.buildStore builder tagValue tagPointer
 
-        -- Storing the payload currently involves a single contiguous copy. This may change in the future
-        -- if we add support for non-contiguous payloads.
-        -- See NOTE: [Sum tags] in Vega.Compilation.LLVM.Layout for details.
-        let (payloadOffset, payloadLayout) = Layout.sumOffsetAndLayout tag layout
+                -- Storing the payload currently involves a single contiguous copy. This may change in the future
+                -- if we add support for non-contiguous payloads.
+                -- See NOTE: [Sum tags] in Vega.Compilation.LLVM.Layout for details.
+                let (payloadOffset, payloadLayout) = Layout.sumOffsetAndLayout tag layout
 
-        payloadPointer <- buildGEPOffset builder sumPointer payloadOffset ""
-        buildComplexStore builder payloadLayout value payloadPointer
+                payloadPointer <- buildGEPOffset builder sumPointer payloadOffset ""
+                buildComplexStore builder payloadLayout value payloadPointer
     MIR.AllocClosure{var, closedValues, representation} -> undefined
     MIR.LoadGlobalClosure{var, functionName} -> do
         asVar_ var (Layout.closureLayout Layout.boxedLayout) $ buildClosure builder functionName Layout.boxedLayout LLVM.constNullPointer
@@ -347,9 +353,11 @@ compileInstruction builder = \case
     MIR.LoadSumTag{var, sum} -> do
         (sumValue, sumLayout) <- lookupVar sum
         let tagLayout = Layout.sizedIntLayoutInBytes (Layout.sumTagSizeInBytes sumLayout)
-
-        tagPointer <- buildGEPOffset builder sumValue (Layout.sumTagOffset sumLayout) "tagptr"
-        asVar_ var tagLayout $ LLVMBuilder.buildLoad builder (Layout.llvmType tagLayout) tagPointer
+        case Layout.sumTagOffset sumLayout of
+            Just offset -> do
+                tagPointer <- buildGEPOffset builder sumValue offset "tagptr"
+                asVar_ var tagLayout $ LLVMBuilder.buildLoad builder (Layout.llvmType tagLayout) tagPointer
+            Nothing -> insertVarMapping var sumValue sumLayout
     MIR.CallDirect{var, functionName, arguments, returnRepresentation}
         | Vega.isInternalName functionName -> do
             returnLayout <- Layout.representationLayout returnRepresentation
@@ -596,13 +604,13 @@ buildRuntimeCall builder name arguments varName = do
     buildCallWithAttributes builder functionType function arguments varName
 
 buildClosure :: (Compile es) => LLVMBuilder.Builder -> Vega.GlobalName -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
-buildClosure builder functionName closureLayout closureValue varName = do
+buildClosure builder functionName payloadLayout closureValue varName = do
     functionPointer <-
         -- We need to use the closure wrapper instead of the actual function here. See Note: [Closure Representation].
         LLVM.getNamedFunction ?module_ (closureWrapperNameForFunction (Core.Global functionName)) >>= \case
             Nothing -> panic $ "Trying to create closure for non-existent top-level function: " <> Vega.prettyGlobal Vega.VarKind functionName
             Just function_ -> pure function_
-    let combinedLayout = Layout.productLayout [Layout.functionPointerLayout, closureLayout]
+    let combinedLayout = Layout.closureLayout payloadLayout
     buildProduct builder [functionPointer, closureValue] combinedLayout varName
 
 buildProduct :: (Compile es) => LLVMBuilder.Builder -> Seq LLVM.Value -> Layout -> Text -> Eff es LLVM.Value

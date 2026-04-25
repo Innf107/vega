@@ -19,7 +19,6 @@ module Vega.Compilation.LLVM.Layout (
     identifier,
 
     -- ** Products
-    productLayout,
     productOffsetAndLayout,
 
     -- ** Sums
@@ -122,13 +121,19 @@ sumOffsetAndLayout constructorIndex layout = case layout.details of
         Just value -> (0, value)
     _ -> panic $ "trying to access sumOffsetAndLayout on non-sum layout " <> showHeadConstructor layout.details
 
--- | The offset at which the sum tag is stored. See NOTE: [Sum tags]
-sumTagOffset :: Layout -> Int
-sumTagOffset layout = layout.size - sumTagSizeInBytes layout
+-- | The offset at which the sum tag is stored. 
+-- This returns Nothing if the value itself is already the tag
+-- See NOTE: [Sum tags]
+sumTagOffset :: Layout -> Maybe Int
+sumTagOffset layout = case layout.kind of
+    AggregatePointer -> Just (layout.size - sumTagSizeInBytes layout)
+    LLVMScalar _scalar -> Nothing
+    ZeroSized -> Nothing
 
 sumTagSizeInBytes :: Layout -> Int
 sumTagSizeInBytes layout = case layout.details of
     SumLayout{tagSizeInBytes} -> tagSizeInBytes
+    Primitive -> layout.size
     _ -> panic $ "trying to access sum tag size on non-sum layout " <> showHeadConstructor layout.details
 
 type LayoutGen es = (?context :: LLVM.Context) :: Constraint
@@ -139,6 +144,8 @@ representationLayout = \case
     Core.ProductRep elements -> do
         elementLayouts <- for elements representationLayout
         pure (productLayout elementLayouts)
+    -- We represent all bool-like layouts directly as booleans (i1)
+    Core.SumRep [Core.ProductRep [], Core.ProductRep []] -> pure boolLayout
     Core.SumRep constructors -> do
         constructorLayouts <- for constructors representationLayout
         pure (sumLayout constructorLayouts)
