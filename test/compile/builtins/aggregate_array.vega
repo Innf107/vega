@@ -1,0 +1,18 @@
+-- type: print(3)
+
+import internal:Internal (replicateArray, unsafeReadArray, debugInt)
+
+data Complex =
+    | A(Int, Int, Int)
+    | B(Int, Int)
+
+main : () -> ()
+main() = {
+    let array = replicateArray(5, B(1, 2))
+    match unsafeReadArray(array, 3) {
+        A(_, _, _) -> {}
+        B(x, y) -> {
+            debugInt(x + y)
+        }
+    }
+}
