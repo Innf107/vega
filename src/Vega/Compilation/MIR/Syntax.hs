@@ -178,9 +178,9 @@ instance Pretty Instruction where
             } -> keywordInstruction "box" var [pretty target]
         Unbox{var, boxedTarget, representation} -> keywordInstruction "unbox" var [pretty boxedTarget, pretty representation]
         ProductConstructor{var, values, representation} ->
-            pretty var <+> keyword "=" <+> keyword "product" <+> arguments values <+> pretty representation
+            pretty var <+> keyword "=" <+> keyword "product" <+> arguments values <+> keyword ":" <+> pretty representation
         SumConstructor{var, tag, payload, representation} ->
-            pretty var <+> keyword "=" <+> keyword "sum" <+> lparen "[" <> number tag <> rparen "]" <> lparen "(" <> pretty payload <> rparen ")" <+> pretty representation
+            pretty var <+> keyword "=" <+> keyword "sum" <+> lparen "[" <> number tag <> rparen "]" <> lparen "(" <> pretty payload <> rparen ")" <+> keyword ":" <+> pretty representation
         AllocClosure{var, closedValues, representation} -> keywordInstruction "allocClosure" var (fmap pretty closedValues <> [pretty representation])
         LoadGlobalClosure{var, functionName, representationArguments} -> do
             let instantiation = case representationArguments of
