@@ -147,7 +147,7 @@ renderExpr = \case
     Lambda parameters body -> "((" <> intercalateMap "," TextBuilder.text parameters <> ") => {" <> renderStatements body <> "})"
     StringLiteral string -> "\"" <> escapeString string <> "\""
     IntLiteral int -> show int
-    DoubleLiteral rational -> undefined
+    DoubleLiteral _rational -> undefined
     BoolLiteral True -> "true"
     BoolLiteral False -> "false"
     ArrayLiteral elements -> "[" <> intercalateMap ", " renderExpr elements <> "]"

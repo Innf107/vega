@@ -415,7 +415,7 @@ compileStatements = \case
         let caseTree = PatternMatching.serializeSubPatterns [pattern_] ()
 
         (statements, finalExpr) <- compileCaseTree (\() -> compileStatements_ rest) caseTree [scrutineeValue]
-        pure (scrutineeStatements <> statements, finalExpr, undefined)
+        pure (scrutineeStatements <> statements, finalExpr, varRepresentation)
     (Vega.LetFunction{ext, name, parameters, typeSignature = _, body} :<| rest) -> do
         coreParameters <- for parameters \(_pattern, vegaRepresentation) -> do
             local <- newLocal

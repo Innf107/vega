@@ -1,4 +1,4 @@
-module Vega.TypeCheck.IntSum where
+module Vega.TypeCheck.IntSum (readIntSum, readIntSumNonDestructive) where
 
 import Effectful (Eff, (:>))
 import Relude

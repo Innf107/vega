@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wno-missing-export-lists #-}
 {- | These definitions follow runtime/src/heap.rs and are mostly necessary since we need to
 generate some runtime objects (in particular info tables) at compile time
 -}

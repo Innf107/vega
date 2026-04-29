@@ -64,7 +64,7 @@ instance Pretty Token where
         Constructor constr -> Pretty.localConstructorText constr
         StringLiteral literal -> Pretty.literal ("\"" <> literal <> "\"")
         IntLiteral int -> Pretty.number int
-        FloatLiteral rational -> undefined
+        FloatLiteral _rational -> undefined
         LParen -> Pretty.keyword "("
         RParen -> Pretty.keyword ")"
         LBracket -> Pretty.keyword "["

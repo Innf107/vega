@@ -45,10 +45,10 @@ ghc-options:
 - -Wincomplete-uni-patterns
 - -Wmissing-export-lists
 - -Wmissing-home-modules
-- -Wredundant-constraints
 - -Wno-name-shadowing
 - -Werror=incomplete-patterns
 - -Wno-ambiguous-fields
+- -Wno-unused-imports
 - -fno-show-error-context
 - -fno-show-valid-hole-fits
 - -fmax-relevant-binds=0

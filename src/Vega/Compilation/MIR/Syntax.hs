@@ -1,4 +1,19 @@
-module Vega.Compilation.MIR.Syntax where
+module Vega.Compilation.MIR.Syntax (
+    Program (..),
+    Declaration (..),
+    BlockDescriptor (..),
+    Phis (..),
+    Block (..),
+    Variable (..),
+    PathSegment (..),
+    Path,
+    Instruction (..),
+    ArithmeticExpr (..),
+    Terminator (..),
+    representationAtPath,
+    prettyBlock,
+    prettyPath,
+) where
 
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
@@ -125,7 +140,9 @@ instance Pretty Declaration where
     pretty = \case
         DefineFunction{name, parameters, returnRepresentation, init, blocks} -> do
             pretty name
-                <> typedArguments parameters <+> keyword ":" <+> pretty returnRepresentation
+                <> typedArguments parameters
+                    <+> keyword ":"
+                    <+> pretty returnRepresentation
                     <+> keyword "="
                     <+> lparen "{"
                 <> "\n  "

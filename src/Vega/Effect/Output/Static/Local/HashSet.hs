@@ -1,4 +1,4 @@
-module Vega.Effect.Output.Static.Local.HashSet (Output (..), output, runOutputHashSet) where
+module Vega.Effect.Output.Static.Local.HashSet (Output, output, runOutputHashSet) where
 
 import Relude hiding (toList)
 

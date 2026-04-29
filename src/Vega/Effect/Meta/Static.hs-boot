@@ -1,4 +1,14 @@
-module Vega.Effect.Meta.Static where
+module Vega.Effect.Meta.Static (
+    ReadMeta,
+    BindMeta,
+    readMeta,
+    bindMetaUnchecked,
+    freshMeta,
+    runMeta,
+    runReadMetaPure,
+    followMetas,
+    followMetasWithoutPathCompression,
+) where
 
 import Relude hiding (trace)
 

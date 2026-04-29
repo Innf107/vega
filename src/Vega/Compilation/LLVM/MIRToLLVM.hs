@@ -148,7 +148,7 @@ forwardDeclareDeclaration = \case
         parameterLayouts <- for parameters \(_, representation) -> Layout.representationLayout representation
         returnLayout <- Layout.representationLayout returnRepresentation
 
-        (functionTypeWithAttributes, sret) <- functionLLVMType parameterLayouts returnLayout
+        (functionTypeWithAttributes, _sret) <- functionLLVMType parameterLayouts returnLayout
         function <- addFunctionWithAttributes ?module_ (renderLLVMName name) functionTypeWithAttributes
         LLVM.setFunctionCallConv function LLVM.tailCallConv
 
@@ -313,7 +313,7 @@ compileInstruction builder = \case
 
         case Layout.kind layout of
             Layout.ZeroSized -> insertVarMapping var zeroSizedDummyValue layout
-            Layout.LLVMScalar{} -> undefined
+            Layout.LLVMScalar{} -> panic "Trying to construct an LLVM scalar from a product constructor"
             Layout.AggregatePointer -> do
                 productPointer <- asVar var layout $ buildLayoutAlloca builder layout
                 forIndexed_ llvmValues \value index -> do
