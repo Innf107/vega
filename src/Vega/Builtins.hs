@@ -1,8 +1,11 @@
 module Vega.Builtins (
+    Primop (..),
+    primops,
+    asPrimop,
+    primopType,
+    primitiveTypeConstructors,
     defaultImportScope,
     builtinGlobals,
-    builtinKinds,
-    builtinTypes,
     intType,
     stringType,
     doubleType,
@@ -10,45 +13,60 @@ module Vega.Builtins (
     arrayType,
 ) where
 
+import Data.HashMap.Strict qualified as HashMap
 import Relude hiding (Type)
+import Vega.Panic (panic)
 import Vega.Seq.NonEmpty (NonEmpty (..))
 import Vega.Syntax hiding (forall_)
 
+data Primop
+    = ReplicateArray
+    | UnsafeReadArray
+    | ArrayLength
+    | CodePoints
+    | Panic
+    | DebugInt
+
+primops :: HashMap Text Primop
+primops =
+    [ ("replicateArray", ReplicateArray)
+    , ("unsafeReadArray", UnsafeReadArray)
+    , ("arrayLength", ArrayLength)
+    , ("codePoints", CodePoints)
+    , ("panic", Panic)
+    , ("debugInt", DebugInt)
+    ]
+
+asPrimop :: GlobalName -> Maybe Primop
+asPrimop name
+    | not (isInternalName name) = Nothing
+    | otherwise = case HashMap.lookup name.name primops of
+        Just primop -> Just primop
+        Nothing -> Nothing
+
+primitiveTypeConstructors :: HashMap Text Kind
+primitiveTypeConstructors =
+    [ ("Int", Type (PrimitiveRep IntRep))
+    , ("String", Type (PrimitiveRep BoxedRep))
+    , ("Double", Type (PrimitiveRep DoubleRep))
+    , ("Bool", Type boolRepresentation)
+    , ("Array", forallVisible Monomorphized "r" Rep \r -> [Type r] :-> Type (ArrayRep r))
+    ]
+
 builtinGlobals :: HashMap (Text, NameKind) GlobalName
-builtinGlobals = fromList [((name, kind), internalName name) | (name, kind) <- globals]
-  where
-    globals =
-        [ ("Int", TypeConstructorKind)
-        , ("String", TypeConstructorKind)
-        , ("Double", TypeConstructorKind)
-        , ("Bool", TypeConstructorKind)
-        , ("Array", TypeConstructorKind)
-        , ("replicateArray", VarKind)
-        , ("unsafeReadArray", VarKind)
-        , ("arrayLength", VarKind)
-        , ("codePoints", VarKind)
-        , ("panic", VarKind)
-        , ("debugInt", VarKind)
-        ]
+builtinGlobals =
+    fromList $
+        [((name, VarKind), internalName name) | (name, _) <- HashMap.toList primops]
+            <> [((name, TypeConstructorKind), internalName name) | (name, _) <- HashMap.toList primitiveTypeConstructors]
 
-builtinKinds :: HashMap GlobalName Kind
-builtinKinds =
-    [ (internalName "Int", Type (PrimitiveRep IntRep))
-    , (internalName "String", Type (PrimitiveRep BoxedRep))
-    , (internalName "Double", Type (PrimitiveRep DoubleRep))
-    , (internalName "Bool", Type boolRepresentation)
-    , (internalName "Array", forallVisible Monomorphized "r" Rep \r -> [Type r] :-> Type (ArrayRep r))
-    ]
-
-builtinTypes :: HashMap GlobalName Type
-builtinTypes =
-    [ (internalName "replicateArray", forall_ "a" \a -> [intType, a] --> arrayType @@ [a])
-    , (internalName "unsafeReadArray", forall_ "a" \a -> [arrayType @@ [a], intType] --> a)
-    , (internalName "arrayLength", forall_ "a" \a -> [arrayType @@ [a]] --> intType)
-    , (internalName "codePoints", [stringType] --> arrayType @@ [intType])
-    , (internalName "panic", forall_ "a" \a -> [stringType] --> a)
-    , (internalName "debugInt", [intType] --> unitType)
-    ]
+primopType :: Primop -> Type
+primopType = \case
+    ReplicateArray -> forall_ "a" \a -> [intType, a] --> arrayType @@ [a]
+    UnsafeReadArray -> forall_ "a" \a -> [arrayType @@ [a], intType] --> a
+    ArrayLength -> forall_ "a" \a -> [arrayType @@ [a]] --> intType
+    CodePoints -> [stringType] --> arrayType @@ [intType]
+    Panic -> forall_ "a" \a -> [stringType] --> a
+    DebugInt -> [intType] --> unitType
 
 defaultImportScope :: ImportScope
 defaultImportScope =

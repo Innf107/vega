@@ -615,10 +615,6 @@ arityOfDataConstructor = \case
         Vega.PureFunctionS _ arguments _ -> pure (Just (length arguments))
         _ -> pure Nothing
 
-booleanConstructorName :: Bool -> Vega.Name
-booleanConstructorName True = Vega.Global (Vega.internalName "True")
-booleanConstructorName False = Vega.Global (Vega.internalName "False")
-
 {- | Convert a representation represented as a vega type (of kind `Rep`) to a core representation.
 This is mostly blind unwrapping and following meta variables, except for the case for unbound meta variables where
 we give them representation `Unit` (which is like defaulting them to `()` but friendlier for error messages)

@@ -5,6 +5,7 @@ options {
     "--hide-passing" as hidePassing: "Don't print immediate output for passing tests"
     "--hide-known" as hideKnown: "Don't print immediate output for known failures"
     "--skip-mir-verification" as skipMIRVerification: "Do not run MIR verification on the native backend. This might be desirable if you want to see what LLVM is generated for something that MIR verification doesn't implement correctly yet"
+    "--debug-runtime" as debugRuntime: "Compile the runtime in debug instead of release mode"
 }
 
 module List = import("@std/list.pls")
@@ -44,7 +45,19 @@ module List = import("@std/list.pls")
 let testdir = !readlink "-f" (scriptLocal("."))
 chdir(testdir)
 
+
+chdir("../runtime")
+if debugRuntime then {
+    !./build_debug.sh
+    ()
+} else {
+    !./build_release.sh
+    ()
+}
+chdir(testdir)
 !stack "build" "--fast"
+
+
 let vega = !readlink "-f" "../${!stack "path" "--dist-dir"}/build/vega/vega"
 
 let compileTests = lines(!find "compile" "-name" "*.vega")

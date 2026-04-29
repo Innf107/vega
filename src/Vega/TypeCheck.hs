@@ -156,11 +156,9 @@ fatalTypeError error = do
 
 getGlobalType :: (TypeCheck es) => GlobalName -> Eff es Type
 getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobal VarKind name) do
-    case isInternalName name of
-        True -> case lookup name Builtins.builtinTypes of
-            Just type_ -> pure type_
-            Nothing -> panic $ "builtin variable without a type: " <> prettyGlobal VarKind name
-        False ->
+    case Builtins.asPrimop name of
+        Just primop -> pure (Builtins.primopType primop)
+        Nothing ->
             GraphPersistence.getGlobalType name >>= \case
                 CachedType cachedType -> do
                     trace TypeCheck $ "cached ~> " <> pretty cachedType
@@ -174,7 +172,7 @@ getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobal VarKi
 globalConstructorKind :: (TypeCheck es) => GlobalName -> Eff es Kind
 globalConstructorKind name = do
     if isInternalName name
-        then case lookup name Builtins.builtinKinds of
+        then case lookup name.name Builtins.primitiveTypeConstructors of
             Nothing -> error $ "builtin type without a kind: " <> show name
             Just kind -> pure kind
         else do

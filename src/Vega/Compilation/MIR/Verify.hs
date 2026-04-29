@@ -10,6 +10,7 @@ import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Effectful.Reader.Static (Reader, ask, runReader)
 import Effectful.State.Static.Local (State, evalState, get, put, runState)
+import Vega.Builtins qualified as Builtins
 import Vega.Compilation.Core.Syntax (CoreName, Representation (..))
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.MIR.Syntax qualified as MIR
@@ -149,7 +150,7 @@ verifyInstruction = \case
         -- it should be int8/int16/... depending on the number of constructors but we don't actually have that in MIR yet
         insertVarRepresentation var (PrimitiveRep IntRep)
     MIR.CallDirect{var, functionName, arguments, returnRepresentation}
-        | Vega.isInternalName functionName ->
+        | Just primop <- Builtins.asPrimop functionName ->
             -- We can't currently verify calls to builtins since we don't have their representations here!
             pure ()
         | otherwise -> do

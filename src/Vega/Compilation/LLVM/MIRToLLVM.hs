@@ -31,6 +31,8 @@ import LLVM.InstructionBuilder qualified as LLVMBuilder
 import System.IO.Unsafe (unsafePerformIO)
 import Vega.Alignment (Alignment)
 import Vega.Alignment qualified as Alignment
+import Vega.Builtins (Primop (..))
+import Vega.Builtins qualified as Builtins
 import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, addFunctionWithAttributes, attributeFunctionType, buildCallWithAttributes, parametersWithAttributes, rawFunctionType, returnTypeWithAttributes)
@@ -361,9 +363,9 @@ compileInstruction builder = \case
                 asVar_ var tagLayout $ LLVMBuilder.buildLoad builder (Layout.llvmType tagLayout) tagPointer
             Nothing -> insertVarMapping var sumValue sumLayout
     MIR.CallDirect{var, functionName, arguments, returnRepresentation}
-        | Vega.isInternalName functionName -> do
+        | Just primop <- Builtins.asPrimop functionName -> do
             returnLayout <- Layout.representationLayout returnRepresentation
-            asVar_ var returnLayout $ compileBuiltinCall builder functionName arguments returnRepresentation
+            asVar_ var returnLayout $ compilePrimopCall builder primop arguments returnRepresentation
         | otherwise -> do
             let isNotZeroSized (_, layout) = case Layout.kind layout of
                     Layout.ZeroSized -> False
@@ -463,9 +465,9 @@ compileTerminator builder = \case
         _ <- LLVMBuilder.buildSwitch builder scrutineeValue cases defaultBlock
         pure ()
     MIR.TailCallDirect{functionName, arguments, returnRepresentation}
-        | Vega.isInternalName functionName -> do
+        | Just primop <- Builtins.asPrimop functionName -> do
             resultLayout <- Layout.representationLayout returnRepresentation
-            result <- compileBuiltinCall builder functionName arguments returnRepresentation "ret"
+            result <- compilePrimopCall builder primop arguments returnRepresentation "ret"
             buildComplexReturn builder resultLayout result
         | otherwise -> do
             let isNotZeroSized (_, layout) = case Layout.kind layout of
@@ -510,22 +512,23 @@ compileTerminator builder = \case
         pure ()
     _ -> undefined
 
-compileBuiltinCall ::
+compilePrimopCall ::
     (Compile es) =>
     LLVMBuilder.Builder ->
-    Vega.GlobalName ->
+    Primop ->
     Seq MIR.Variable ->
     Representation ->
     Text ->
     Eff es LLVM.Value
-compileBuiltinCall builder functionName arguments returnRepresentation varName = do
+compilePrimopCall builder primop arguments returnRepresentation varName = do
     argumentValues <- for arguments lookupVarValue
-    case functionName.name of
-        "debugInt" -> do
-            outOfLineBuiltin builder "vega_debug_int" argumentValues returnRepresentation varName
-        "unsafeReadArray" -> compileReadArray builder arguments returnRepresentation varName
-        "replicateArray" -> compileReplicateArray builder arguments returnRepresentation varName
-        _ -> panic $ "Call to unsupported builtin function: " <> Vega.prettyGlobal Vega.VarKind functionName
+    case primop of
+        DebugInt -> outOfLineBuiltin builder "vega_debug_int" argumentValues returnRepresentation varName
+        UnsafeReadArray -> compileReadArray builder arguments returnRepresentation varName
+        ReplicateArray -> compileReplicateArray builder arguments returnRepresentation varName
+        ArrayLength -> undefined
+        CodePoints -> undefined
+        Panic -> undefined
 
 compileReadArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
 compileReadArray builder arguments returnRepresentation varName = case arguments of
@@ -533,7 +536,7 @@ compileReadArray builder arguments returnRepresentation varName = case arguments
         valueLayout <- Layout.representationLayout returnRepresentation
         array <- lookupVarValue array
         index <- lookupVarValue index
-        
+
         buildArrayLoad builder valueLayout array index varName
     _ -> panic $ "unsafeReadArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
@@ -650,8 +653,8 @@ getOrCreateArrayInfoTablePointer elementLayout = do
                             Heap.ArrayLayout
                                 ( Heap.MkArrayLayout
                                     { elementStrideInBytes = fromIntegral $ Layout.strideInBytes elementLayout
-                                    -- TODO
-                                    , elementBoxedCount = 0
+                                    , -- TODO
+                                      elementBoxedCount = 0
                                     }
                                 )
                         }
@@ -660,7 +663,6 @@ getOrCreateArrayInfoTablePointer elementLayout = do
             llvmInfoTableGlobal <- LLVM.addGlobal ?module_ infoTableLLVMType identifier
             LLVM.setInitializer llvmInfoTableGlobal infoTableConstant
             pure (LLVM.globalAsValue llvmInfoTableGlobal)
-
 
 buildRuntimeCall ::
     (Compile es) =>
@@ -724,18 +726,17 @@ buildArrayStore builder layout array index value = case Layout.kind layout of
         pure ()
     Layout.ZeroSized -> pure ()
 
-buildArrayLoad :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> LLVM.Value -> Text ->Eff es LLVM.Value
+buildArrayLoad :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> LLVM.Value -> Text -> Eff es LLVM.Value
 buildArrayLoad builder layout array index varName = case Layout.kind layout of
     Layout.LLVMScalar scalar -> do
         contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
         pointer <- LLVMBuilder.buildGetElementPtr builder scalar contents [index] ""
-        LLVMBuilder.buildLoad builder scalar pointer varName 
+        LLVMBuilder.buildLoad builder scalar pointer varName
     Layout.AggregatePointer -> do
         contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
         pointer <- LLVMBuilder.buildGetElementPtr builder (LLVM.arrayType LLVM.int8Type (Layout.sizeInBytes layout)) contents [index] ""
         buildComplexLoad builder layout pointer varName
     Layout.ZeroSized -> pure zeroSizedDummyValue
-
 
 buildComplexReturn :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Eff es ()
 buildComplexReturn builder layout value = do

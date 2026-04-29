@@ -9,6 +9,7 @@ import Data.Text.Internal.StrictBuilder qualified as TextBuilder
 import Data.Traversable (for)
 import Data.Unique (hashUnique, newUnique)
 import Effectful (Eff, IOE, type (:>))
+import Vega.Builtins qualified as Builtins
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.JavaScript.Syntax qualified as JS
 import Vega.Effect.Trace (Trace)
@@ -82,12 +83,10 @@ compileExpr = \case
         pure ([JS.Panic (JS.StringLiteral "unreachable code evaluated")], JS.Undefined)
     Core.Application{function, representationArguments = _, arguments, resultRepresentation = _}
         | Core.Global globalName <- function
-        , Vega.isInternalName globalName -> do
-            case HashMap.lookup globalName.name primops of
-                Nothing -> panic $ "Unimplemented builtin function: " <> pretty function
-                Just (_arity, makeBody) -> do
-                    jsArguments <- for arguments compileValue
-                    makeBody jsArguments
+        , Just primop <- Builtins.asPrimop globalName -> do
+            let (_, makeBody) = primopJSFunction primop
+            jsArguments <- for arguments compileValue
+            makeBody jsArguments
         | otherwise -> do
             jsArguments <- for arguments compileValue
             pure ([], JS.Application (JS.Var (JS.compileCoreName function)) jsArguments)
@@ -216,13 +215,11 @@ compileValue :: (Compile es) => Core.Value -> Eff es JS.Expr
 compileValue = \case
     Core.Var varName
         | Core.Global globalName <- varName
-        , Vega.isInternalName globalName -> do
-            case HashMap.lookup globalName.name primops of
-                Nothing -> panic $ "Unimplemented builtin function: " <> pretty varName
-                Just (arity, makeBody) -> do
-                    variables <- fromList <$> replicateM arity newVar
-                    (bodyStatements, bodyExpr) <- makeBody (fmap JS.Var variables)
-                    pure (JS.Lambda variables (bodyStatements <> [JS.Return bodyExpr]))
+        , Just primop <- Builtins.asPrimop globalName -> do
+            let (arity, makeBody) = primopJSFunction primop
+            variables <- fromList <$> replicateM arity newVar
+            (bodyStatements, bodyExpr) <- makeBody (fmap JS.Var variables)
+            pure (JS.Lambda variables (bodyStatements <> [JS.Return bodyExpr]))
         | otherwise -> pure $ JS.Var (JS.compileCoreName varName)
     Core.Instantiation{varName, representationArguments = _} -> pure $ JS.Var (JS.compileCoreName varName)
     Core.Literal literal -> case literal of
@@ -265,20 +262,23 @@ isUnitRepresentation = \case
     Core.ProductRep [] -> True
     _ -> False
 
-primops :: HashMap Text (Int, Seq JS.Expr -> Eff es (Seq JS.Statement, JS.Expr))
-primops =
-    [ ("debugInt", asJSFunction 1 "console.log")
-    , ("replicateArray", asJSFunction 2 "internal$replicateArray")
-    , ("codePoints", asJSFunction 1 "internal$codePoints")
-    ,
-        ( "unsafeReadArray"
-        ,
-            ( 2
-            , \arguments -> case arguments of
-                [array, index] -> pure ([], JS.Index array index)
-                _ -> error "unreachable"
-            )
+primopJSFunction :: Builtins.Primop -> (Int, Seq JS.Expr -> Eff es (Seq JS.Statement, JS.Expr))
+primopJSFunction = \case
+    Builtins.ReplicateArray -> asJSFunction 2 "internal$replicateArray"
+    Builtins.UnsafeReadArray ->
+        ( 2
+        , \arguments -> case arguments of
+            [array, index] -> pure ([], JS.Index array index)
+            _ -> error "unreachable"
         )
-    ]
+    Builtins.ArrayLength ->
+        ( 1
+        , \arguments -> case arguments of
+            [array] -> pure ([], JS.FieldAccess array "length")
+            _ -> error "unreachable"
+        )
+    Builtins.CodePoints -> asJSFunction 1 "internal$codePoints"
+    Builtins.Panic -> asJSFunction 1 "internal$panic"
+    Builtins.DebugInt -> asJSFunction 1 "console.log"
   where
     asJSFunction arity name = (arity, \arguments -> pure ([], JS.Application (JS.Var name) arguments))

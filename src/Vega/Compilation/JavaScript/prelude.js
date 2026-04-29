@@ -14,3 +14,7 @@ function internal$codePoints(string) {
     }
     return array
 }
+
+function internal$panic(message) {
+    throw new Error(`PANIC: ${message}`)
+}
