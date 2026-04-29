@@ -3,6 +3,7 @@ module Vega.Builtins (
     primops,
     asPrimop,
     primopType,
+    primopRepresentation,
     primitiveTypeConstructors,
     defaultImportScope,
     builtinGlobals,
@@ -13,11 +14,18 @@ module Vega.Builtins (
     arrayType,
 ) where
 
+import Data.Char qualified as Char
 import Data.HashMap.Strict qualified as HashMap
+import Data.Sequence qualified as Seq
+import Data.Text qualified as Text
 import Relude hiding (Type)
+import Vega.Compilation.Core.Syntax qualified as Core
+import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
+import Vega.Pretty (Pretty, keyword, number, pretty)
 import Vega.Seq.NonEmpty (NonEmpty (..))
 import Vega.Syntax hiding (forall_)
+import Vega.Syntax qualified as Vega
 
 data Primop
     = ReplicateArray
@@ -26,6 +34,12 @@ data Primop
     | CodePoints
     | Panic
     | DebugInt
+    deriving (Show)
+
+instance Pretty Primop where
+    pretty primop = case show primop of
+        "" -> ""
+        (first : rest) -> keyword (toText (Char.toLower first : rest))
 
 primops :: HashMap Text Primop
 primops =
@@ -67,6 +81,21 @@ primopType = \case
     CodePoints -> [stringType] --> arrayType @@ [intType]
     Panic -> forall_ "a" \a -> [stringType] --> a
     DebugInt -> [intType] --> unitType
+
+-- This should really be determined by primopType but we can't currently do that without
+-- involving the type checker so we have to write it out manually for now.
+primopRepresentation :: (HasCallStack) => Primop -> Seq Core.Representation -> (Seq Core.Representation, Core.Representation)
+primopRepresentation primop arguments = case primop of
+    ReplicateArray -> ([intRep, argument 0], Core.ArrayRep (argument 0))
+    UnsafeReadArray -> ([Core.ArrayRep (argument 0), intRep], argument 0)
+    ArrayLength -> ([Core.ArrayRep (argument 0)], intRep)
+    CodePoints -> ([undefined], Core.ArrayRep intRep)
+    Panic -> ([undefined], argument 0)
+    DebugInt -> ([intRep], unitRep)
+  where
+    argument i = case Seq.lookup i arguments of
+        Just representation -> representation
+        Nothing -> panic $ "Primop " <> pretty primop <> " called with too few arguments. Provided: " <> number (length arguments)
 
 defaultImportScope :: ImportScope
 defaultImportScope =
@@ -134,3 +163,9 @@ forall_ varName body =
         ( \r ->
             forallVisible Parametric varName (Type r) body
         )
+
+intRep :: Core.Representation
+intRep = Core.PrimitiveRep Vega.IntRep
+
+unitRep :: Core.Representation
+unitRep = Core.ProductRep []

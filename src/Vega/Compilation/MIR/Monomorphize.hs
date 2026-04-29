@@ -122,30 +122,60 @@ monomorphizeInstruction instruction = case instruction of
         pure (MIR.SumConstructor{var, tag, payload, representation = substituteRepresentation representation})
     MIR.AllocClosure{var, closedValues, representation} ->
         pure (MIR.AllocClosure{var, closedValues, representation = substituteRepresentation representation})
-    MIR.LoadGlobal{var, globalName, representationArguments, representation} -> do
-        monomorphizedGlobalName <- monomorphizeDeclaration globalName (fmap substituteRepresentation representationArguments)
-        pure
-            ( MIR.LoadGlobal
-                { var
-                , globalName = monomorphizedGlobalName
-                , representationArguments = []
-                , representation = substituteRepresentation representation
-                }
-            )
-    MIR.LoadGlobalClosure{var, functionName, representationArguments} -> do
-        monomorphizedFunctionName <- monomorphizeDeclaration functionName (fmap substituteRepresentation representationArguments)
-        pure (MIR.LoadGlobalClosure{var, functionName = monomorphizedFunctionName, representationArguments = []})
-    MIR.CallDirect{var, functionName, representationArguments, arguments, returnRepresentation} -> do
-        monomorphizedFunctionName <- monomorphizeDeclaration functionName (fmap substituteRepresentation representationArguments)
-        pure
-            ( MIR.CallDirect
-                { var
-                , functionName = monomorphizedFunctionName
-                , representationArguments = []
-                , arguments
-                , returnRepresentation = substituteRepresentation returnRepresentation
-                }
-            )
+    MIR.LoadGlobal{var, globalName, representationArguments, representation}
+        | Vega.isInternalName globalName ->
+            pure
+                ( MIR.LoadGlobal
+                    { var
+                    , globalName
+                    , representationArguments = fmap substituteRepresentation representationArguments
+                    , representation = substituteRepresentation representation
+                    }
+                )
+        | otherwise -> do
+            monomorphizedGlobalName <- monomorphizeDeclaration globalName (fmap substituteRepresentation representationArguments)
+            pure
+                ( MIR.LoadGlobal
+                    { var
+                    , globalName = monomorphizedGlobalName
+                    , representationArguments = []
+                    , representation = substituteRepresentation representation
+                    }
+                )
+    MIR.LoadGlobalClosure{var, functionName, representationArguments}
+        | Vega.isInternalName functionName ->
+            pure
+                ( MIR.LoadGlobalClosure
+                    { var
+                    , functionName
+                    , representationArguments = fmap substituteRepresentation representationArguments
+                    }
+                )
+        | otherwise -> do
+            monomorphizedFunctionName <- monomorphizeDeclaration functionName (fmap substituteRepresentation representationArguments)
+            pure (MIR.LoadGlobalClosure{var, functionName = monomorphizedFunctionName, representationArguments = []})
+    MIR.CallDirect{var, functionName, representationArguments, arguments, returnRepresentation}
+        | Vega.isInternalName functionName ->
+            pure
+                ( MIR.CallDirect
+                    { var
+                    , functionName
+                    , representationArguments = fmap substituteRepresentation representationArguments
+                    , arguments
+                    , returnRepresentation = substituteRepresentation returnRepresentation
+                    }
+                )
+        | otherwise -> do
+            monomorphizedFunctionName <- monomorphizeDeclaration functionName (fmap substituteRepresentation representationArguments)
+            pure
+                ( MIR.CallDirect
+                    { var
+                    , functionName = monomorphizedFunctionName
+                    , representationArguments = []
+                    , arguments
+                    , returnRepresentation = substituteRepresentation returnRepresentation
+                    }
+                )
     MIR.CallClosure{var, closure, arguments, returnRepresentation} -> do
         pure (MIR.CallClosure{var, closure, arguments, returnRepresentation = substituteRepresentation returnRepresentation})
 
@@ -162,16 +192,26 @@ monomorphizeTerminator terminator = case terminator of
         , representationArguments
         , arguments
         , returnRepresentation
-        } -> do
-            monomorphizedFunctionName <- monomorphizeDeclaration functionName (fmap substituteRepresentation representationArguments)
-            pure
-                ( MIR.TailCallDirect
-                    { functionName = monomorphizedFunctionName
-                    , representationArguments = []
-                    , arguments
-                    , returnRepresentation = substituteRepresentation returnRepresentation
-                    }
-                )
+        }
+            | Vega.isInternalName functionName ->
+                pure
+                    ( MIR.TailCallDirect
+                        { functionName
+                        , representationArguments = fmap substituteRepresentation representationArguments
+                        , arguments
+                        , returnRepresentation = substituteRepresentation returnRepresentation
+                        }
+                    )
+            | otherwise -> do
+                monomorphizedFunctionName <- monomorphizeDeclaration functionName (fmap substituteRepresentation representationArguments)
+                pure
+                    ( MIR.TailCallDirect
+                        { functionName = monomorphizedFunctionName
+                        , representationArguments = []
+                        , arguments
+                        , returnRepresentation = substituteRepresentation returnRepresentation
+                        }
+                    )
 
 substituteRepresentation :: (HasCallStack, ?arguments :: Seq Representation) => Representation -> Representation
 substituteRepresentation = \case
