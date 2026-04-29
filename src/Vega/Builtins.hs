@@ -4,6 +4,11 @@ module Vega.Builtins (
     asPrimop,
     primopType,
     primopRepresentation,
+    CorePrimop (..),
+    corePrimops,
+    asCorePrimop,
+    corePrimopType,
+    corePrimopRepresentation,
     primitiveTypeConstructors,
     defaultImportScope,
     builtinGlobals,
@@ -58,6 +63,51 @@ asPrimop name
         Just primop -> Just primop
         Nothing -> Nothing
 
+{- | CorePrimops are primitive operations that are already resolved in VegaToCore.
+These are primarily operations that have dedicated syntax in core but
+behave like regular functions in vega
+-}
+data CorePrimop
+    = Box
+    | Unbox
+    deriving (Show)
+
+instance Pretty CorePrimop where
+    pretty primop = case show primop of
+        "" -> ""
+        (first : rest) -> keyword (toText (Char.toLower first : rest))
+
+corePrimops :: HashMap Text CorePrimop
+corePrimops =
+    [ ("box", Box)
+    , ("unbox", Unbox)
+    ]
+
+asCorePrimop :: GlobalName -> Maybe CorePrimop
+asCorePrimop name
+    | not (isInternalName name) = Nothing
+    | otherwise = case HashMap.lookup name.name corePrimops of
+        Just primop -> Just primop
+        Nothing -> Nothing
+
+corePrimopType :: CorePrimop -> Type
+corePrimopType = \case
+    Box -> forall_ "a" \a -> [a] --> boxType @@ [a]
+    Unbox -> forall_ "a" \a -> [boxType @@ [a]] --> a
+
+corePrimopRepresentation ::
+    (HasCallStack) =>
+    CorePrimop ->
+    Seq Core.Representation ->
+    (Seq Core.Representation, Core.Representation)
+corePrimopRepresentation primop arguments = case primop of
+    Box -> ([argument 0], Core.PrimitiveRep Vega.BoxedRep)
+    Unbox -> ([Core.PrimitiveRep Vega.BoxedRep], argument 0)
+  where
+    argument i = case Seq.lookup i arguments of
+        Just representation -> representation
+        Nothing -> panic $ "Core primop " <> pretty primop <> " called with too few arguments. Provided: " <> number (length arguments)
+
 primitiveTypeConstructors :: HashMap Text Kind
 primitiveTypeConstructors =
     [ ("Int", Type (PrimitiveRep IntRep))
@@ -65,12 +115,14 @@ primitiveTypeConstructors =
     , ("Double", Type (PrimitiveRep DoubleRep))
     , ("Bool", Type boolRepresentation)
     , ("Array", forallVisible Monomorphized "r" Rep \r -> [Type r] :-> Type (ArrayRep r))
+    , ("Box", forallVisible Monomorphized "r" Rep \r -> [Type r] :-> Type (PrimitiveRep BoxedRep))
     ]
 
 builtinGlobals :: HashMap (Text, NameKind) GlobalName
 builtinGlobals =
     fromList $
         [((name, VarKind), internalName name) | (name, _) <- HashMap.toList primops]
+            <> [((name, VarKind), internalName name) | (name, _) <- HashMap.toList corePrimops]
             <> [((name, TypeConstructorKind), internalName name) | (name, _) <- HashMap.toList primitiveTypeConstructors]
 
 primopType :: Primop -> Type
@@ -105,7 +157,7 @@ defaultImportScope =
                 ( internalModuleName
                 , MkImportedItems
                     { qualifiedAliases = []
-                    , unqualifiedItems = ["Int", "String", "Double", "Bool", "Array", "panic"]
+                    , unqualifiedItems = ["Int", "String", "Double", "Bool", "Array", "Box", "panic", "box", "unbox"]
                     }
                 )
             ]
@@ -125,6 +177,9 @@ boolType = TypeConstructor (Global (internalName "Bool"))
 
 arrayType :: Type
 arrayType = TypeConstructor (Global (internalName "Array"))
+
+boxType :: Type
+boxType = TypeConstructor (Global (internalName "Box"))
 
 unitType :: Type
 unitType = Tuple []

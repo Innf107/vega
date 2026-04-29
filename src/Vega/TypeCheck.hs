@@ -155,10 +155,11 @@ fatalTypeError error = do
     throwError_ error
 
 getGlobalType :: (TypeCheck es) => GlobalName -> Eff es Type
-getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobal VarKind name) do
-    case Builtins.asPrimop name of
-        Just primop -> pure (Builtins.primopType primop)
-        Nothing ->
+getGlobalType name = withTrace TypeCheck ("getGlobalType " <> prettyGlobal VarKind name) $ case name of
+    name
+        | Just primop <- Builtins.asPrimop name -> pure (Builtins.primopType primop)
+        | Just corePrimop <- Builtins.asCorePrimop name -> pure (Builtins.corePrimopType corePrimop)
+        | otherwise ->
             GraphPersistence.getGlobalType name >>= \case
                 CachedType cachedType -> do
                     trace TypeCheck $ "cached ~> " <> pretty cachedType

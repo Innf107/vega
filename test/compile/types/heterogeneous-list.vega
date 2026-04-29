@@ -1,0 +1,31 @@
+-- type: print(2)
+-- KNOWN
+
+import internal:Internal (debugInt)
+
+data List(a) =
+    | Nil
+    | Cons(a, List(a))
+
+boxedIntToInt : Box(Int) -> Int
+boxedIntToInt(x) = unbox(x)
+
+boxedPairToInt : Box((Int, Int)) -> Int
+boxedPairToInt(box) = {
+    let (x, y) = unbox(box)
+    x + y
+}
+
+heteroSum : List(exists (a : Type(Boxed)). { value : a, toInt : a -> Int }) -> Int
+heteroSum(list) = match list {
+    Nil -> 0
+    Cons({ value, toInt }, tail) -> toInt(value) + heteroSum(tail)
+}
+
+main : () -> ()
+main() = {
+    let x : List(exists (a : Type(Boxed)). { value: a, toInt: a -> Int }) =
+        Cons({ value = box(1), toInt = boxedIntToInt }, 
+            Cons({ value = box((2, 3)), toInt = boxedPairToInt }, Nil)) 
+    debugInt(heteroSum(x))
+}

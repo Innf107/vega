@@ -1,0 +1,10 @@
+-- type: print(5)
+
+import internal:Internal (debugInt)
+
+
+main : () -> ()
+main() = {
+    let x : Box(Int) = box(5)
+    debugInt(unbox(x))
+}

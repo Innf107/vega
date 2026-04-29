@@ -1,0 +1,14 @@
+-- type: compile
+-- KNOWN
+
+import internal:Internal (debugInt)
+
+data List(a) =
+    | Nil
+    | Cons(a, List(a))
+
+main : () -> ()
+main() = {
+    let x : List(exists (a : Type(Boxed)). a) =
+        Cons(box(1), Cons(box((2, 3)), Nil))
+}

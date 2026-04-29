@@ -25,6 +25,7 @@ import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Effectful.Reader.Static (Reader, ask, runReader)
+import Vega.Builtins qualified as Builtins
 import Vega.Compilation.Core.Syntax (nameToCoreName, stringRepresentation)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.PatternMatching (CaseTree)
@@ -128,7 +129,19 @@ compileExpr expr = do
             (statements, value, representation) <- compileExprToValue expr
             pure (statements, Core.Value value, representation)
     case expr of
-        Vega.Var{} -> deferToValue
+        Vega.Var{name, instantiatedTypeArguments}
+            | Vega.Global globalName <- name
+            , Just primop <- Builtins.asCorePrimop globalName -> do
+                representationArguments <- for instantiatedTypeArguments convertRepresentation
+                let (parameterRepresentation, returnRepresentation) = Builtins.corePrimopRepresentation primop representationArguments
+
+                parameters <- for parameterRepresentation \rep -> do
+                    name <- newLocal
+                    pure (name, rep)
+
+                (lambdaBody, lambdaExpr) <- compileCorePrimop primop returnRepresentation (fmap (\(name, _) -> Core.Var (Core.Local name)) parameters)
+                pure ([], Core.Lambda parameters lambdaBody lambdaExpr, Core.functionRepresentation)
+            | otherwise -> deferToValue
         Vega.DataConstructor{valueRepresentation, name} ->
             arityOfDataConstructor name >>= \case
                 Nothing -> deferToValue
@@ -138,6 +151,12 @@ compileExpr expr = do
                     -- way of accessing their kinds from here
                     undefined
         Vega.Application _ _ (Vega.DataConstructor{}) _ -> deferToValue
+        Vega.Application _ returnRepresentation (Vega.Var{name = Vega.Global globalName}) argumentExprs
+            | Just primop <- Builtins.asCorePrimop globalName -> do
+                (argumentStatements, argumentValues) <- Seq.unzip <$> for argumentExprs compileExprToValue_
+                returnRepresentation <- convertRepresentation returnRepresentation
+                (primopStatements, primopExpr) <- compileCorePrimop primop returnRepresentation argumentValues
+                pure (fold argumentStatements <> primopStatements, primopExpr, returnRepresentation)
         Vega.Application _ returnRepresentation functionExpr argExprs -> do
             (functionStatements, function) <- compileExprToValue_ functionExpr
             (argumentStatements, arguments) <-
@@ -293,13 +312,17 @@ compileExprToValue expr = do
             name <- newLocal
             pure (statements <> [Core.Let name representation expr], Core.Var (Core.Local name), representation)
     case expr of
-        Vega.Var{loc = _, name, instantiatedTypeArguments, representation = vegaRepresentation} -> do
-            representation <- convertRepresentation vegaRepresentation
-            case instantiatedTypeArguments of
-                Empty -> pure ([], Core.Var (nameToCoreName name), representation)
-                NonEmpty vegaArguments -> do
-                    coreArguments <- for vegaArguments convertRepresentation
-                    pure ([], Core.Instantiation (nameToCoreName name) coreArguments, representation)
+        Vega.Var{loc = _, name, instantiatedTypeArguments, representation = vegaRepresentation}
+            | Vega.Global globalName <- name
+            , Just{} <- Builtins.asCorePrimop globalName -> do
+                deferToLet
+            | otherwise -> do
+                representation <- convertRepresentation vegaRepresentation
+                case instantiatedTypeArguments of
+                    Empty -> pure ([], Core.Var (nameToCoreName name), representation)
+                    NonEmpty vegaArguments -> do
+                        coreArguments <- for vegaArguments convertRepresentation
+                        pure ([], Core.Instantiation (nameToCoreName name) coreArguments, representation)
         Vega.DataConstructor{name, valueRepresentation = vegaRepresentation, instantiatedTypeArguments} -> do
             -- TODO: do we need the instantiatedTypeArguments here?
             representation <- convertRepresentation vegaRepresentation
@@ -352,6 +375,17 @@ compileExprToValue expr = do
         Vega.If{} -> deferToLet
         Vega.SequenceBlock{} -> deferToLet
         Vega.Match{} -> deferToLet
+
+compileCorePrimop :: Builtins.CorePrimop -> Core.Representation -> Seq Core.Value -> Eff es (Seq Core.Statement, Core.Expr)
+compileCorePrimop primop returnRepresentation arguments = case primop of
+    Builtins.Box -> case arguments of
+        [argument] -> pure ([], Core.Box argument)
+        _ -> invalidArgumentCount
+    Builtins.Unbox -> case arguments of
+        [argument] -> pure ([], Core.Unbox{value = argument, innerRepresentation = returnRepresentation})
+        _ -> invalidArgumentCount
+  where
+    invalidArgumentCount = panic $ pretty primop <> " primop called with incorrect number of arguments: " <> number (length arguments)
 
 -- | Compile a user-defined data constructor application, including auto-boxing
 userDefinedDataConstructorApplication :: (Compile es) => Vega.Name -> Seq Core.Value -> Core.Representation -> Eff es (Seq Core.Statement, Core.Value)
