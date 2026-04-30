@@ -21,17 +21,40 @@ import Data.Aeson qualified as Aeson
 import Data.Yaml as Yaml hiding (object)
 
 import Data.Aeson.Types (typeMismatch)
+import Data.Aeson.Types qualified as Aeson
 import Data.Text qualified as Text
 import System.FilePath ((</>))
 import System.FilePath qualified as FilePath
+import System.OsPath (OsPath)
+import System.OsPath qualified as OsPath
 import Vega.Seq.NonEmpty (NonEmpty (..))
 import Vega.Syntax (GlobalName (..), ModuleName (..), PackageName (..))
+
+data Dependency = LocalDependency {src :: OsPath}
+    deriving (Generic, Show)
+
+instance FromJSON Dependency where
+    parseJSON :: Value -> Parser Dependency
+    parseJSON = Aeson.withObject "dependency" \object -> do
+        type_ :: Text <- object .: "type"
+        case type_ of
+            "local" -> parseLocalDependency object
+            _ -> Aeson.parseFail $ toString $ "Invalid dependency type: " <> type_
+
+parseLocalDependency :: Aeson.Object -> Parser Dependency
+parseLocalDependency object = do
+    srcString :: String <- object .: "src"
+    src <- case OsPath.encodeUtf srcString of
+        Left errorMessage -> Aeson.parseFail $ "Invalid file path in 'src': " <> show errorMessage
+        Right src -> pure src
+    pure (LocalDependency{src})
 
 data BuildConfigContents = MkBuildConfigContents
     { name :: Text
     , sourceDirectory :: Maybe FilePath
     , entryPoint :: Maybe Text
     , backend :: Maybe Backend
+    , dependencies :: Seq Dependency
     }
     deriving (Generic, Show)
 

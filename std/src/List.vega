@@ -1,0 +1,15 @@
+-- In the long run, we probably don't want to keep this module.
+-- Lists are a bad general purpose data structure and we shouldn't encourage their use.
+-- Their use cases should basically always be covered by Arrays, RRB vectors (or similar) and
+-- specialized builder types, but until we have those in place, Lists are useful because of
+-- how dead simple they are to implement
+
+data List =
+    | Nil
+    | Cons(a, List(a))
+
+map : forall a. (List(a), a -> b) -> List(b)
+map(list, f) = match list {
+    Nil -> Nil
+    Cons(x, xs) -> Cons(f(x), map(xs, f))
+}
