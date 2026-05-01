@@ -88,7 +88,7 @@ data DriverConfig = MkDriverConfig
 
 -- TODO: distinguish between new and repeated errors
 type Driver es =
-    ( Reader PackageConfig :> es
+    ( ?mainPackage :: PackageConfig
     , Reader DriverConfig :> es
     , GraphPersistence :> es
     , IOE :> es
@@ -118,15 +118,14 @@ findSourceFilesForPackage package = do
                     | OsPath.takeExtension file == [osp|.vega|] -> pure [filePath]
                     | otherwise -> pure []
 
-computeImportScope :: (Driver es) => Seq Import -> Eff es ImportScope
+computeImportScope :: (Driver es, ?package :: PackageConfig) => Seq Import -> Eff es ImportScope
 computeImportScope imports = do
     foldMapM toImportScope imports
   where
     -- TODO: allow importing from other packages without explicitly spelling out their module name
     resolveModuleName MkParsedModuleName{package, subModules} = case package of
         Nothing -> do
-            buildConfig <- ask @PackageConfig
-            let package = MkPackageName (Package.name buildConfig)
+            let package = MkPackageName (Package.name ?package)
             pure (MkModuleName{package, subModules})
         Just package -> pure (MkModuleName{package, subModules})
 
@@ -162,11 +161,9 @@ computeImportScope imports = do
                             ]
                     }
 
-parseAndDiff :: (Driver es, Error CompilationError :> es) => OsPath -> Eff es (Seq DiffChange)
+parseAndDiff :: (Driver es, ?package :: PackageConfig, Error CompilationError :> es) => OsPath -> Eff es (Seq DiffChange)
 parseAndDiff filePath = do
-    buildConfig <- ask @PackageConfig
-
-    let moduleName = Package.moduleNameForPath buildConfig filePath
+    let moduleName = Package.moduleNameForPath ?package filePath
 
     contents <- decodeUtf8 <$> liftIO (readFile filePath)
     tokens <- case Lexer.run filePath contents of
@@ -203,8 +200,9 @@ applyDiffChange = \case
     Removed decl -> GraphPersistence.removeDeclaration decl
 
 trackSourceChanges :: (Driver es) => PackageConfig -> Eff es (Seq CompilationError)
-trackSourceChanges config = do
-    sourceFiles <- findSourceFilesForPackage config
+trackSourceChanges package = do
+    let ?package = package
+    sourceFiles <- findSourceFilesForPackage package
     (parseErrors, diffChanges) <- second fold . partitionEithers <$> for (toList sourceFiles) (runErrorNoCallStack . parseAndDiff)
 
     whenTraceEnabled Driver do
@@ -219,9 +217,7 @@ trackSourceChanges config = do
 
 performAllRemainingWork :: (Driver es) => Eff es ()
 performAllRemainingWork = do
-    config <- ask @PackageConfig
-
-    remainingWorkItems <- GraphPersistence.getRemainingWork (Package.backend config)
+    remainingWorkItems <- GraphPersistence.getRemainingWork (Package.backend ?mainPackage)
     for_ remainingWorkItems \workItem -> do
         trace WorkItems ("Processing work item: " <> pretty workItem)
         case workItem of
@@ -247,9 +243,7 @@ rebuild =
         case dependencyErrors of
             NonEmpty _ -> pure (CompilationFailed{errors = dependencyErrors})
             Empty -> do
-                ownPackage <- ask @PackageConfig
-
-                parseErrors <- trackSourceChanges ownPackage
+                parseErrors <- trackSourceChanges ?mainPackage
 
                 performAllRemainingWork
                 nonParseErrors <- GraphPersistence.getCurrentErrors
@@ -266,8 +260,13 @@ loadDependencies = do
     -- TODO: this should let the backend decide how to load dependencies (or not) instead
     -- of always re-compiling them
     -- (TODO TODO: would this even rebuild them with a proper backend? maybe this does actually work)
-    buildConfig <- ask @PackageConfig
-    for_ (Package.dependencies buildConfig) \case
+
+    -- TODO: this doesn't work for transitive dependencies.
+    -- We either need to compute the transitive closure here or
+    -- process packages' dependencies recursively
+    -- (probably the first since we will also need to resolve module versions once we go beyond
+    -- simple local dependencies)
+    for_ (Package.dependencies ?mainPackage) \case
         LocalDependency{src} -> do
             trace Driver ("Loading local dependency from " <> pretty src)
             let filePath = src </> [osp|vega.yaml|]
@@ -282,9 +281,7 @@ loadDependencies = do
 
 compileBackend :: (Error Error.DriverError :> es, Driver es) => Eff es ()
 compileBackend = do
-    config <- ask @PackageConfig
-
-    let entryPoint = Package.entryPoint config
+    let entryPoint = Package.entryPoint ?mainPackage
 
     -- TODO: check that the entry point has the right type
     entryPointDeclaration <-
@@ -292,11 +289,11 @@ compileBackend = do
             Just declaration -> pure declaration
             Nothing -> throwError_ (Error.EntryPointNotFound entryPoint)
 
-    case Package.backend config of
+    case Package.backend ?mainPackage of
         Package.JavaScript -> do
             jsCode <- assembleFromEntryPoint entryPoint
 
-            outputFile <- Package.ensureJavascriptOutputFile config
+            outputFile <- Package.ensureJavascriptOutputFile ?mainPackage
             liftIO $ writeFile outputFile (encodeUtf8 (TextBuilder.toText jsCode))
         Package.NativeRelease -> runNewUnique do
             MkDriverConfig{verifyMIR} <- ask

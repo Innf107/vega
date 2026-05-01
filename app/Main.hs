@@ -21,8 +21,6 @@ import GHC.Read (readsPrec)
 import LLVM.Core qualified as LLVM
 import System.IO (hIsTerminalDevice)
 import System.OsPath (osp)
-import Vega.Package (PackageConfigPresence (..))
-import Vega.Package qualified as Package
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Driver (CompilationResult (..), Monomorphized (..))
@@ -31,6 +29,8 @@ import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence.InMemory (runInMemory)
 import Vega.Effect.Trace (Trace, runTrace)
 import Vega.Error (ErrorMessage (..), PlainErrorMessage (..), prettyErrorWithLoc, renderCompilationError)
+import Vega.Package (PackageConfigPresence (..))
+import Vega.Package qualified as Package
 import Vega.Pretty (Ann, Doc, PrettyANSIIConfig (MkPrettyANSIIConfig, includeUnique), align, emphasis, eprintANSII, intercalateDoc, keyword, pretty, prettyPlain, (<+>))
 import Vega.Util (constructorNames)
 
@@ -249,7 +249,8 @@ main = do
                                     <> "\n    "
                                     <> align (fromString (prettyPrintParseException parseException))
                     exitFailure
-                Found config -> runReader config do
+                Found packageConfig -> do
+                    let ?mainPackage = packageConfig
                     result <- Driver.rebuild
                     case result of
                         CompilationSuccessful -> pure ()
