@@ -26,6 +26,9 @@ import Data.Sequence (Seq (..))
 import Data.Text qualified as Text
 import Data.Vector (Vector)
 import Data.Vector qualified as Vector
+import Data.Yaml (ParseException, prettyPrintParseException)
+import System.File.OsPath (readFile)
+import System.OsPath (OsPath)
 import Text.Megaparsec (ErrorFancy (..), ErrorItem (..), ParseError (..), ParseErrorBundle)
 import Text.Megaparsec.Error (ParseErrorBundle (..))
 import Vega.Lexer.Token (Token)
@@ -40,7 +43,6 @@ import Vega.Util (viaList)
 import Vega.Util qualified as Util
 import Vega.VectorMap (VectorMap)
 import Vega.VectorMap qualified as VectorMap
-import System.File.OsPath (readFile)
 
 data CompilationError
     = LexicalError LexicalError
@@ -48,6 +50,7 @@ data CompilationError
     | RenameError RenameError
     | TypeError TypeError
     | DriverError DriverError
+    | DependencyError {dependencyName :: Text, error :: CompilationError}
     | Panic SomeException
     deriving stock (Generic)
 
@@ -190,6 +193,7 @@ newtype TypeErrorSet = MkTypeErrorSet (Seq TypeError)
 data DriverError
     = EntryPointNotFound GlobalName
     | NoLinkerFound
+    | UnableToParsePackageConfig OsPath ParseException
     deriving stock (Generic)
 
 data ErrorMessageWithLoc = MkErrorMessageWithLoc
@@ -514,12 +518,28 @@ renderCompilationError = \case
                             <+> quote (localIdentText "gcc")
                             <+> emphasis "executable found.\n"
                             <> "  Use" <+> keyword "--linker" <+> "to set a custom linker command"
+        UnableToParsePackageConfig path yamlParseException -> do
+            PlainError $
+                MkPlainErrorMessage $
+                    align $
+                        emphasis "Unable to parse package config at "
+                            <> pretty path
+                            <> ":\n  "
+                            <> align (errorText (toText (prettyPrintParseException yamlParseException)))
     Panic exception -> do
         let message = case fromException @Panic.Panic exception of
                 Just (Panic.Panic callStack prettyMessage) -> prettyMessage <> "\n" <> align (Panic.prettyCallStack callStack)
                 Nothing -> prettySomeException exception
 
         pure $ PlainError $ MkPlainErrorMessage $ align $ errorText "PANIC (the 'impossible' happened): " <> message
+    DependencyError{dependencyName, error} -> do
+        errorMessage <- renderCompilationError error
+
+        let prefix = emphasis "Error in dependency" <+> localIdentText dependencyName <> ":\n  "
+
+        case errorMessage of
+            PlainError (MkPlainErrorMessage message) -> pure $ PlainError (MkPlainErrorMessage (prefix <> align message))
+            ErrorWithLoc (MkErrorMessageWithLoc loc message) -> pure $ ErrorWithLoc (MkErrorMessageWithLoc loc (prefix <> align message))
 
 prettySomeException :: SomeException -> Doc Ann
 prettySomeException exception = do
@@ -592,7 +612,7 @@ generateFancyParseErrorMessage = \case
                                 _ -> panic "no reason for invalid existential binder found"
                         emphasis "Invalid existential binder"
                             <> "\n  Type variables bound in existentials cannot be"
-                            <+> reason
+                                <+> reason
                 NonLiteralMultiplication{} -> do
                     emphasis "Non-literal type-level multiplication"
                         <> "\n  at least one argument of a type level multiplication must be an integer literal."

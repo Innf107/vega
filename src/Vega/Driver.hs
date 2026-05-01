@@ -16,7 +16,7 @@ module Vega.Driver (
 -- TODO: remove modules if their files are deleted
 -- TODO: catch duplicate declarations (in the parser i guess??)
 
-import Relude hiding (Reader, ask, readFile, trace, writeFile)
+import Relude hiding (NonEmpty, Reader, ask, readFile, trace, writeFile)
 
 import Effectful
 import Effectful.FileSystem (FileSystem, createDirectoryIfMissing, doesDirectoryExist, findExecutable, listDirectory, removeFile)
@@ -39,7 +39,7 @@ import Streaming.Prelude qualified as Streaming
 import System.Directory.OsPath qualified as OsPathDirectory
 import System.File.OsPath (readFile, readFile', writeFile)
 import System.IO.Unsafe (unsafePerformIO)
-import System.OsPath (OsPath, osp)
+import System.OsPath (OsPath, osp, (</>))
 import System.OsPath qualified as OsPath
 import TextBuilder qualified
 import Vega.Compilation.Core.Syntax qualified as Core
@@ -57,6 +57,7 @@ import Vega.Diff qualified as Diff
 import Vega.Effect.DebugEmit (DebugEmit, debugEmit)
 import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
+import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
 import Vega.Effect.Trace (Category (..), Trace, trace, traceEnabled, whenTraceEnabled)
 import Vega.Effect.Unique.Static.Local (runNewUnique)
 import Vega.Error (CompilationError (..), RenameErrorSet (..))
@@ -70,6 +71,7 @@ import Vega.Pretty (keyword, pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Rename qualified as Rename
 import Vega.Runtime (runtimeArchive)
+import Vega.Seq.NonEmpty (NonEmpty, pattern NonEmpty)
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (decodeOsPathUnchecked, viaList)
@@ -102,9 +104,9 @@ type Driver es =
 -- | Newtype wrapper so we can distinguish the two debug emits for MIR programs (pre and post monomorphization)
 newtype Monomorphized a = MkMonomorphized a
 
-findSourceFilesForConfig :: (Driver es) => OsPath -> PackageConfig -> Eff es (Seq OsPath)
-findSourceFilesForConfig basePath config = do
-    go (basePath OsPath.</> Package.sourceDirectory config)
+findSourceFilesForPackage :: (Driver es) => PackageConfig -> Eff es (Seq OsPath)
+findSourceFilesForPackage package = do
+    go (Package.sourceDirectory package)
   where
     go path = do
         files <- liftIO $ OsPathDirectory.listDirectory path
@@ -200,10 +202,9 @@ applyDiffChange = \case
         GraphPersistence.setParsed decl
     Removed decl -> GraphPersistence.removeDeclaration decl
 
-trackSourceChanges :: (Driver es) => Eff es (Seq CompilationError)
-trackSourceChanges = do
-    config <- ask @PackageConfig
-    sourceFiles <- findSourceFilesForConfig [osp|.|] config
+trackSourceChanges :: (Driver es) => PackageConfig -> Eff es (Seq CompilationError)
+trackSourceChanges config = do
+    sourceFiles <- findSourceFilesForPackage config
     (parseErrors, diffChanges) <- second fold . partitionEithers <$> for (toList sourceFiles) (runErrorNoCallStack . parseAndDiff)
 
     whenTraceEnabled Driver do
@@ -242,36 +243,42 @@ rebuild =
             pure (CompilationFailed{errors = errors <> [Panic exception]})
   where
     go = do
-        runErrorNoCallStack loadDependencies >>= \case
-            Left (errors :: Seq CompilationError) -> undefined
-            Right () -> pure ()
+        ((), dependencyErrors) <- runOutputSeq @CompilationError loadDependencies
+        case dependencyErrors of
+            NonEmpty _ -> pure (CompilationFailed{errors = dependencyErrors})
+            Empty -> do
+                ownPackage <- ask @PackageConfig
 
-        parseErrors <- trackSourceChanges
+                parseErrors <- trackSourceChanges ownPackage
 
-        performAllRemainingWork
-        nonParseErrors <- GraphPersistence.getCurrentErrors
-        case parseErrors <> nonParseErrors of
-            [] -> do
-                runErrorNoCallStack compileBackend >>= \case
-                    Left error -> do
-                        pure (CompilationFailed{errors = [DriverError error]})
-                    Right () -> pure (CompilationSuccessful)
-            errors -> pure (CompilationFailed{errors = errors})
+                performAllRemainingWork
+                nonParseErrors <- GraphPersistence.getCurrentErrors
+                case parseErrors <> nonParseErrors of
+                    [] -> do
+                        runErrorNoCallStack compileBackend >>= \case
+                            Left error -> do
+                                pure (CompilationFailed{errors = [DriverError error]})
+                            Right () -> pure (CompilationSuccessful)
+                    errors -> pure (CompilationFailed{errors = errors})
 
-loadDependencies :: (Error (Seq CompilationError) :> es, Driver es) => Eff es ()
+loadDependencies :: (Output CompilationError :> es, Driver es) => Eff es ()
 loadDependencies = do
     -- TODO: this should let the backend decide how to load dependencies (or not) instead
     -- of always re-compiling them
+    -- (TODO TODO: would this even rebuild them with a proper backend? maybe this does actually work)
     buildConfig <- ask @PackageConfig
     for_ (Package.dependencies buildConfig) \case
         LocalDependency{src} -> do
-            modulesToBeBuilt <- modulesToBeBuiltForDependency src
-            undefined
-
-modulesToBeBuiltForDependency :: (Driver es) => OsPath -> Eff es (Seq OsPath)
-modulesToBeBuiltForDependency dependencyBasePath = do
-    dependencyConfigContents <- Package.parseConfigFile (dependencyBasePath OsPath.</> [osp|vega.yaml|])
-    undefined
+            trace Driver ("Loading local dependency from " <> pretty src)
+            let filePath = src </> [osp|vega.yaml|]
+            Package.parseConfigFile filePath >>= \case
+                Left parseError -> do
+                    trace Driver (Pretty.errorText "Unable to parse package config")
+                    output (Error.DriverError (Error.UnableToParsePackageConfig filePath parseError))
+                Right dependency -> do
+                    errors <- trackSourceChanges dependency
+                    for_ errors \error -> output (DependencyError{dependencyName = Package.name dependency, error})
+    trace Driver "Finished loading dependencies"
 
 compileBackend :: (Error Error.DriverError :> es, Driver es) => Eff es ()
 compileBackend = do

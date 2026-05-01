@@ -53,7 +53,7 @@ import Relude
 
 import Vega.Disambiguate (disambiguate, disambiguate0)
 import Vega.Disambiguate qualified as Disambiguate
-import Vega.Util (Untagged (..))
+import Vega.Util (Untagged (..), decodeOsPathUnchecked)
 
 import Prettyprinter (Doc)
 import Prettyprinter qualified as PP
@@ -65,6 +65,7 @@ import Data.Unique (Unique, hashUnique)
 import Data.Vector ((!))
 import GHC.Generics
 import GHC.TypeLits (KnownSymbol, symbolVal)
+import System.OsPath (OsPath)
 
 data Ann
     = LocalIdent
@@ -80,6 +81,7 @@ data Ann
     | Quote
     | Note
     | Keyword
+    | FilePath
     | LParen
     | RParen
     | Meta Text Unique
@@ -146,6 +148,9 @@ meta unique name = PP.annotate (Unique unique) $ PP.annotate (Meta name unique) 
 literal :: Text -> Doc Ann
 literal = PP.annotate Literal . PP.pretty
 
+instance Pretty OsPath where
+    pretty osPath = PP.annotate FilePath (PP.pretty (decodeOsPathUnchecked osPath))
+
 class Pretty a where
     pretty :: a -> Doc Ann
 
@@ -175,6 +180,7 @@ renderPlain tree = runST do
             Quote -> pure $ "'" <> text <> "'"
             Note -> pure text
             Keyword -> pure text
+            FilePath -> pure text
             LParen -> pure text
             RParen -> pure text
             Meta name unique -> disambiguate metas name unique
@@ -220,6 +226,7 @@ renderANSII tree = runST do
                 Warning -> pure $ "\ESC[1m\ESC[93m\STX" <> text <> "\ESC[0m\STX"
                 Note -> pure $ "\ESC[38;5;8m\STX" <> text <> "\ESC[0m\STX"
                 Keyword -> pure $ "\ESC[94m\STX" <> text <> "\ESC[0m\STX"
+                FilePath -> pure $ "\ESC[38;5;33m\STX" <> text <> "\ESC[0m\STX"
                 Quote -> pure text
                 LParen -> do
                     colorIndex <- state (\i -> (i, (i + 1) `mod` (length parenColors)))

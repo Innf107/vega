@@ -4,11 +4,11 @@
 -- specialized builder types, but until we have those in place, Lists are useful because of
 -- how dead simple they are to implement
 
-data List =
+data List(a) =
     | Nil
     | Cons(a, List(a))
 
-map : forall a. (List(a), a -> b) -> List(b)
+map : forall a b. (List(a), a -> b) -> List(b)
 map(list, f) = match list {
     Nil -> Nil
     Cons(x, xs) -> Cons(f(x), map(xs, f))
