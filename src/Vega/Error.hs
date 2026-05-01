@@ -15,7 +15,7 @@ module Vega.Error (
     prettyErrorWithLoc,
 ) where
 
-import Relude hiding (Type)
+import Relude hiding (Type, readFile)
 
 import Control.Exception (someExceptionContext)
 import Control.Exception.Annotation (ExceptionAnnotation (displayExceptionAnnotation), SomeExceptionAnnotation (..))
@@ -40,6 +40,7 @@ import Vega.Util (viaList)
 import Vega.Util qualified as Util
 import Vega.VectorMap (VectorMap)
 import Vega.VectorMap qualified as VectorMap
+import System.File.OsPath (readFile)
 
 data CompilationError
     = LexicalError LexicalError
@@ -209,8 +210,8 @@ maxDisplayedLineCount :: Int
 maxDisplayedLineCount = 5
 
 extractRange :: (MonadIO io) => Loc -> io (Doc Ann)
-extractRange loc = do
-    lines <- Text.lines . decodeUtf8 <$> readFileBS (toString loc.file)
+extractRange loc = liftIO do
+    lines <- Text.lines . decodeUtf8 <$> readFile loc.file
 
     let (isTooLong, lineCount) =
             if (loc.endLine - loc.startLine + 1) <= maxDisplayedLineCount

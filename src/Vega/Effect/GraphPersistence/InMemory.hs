@@ -63,9 +63,10 @@ import Data.HashTable.IO qualified as HashTable
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Effectful.Concurrent.Async (forConcurrently, runConcurrent)
-import Vega.BuildConfig (Backend (..))
+import System.OsPath (OsPath)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Effect.Trace (Category (SCC), Trace, trace, withTrace)
+import Vega.Package (Backend (..))
 import Vega.Panic (panic)
 import Vega.Pretty (Pretty (pretty))
 import Vega.SCC (SCCId, computeSCC)
@@ -90,7 +91,7 @@ type CachedKinds = CuckooHashTable GlobalName (Either TypeErrorSet Kind)
 
 type DeclarationStore = CuckooHashTable DeclarationName DeclarationData
 
-type LastKnownDeclarations = IORef (HashMap FilePath (HashMap DeclarationName (Declaration Parsed)))
+type LastKnownDeclarations = IORef (HashMap OsPath (HashMap DeclarationName (Declaration Parsed)))
 
 type NameResolution = CuckooHashTable (Text, NameKind) (HashSet GlobalName)
 
@@ -139,12 +140,12 @@ invalidateDependents name = do
     for_ dependents \dependent -> do
         invalidate dependent
 
-lastKnownDeclarations :: (InMemory es) => FilePath -> Eff es (Maybe (HashMap DeclarationName (Declaration Parsed)))
+lastKnownDeclarations :: (InMemory es) => OsPath -> Eff es (Maybe (HashMap DeclarationName (Declaration Parsed)))
 lastKnownDeclarations filePath = do
     declarationsPerFile <- readIORef =<< ask @LastKnownDeclarations
     pure $ lookup filePath declarationsPerFile
 
-setKnownDeclarations :: (InMemory es) => FilePath -> HashMap DeclarationName (Declaration Parsed) -> Eff es ()
+setKnownDeclarations :: (InMemory es) => OsPath -> HashMap DeclarationName (Declaration Parsed) -> Eff es ()
 setKnownDeclarations filePath declarations = do
     lastKnownDeclarationsPerFile <- ask @LastKnownDeclarations
     modifyIORef' lastKnownDeclarationsPerFile (insert filePath declarations)
@@ -475,15 +476,15 @@ remainingWorkItems backend name data_ = do
                 Missing{} -> pure $ [TypeCheck name] <> remainingCompilation
                 Failed{} -> pure []
                 Ok _ -> do
-                        readIORef data_.compiledCore >>= \case
-                            Missing{} -> pure remainingCompilation
-                            Ok{} -> case backend of
-                                JavaScript -> do
-                                    readIORef data_.compiledJS >>= \case
-                                        Missing{} -> pure [CompileToJS name]
-                                        Ok{} -> pure []
-                                NativeRelease -> pure []
-                                _ -> undefined
+                    readIORef data_.compiledCore >>= \case
+                        Missing{} -> pure remainingCompilation
+                        Ok{} -> case backend of
+                            JavaScript -> do
+                                readIORef data_.compiledJS >>= \case
+                                    Missing{} -> pure [CompileToJS name]
+                                    Ok{} -> pure []
+                            NativeRelease -> pure []
+                            _ -> undefined
 
 getRemainingWork :: (InMemory es) => Backend -> Eff es (Seq WorkItem)
 getRemainingWork backend = do

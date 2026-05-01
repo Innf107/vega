@@ -14,7 +14,7 @@ import Effectful.TH (makeEffect)
 import Data.HashSet qualified as HashSet
 import Streaming (Stream, hoist)
 import Streaming.Prelude (Of, yield)
-import Vega.BuildConfig (Backend)
+import Vega.Package (Backend)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Error (CompilationError, RenameErrorSet, TypeErrorSet)
 import Vega.Pretty (Pretty, keyword, pretty, (<+>))
@@ -23,6 +23,7 @@ import Vega.Syntax qualified as Vega
 import Vega.Panic (panic)
 import Vega.Debug (showHeadConstructor)
 import Data.Traversable (for)
+import System.OsPath (OsPath)
 
 data GraphData error a
     = Ok a
@@ -56,8 +57,8 @@ data GlobalRepresentation
 
 data GraphPersistence :: Effect where
     -- Module Data
-    LastKnownDeclarations :: FilePath -> GraphPersistence m (Maybe (HashMap DeclarationName (Declaration Parsed)))
-    SetKnownDeclarations :: FilePath -> HashMap DeclarationName (Declaration Parsed) -> GraphPersistence m ()
+    LastKnownDeclarations :: OsPath -> GraphPersistence m (Maybe (HashMap DeclarationName (Declaration Parsed)))
+    SetKnownDeclarations :: OsPath -> HashMap DeclarationName (Declaration Parsed) -> GraphPersistence m ()
     GetModuleImportScope :: ModuleName -> GraphPersistence m ImportScope
     SetModuleImportScope :: ModuleName -> ImportScope -> GraphPersistence m ()
     -- Declarations

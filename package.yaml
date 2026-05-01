@@ -36,6 +36,8 @@ dependencies:
 - file-embed
 - llvm-ng
 - bytestring
+- directory
+- file-io
 
 ghc-options:
 - -Wall

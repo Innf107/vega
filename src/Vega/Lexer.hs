@@ -16,6 +16,7 @@ import Relude.Unsafe (read)
 import Vega.Error (LexicalError (..))
 import Vega.Lexer.Token (Token (..))
 import Vega.Loc (Loc (..))
+import System.OsPath (OsPath)
 
 newtype Lexer a = MkLexer (Either LexicalError a)
     deriving newtype (Functor, Applicative, Monad)
@@ -36,7 +37,7 @@ data LexState = MkLexState
     , endLine :: Int
     , endColumn :: Int
     , remainingText :: Text
-    , file :: Text
+    , file :: OsPath
     , layout :: NonEmptyList.NonEmpty LayoutBlock
     }
     deriving (Show, Generic)
@@ -65,7 +66,7 @@ currentLoc state =
         , endColumn = state.endColumn
         }
 
-newLexState :: Text -> Text -> LexState
+newLexState :: OsPath -> Text -> LexState
 newLexState fileName contents =
     MkLexState
         { startLine = 1
@@ -97,7 +98,7 @@ pattern IsEOF <- (takeChar -> Nothing)
 
 {-# COMPLETE (:!), IsEOF #-}
 
-run :: Text -> Text -> Either LexicalError [(Token, Loc)]
+run :: OsPath -> Text -> Either LexicalError [(Token, Loc)]
 run fileName text = do
     let go state = case unLexer (lex state) of
             Left error -> Left error

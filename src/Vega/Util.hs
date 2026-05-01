@@ -24,9 +24,11 @@ module Vega.Util (
     spanMaybe,
     takeWithPadding,
     partitionMapM,
-    type (?)
+    type (?),
+    decodeOsPathUnchecked,
 ) where
 
+import Control.Exception (throw)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import Data.Traversable (for)
@@ -35,6 +37,8 @@ import GHC.Exts (IsList (..), Symbol)
 import GHC.Generics (C1, Generic (Rep), M1, Meta (..), (:+:))
 import GHC.TypeLits (KnownSymbol, symbolVal)
 import Relude hiding (toList)
+import System.OsPath (OsPath)
+import System.OsPath qualified as OsPath
 
 {- | Check if any two elements in two @Seq@s zipped together pairwise satisfy some predicate.
 
@@ -146,7 +150,7 @@ forIndexed_ traversable f =
                 i <- state (\i -> (i, i + 1))
                 pure (f x i)
 
-indexed :: Traversable t => t a -> t (Int, a)
+indexed :: (Traversable t) => t a -> t (Int, a)
 indexed traversable = runIdentity $ forIndexed traversable \x i -> pure (i, x)
 
 forFoldLM :: forall s m f a. (Foldable f, Monad m) => f a -> s -> (s -> a -> m s) -> m s
@@ -175,13 +179,19 @@ takeWithPadding 0 _padding _list = []
 takeWithPadding n padding [] = replicate n padding
 takeWithPadding n padding (x : xs) = x : takeWithPadding (n - 1) padding xs
 
-partitionMapM :: Monad m => (a -> m (Maybe b)) -> [a] -> m ([b], [a])
+partitionMapM :: (Monad m) => (a -> m (Maybe b)) -> [a] -> m ([b], [a])
 partitionMapM f list = go [] [] list
-    where
-        go passed failed [] = pure (passed, failed)
-        go passed failed (x : xs) = f x >>= \case
+  where
+    go passed failed [] = pure (passed, failed)
+    go passed failed (x : xs) =
+        f x >>= \case
             Nothing -> go passed (x : failed) xs
             Just y -> go (y : passed) failed xs
 
 type (?) :: Symbol -> a -> a
 type (?) _label x = x
+
+decodeOsPathUnchecked :: OsPath -> FilePath
+decodeOsPathUnchecked osPath = case OsPath.decodeUtf osPath of
+    Left exception -> throw exception
+    Right filePath -> filePath

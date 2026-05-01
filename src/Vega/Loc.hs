@@ -3,21 +3,23 @@ module Vega.Loc (Loc (..), HasLoc (..)) where
 import Relude
 
 import GHC.Generics (K1 (..), M1 (..), Rep, V1, from, (:*:) (..), (:+:) (..))
+import System.OsPath (OsPath)
 import Vega.Pretty (Pretty (pretty), emphasis)
+import Vega.Util (decodeOsPathUnchecked)
 
 data Loc = MkLoc
     { startLine :: Int
     , startColumn :: Int
     , endLine :: Int
     , endColumn :: Int
-    , file :: Text
+    , file :: OsPath
     }
     deriving (Show, Eq, Ord, Generic)
 
 instance Pretty Loc where
     pretty (MkLoc{file, startLine, startColumn}) =
         -- TODO: Add flag to display end line/column as well
-        emphasis (file <> ":" <> show startLine <> ":" <> show startColumn)
+        emphasis (toText (decodeOsPathUnchecked file) <> ":" <> show startLine <> ":" <> show startColumn)
 
 instance Semigroup Loc where
     (<>) :: Loc -> Loc -> Loc

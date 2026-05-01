@@ -1,6 +1,6 @@
 {-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE NoApplicativeDo #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE NoApplicativeDo #-}
 
 module Vega.Driver (
     rebuild,
@@ -16,20 +16,19 @@ module Vega.Driver (
 -- TODO: remove modules if their files are deleted
 -- TODO: catch duplicate declarations (in the parser i guess??)
 
-import Relude hiding (Reader, ask, trace)
+import Relude hiding (Reader, ask, readFile, trace, writeFile)
 
 import Effectful
-import Effectful.FileSystem (FileSystem, createDirectoryIfMissing, doesDirectoryExist, listDirectory, findExecutable, removeFile)
+import Effectful.FileSystem (FileSystem, createDirectoryIfMissing, doesDirectoryExist, findExecutable, listDirectory, removeFile)
 import Effectful.Reader.Static
-import System.FilePath (takeDirectory, takeExtension, (</>))
 
+import Data.FileEmbed (embedFile)
+import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import Data.Traversable (for)
+import Data.Yaml qualified as Yaml
 import Effectful.Concurrent (Concurrent, forkIO, threadDelay)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
-import TextBuilder qualified
-
-import Data.HashMap.Strict qualified as HashMap
 import Effectful.Exception (evaluate, try)
 import Effectful.Process (Process, callProcess, runProcess)
 import LLVM.Core qualified as LLVM
@@ -37,10 +36,12 @@ import LLVM.Internal.Wrappers (CodeModel (CodeModelDefault), RelocMode (RelocDef
 import LLVM.Internal.Wrappers qualified as LLVM
 import LLVM.Target qualified
 import Streaming.Prelude qualified as Streaming
+import System.Directory.OsPath qualified as OsPathDirectory
+import System.File.OsPath (readFile, readFile', writeFile)
 import System.IO.Unsafe (unsafePerformIO)
-import System.OsPath (osp)
-import Vega.BuildConfig (BuildConfig (..))
-import Vega.BuildConfig qualified as BuildConfig
+import System.OsPath (OsPath, osp)
+import System.OsPath qualified as OsPath
+import TextBuilder qualified
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.Core.VegaToCore qualified as VegaToCore
 import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
@@ -61,15 +62,17 @@ import Vega.Effect.Unique.Static.Local (runNewUnique)
 import Vega.Error (CompilationError (..), RenameErrorSet (..))
 import Vega.Error qualified as Error
 import Vega.Lexer qualified as Lexer
+import Vega.Package (Dependency (..), PackageConfig)
+import Vega.Package qualified as Package
 import Vega.Panic (panic)
 import Vega.Parser qualified as Parser
 import Vega.Pretty (keyword, pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Rename qualified as Rename
+import Vega.Runtime (runtimeArchive)
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
-import Vega.Util (viaList)
-import Data.FileEmbed (embedFile)
+import Vega.Util (decodeOsPathUnchecked, viaList)
 
 data CompilationResult
     = CompilationSuccessful
@@ -83,7 +86,7 @@ data DriverConfig = MkDriverConfig
 
 -- TODO: distinguish between new and repeated errors
 type Driver es =
-    ( Reader BuildConfig :> es
+    ( Reader PackageConfig :> es
     , Reader DriverConfig :> es
     , GraphPersistence :> es
     , IOE :> es
@@ -99,19 +102,18 @@ type Driver es =
 -- | Newtype wrapper so we can distinguish the two debug emits for MIR programs (pre and post monomorphization)
 newtype Monomorphized a = MkMonomorphized a
 
-findSourceFiles :: (Driver es) => Eff es (Seq FilePath)
-findSourceFiles = do
-    config <- ask @BuildConfig
-    go (BuildConfig.sourceDirectory config)
+findSourceFilesForConfig :: (Driver es) => OsPath -> PackageConfig -> Eff es (Seq OsPath)
+findSourceFilesForConfig basePath config = do
+    go (basePath OsPath.</> Package.sourceDirectory config)
   where
     go path = do
-        files <- listDirectory path
+        files <- liftIO $ OsPathDirectory.listDirectory path
         fold <$> for files \file -> do
-            let filePath = path </> file
-            doesDirectoryExist filePath >>= \case
+            let filePath = path OsPath.</> file
+            liftIO (OsPathDirectory.doesDirectoryExist filePath) >>= \case
                 True -> go filePath
                 False
-                    | takeExtension file == ".vega" -> pure [filePath]
+                    | OsPath.takeExtension file == [osp|.vega|] -> pure [filePath]
                     | otherwise -> pure []
 
 computeImportScope :: (Driver es) => Seq Import -> Eff es ImportScope
@@ -121,8 +123,8 @@ computeImportScope imports = do
     -- TODO: allow importing from other packages without explicitly spelling out their module name
     resolveModuleName MkParsedModuleName{package, subModules} = case package of
         Nothing -> do
-            buildConfig <- ask @BuildConfig
-            let package = MkPackageName (buildConfig.contents.name)
+            buildConfig <- ask @PackageConfig
+            let package = MkPackageName (Package.name buildConfig)
             pure (MkModuleName{package, subModules})
         Just package -> pure (MkModuleName{package, subModules})
 
@@ -158,13 +160,14 @@ computeImportScope imports = do
                             ]
                     }
 
-parseAndDiff :: (Driver es, Error CompilationError :> es) => FilePath -> Eff es (Seq DiffChange)
+parseAndDiff :: (Driver es, Error CompilationError :> es) => OsPath -> Eff es (Seq DiffChange)
 parseAndDiff filePath = do
-    buildConfig <- ask @BuildConfig
-    let moduleName = BuildConfig.moduleNameForPath buildConfig filePath
+    buildConfig <- ask @PackageConfig
 
-    contents <- decodeUtf8 <$> readFileBS filePath
-    tokens <- case Lexer.run (toText filePath) contents of
+    let moduleName = Package.moduleNameForPath buildConfig filePath
+
+    contents <- decodeUtf8 <$> liftIO (readFile filePath)
+    tokens <- case Lexer.run filePath contents of
         Left error -> throwError_ (Error.LexicalError error)
         Right tokens -> pure tokens
     parsedModule <- case Parser.parse moduleName filePath tokens of
@@ -172,7 +175,7 @@ parseAndDiff filePath = do
         Right parsedModule -> pure parsedModule
 
     importScope <- computeImportScope parsedModule.imports
-    trace ImportScope (keyword (toText filePath) <> ": " <> show importScope)
+    trace ImportScope (keyword (toText (decodeOsPathUnchecked filePath)) <> ": " <> show importScope)
 
     previousDeclarations <- GraphPersistence.lastKnownDeclarations filePath
     GraphPersistence.setKnownDeclarations filePath (viaList (fmap (\decl -> (decl.name, decl)) parsedModule.declarations))
@@ -199,7 +202,8 @@ applyDiffChange = \case
 
 trackSourceChanges :: (Driver es) => Eff es (Seq CompilationError)
 trackSourceChanges = do
-    sourceFiles <- findSourceFiles
+    config <- ask @PackageConfig
+    sourceFiles <- findSourceFilesForConfig [osp|.|] config
     (parseErrors, diffChanges) <- second fold . partitionEithers <$> for (toList sourceFiles) (runErrorNoCallStack . parseAndDiff)
 
     whenTraceEnabled Driver do
@@ -214,9 +218,9 @@ trackSourceChanges = do
 
 performAllRemainingWork :: (Driver es) => Eff es ()
 performAllRemainingWork = do
-    config <- ask @BuildConfig
+    config <- ask @PackageConfig
 
-    remainingWorkItems <- GraphPersistence.getRemainingWork (BuildConfig.backend config)
+    remainingWorkItems <- GraphPersistence.getRemainingWork (Package.backend config)
     for_ remainingWorkItems \workItem -> do
         trace WorkItems ("Processing work item: " <> pretty workItem)
         case workItem of
@@ -238,6 +242,10 @@ rebuild =
             pure (CompilationFailed{errors = errors <> [Panic exception]})
   where
     go = do
+        runErrorNoCallStack loadDependencies >>= \case
+            Left (errors :: Seq CompilationError) -> undefined
+            Right () -> pure ()
+
         parseErrors <- trackSourceChanges
 
         performAllRemainingWork
@@ -250,11 +258,26 @@ rebuild =
                     Right () -> pure (CompilationSuccessful)
             errors -> pure (CompilationFailed{errors = errors})
 
+loadDependencies :: (Error (Seq CompilationError) :> es, Driver es) => Eff es ()
+loadDependencies = do
+    -- TODO: this should let the backend decide how to load dependencies (or not) instead
+    -- of always re-compiling them
+    buildConfig <- ask @PackageConfig
+    for_ (Package.dependencies buildConfig) \case
+        LocalDependency{src} -> do
+            modulesToBeBuilt <- modulesToBeBuiltForDependency src
+            undefined
+
+modulesToBeBuiltForDependency :: (Driver es) => OsPath -> Eff es (Seq OsPath)
+modulesToBeBuiltForDependency dependencyBasePath = do
+    dependencyConfigContents <- Package.parseConfigFile (dependencyBasePath OsPath.</> [osp|vega.yaml|])
+    undefined
+
 compileBackend :: (Error Error.DriverError :> es, Driver es) => Eff es ()
 compileBackend = do
-    config <- ask @BuildConfig
+    config <- ask @PackageConfig
 
-    let entryPoint = BuildConfig.entryPoint config
+    let entryPoint = Package.entryPoint config
 
     -- TODO: check that the entry point has the right type
     entryPointDeclaration <-
@@ -262,13 +285,13 @@ compileBackend = do
             Just declaration -> pure declaration
             Nothing -> throwError_ (Error.EntryPointNotFound entryPoint)
 
-    case BuildConfig.backend config of
-        BuildConfig.JavaScript -> do
+    case Package.backend config of
+        Package.JavaScript -> do
             jsCode <- assembleFromEntryPoint entryPoint
 
-            -- TODO: make this configurable and make the path absolute
-            writeFileLBS (toString $ config.contents.name <> ".js") (encodeUtf8 (TextBuilder.toText jsCode))
-        BuildConfig.NativeRelease -> runNewUnique do
+            outputFile <- Package.ensureJavascriptOutputFile config
+            liftIO $ writeFile outputFile (encodeUtf8 (TextBuilder.toText jsCode))
+        Package.NativeRelease -> runNewUnique do
             MkDriverConfig{verifyMIR} <- ask
             let compileToMIR declarationName = do
                     core <-
@@ -315,7 +338,7 @@ compileBackend = do
                 True -> panic "Unable to initialize native target in LLVM"
             LLVM.Target.initializeNativeAsmPrinter >>= \case
                 False -> pure ()
-                True -> panic "Unable to initialize native asm printer in LLVM"                
+                True -> panic "Unable to initialize native asm printer in LLVM"
 
             -- TODO: for now we're just building for the host machine.
             -- we will eventually want to make this configurable
@@ -340,9 +363,9 @@ compileBackend = do
 
             MkDriverConfig{linker} <- ask
             linkerCommand <- case linker of
-                    "auto" -> findLinker
-                    path -> pure $ toString path
-            
+                "auto" -> findLinker
+                path -> pure $ toString path
+
             -- TODO: put this somewhere more sensible
             writeFileBS "libvega_runtime.a" runtimeArchive
 
@@ -354,13 +377,14 @@ compileBackend = do
 execute :: FilePath -> Text -> Eff es ()
 execute = undefined
 
-findLinker :: (FileSystem :> es, Error Error.DriverError :> es) =>  Eff es FilePath
+findLinker :: (FileSystem :> es, Error Error.DriverError :> es) => Eff es FilePath
 findLinker = do
     findExecutable "clang" >>= \case
         Just path -> pure path
-        Nothing -> findExecutable "gcc" >>= \case
-            Just path -> pure path
-            Nothing -> throwError_ $ Error.NoLinkerFound
+        Nothing ->
+            findExecutable "gcc" >>= \case
+                Just path -> pure path
+                Nothing -> throwError_ $ Error.NoLinkerFound
 
 getLastKnownRenamed :: (Driver es) => DeclarationName -> Eff es (Maybe (Declaration Renamed))
 getLastKnownRenamed name = do
@@ -437,21 +461,3 @@ compileToCore name =
             compiled <- VegaToCore.compileDeclaration typedDeclaration
             debugEmit compiled
             GraphPersistence.setCompiledCore name compiled
-
-buildFilePath :: (Driver es) => FilePath -> Eff es FilePath
-buildFilePath localPath = do
-    MkBuildConfig{projectRoot} <- ask
-    pure $ projectRoot </> ".vega" </> localPath
-
-writeBuildFile :: (Driver es) => FilePath -> Text -> Eff es ()
-writeBuildFile localPath contents = do
-    MkBuildConfig{projectRoot} <- ask
-    createDirectoryIfMissing False (projectRoot </> ".vega")
-
-    filePath <- buildFilePath localPath
-
-    createDirectoryIfMissing True (takeDirectory filePath)
-    writeFileText filePath contents
-
-runtimeArchive :: ByteString
-runtimeArchive = $(embedFile ".build/libvega_runtime.a")

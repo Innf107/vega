@@ -21,7 +21,8 @@ import GHC.Read (readsPrec)
 import LLVM.Core qualified as LLVM
 import System.IO (hIsTerminalDevice)
 import System.OsPath (osp)
-import Vega.BuildConfig (BuildConfigPresence (..), findBuildConfig)
+import Vega.Package (PackageConfigPresence (..))
+import Vega.Package qualified as Package
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Driver (CompilationResult (..), Monomorphized (..))
@@ -235,7 +236,7 @@ main = do
                             eprintANSII doc
                         False -> liftIO (Text.hPutStrLn stderr (prettyPlain doc))
 
-            findBuildConfig "." >>= \case
+            Package.findConfig [osp|.|] >>= \case
                 Missing -> do
                     eprint $ pretty $ MkPlainErrorMessage $ emphasis "Missing" <+> keyword "vega.yaml" <+> emphasis "file"
                     exitFailure

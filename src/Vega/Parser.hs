@@ -1,3 +1,4 @@
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE NoOverloadedLists #-}
 
@@ -9,6 +10,7 @@ import Vega.Syntax hiding (forall_)
 
 import Data.Sequence (Seq (..))
 import GHC.IsList (Item)
+import System.OsPath (OsPath, osp)
 import Text.Megaparsec hiding (Token, many, parse, sepBy, sepBy1, sepEndBy, single)
 import Text.Megaparsec qualified as MegaParsec
 import Vega.Lexer.Token as Lexer (Token (..))
@@ -17,6 +19,7 @@ import Vega.Seq.NonEmpty (NonEmpty (..), pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax qualified as Syntax
 import Vega.Util (partitionWithSeq)
+import Vega.Util qualified as Util
 
 data AdditionalParseError
     = MismatchedFunctionName
@@ -47,7 +50,7 @@ single target = MegaParsec.token match (fromList [Tokens (fromList [(target, dum
     match = \case
         (token, loc) | token == target -> Just loc
         _ -> Nothing
-    dummyLoc = MkLoc{startLine = 0, startColumn = 0, endLine = 0, endColumn = 0, file = "<<dummy>>"}
+    dummyLoc = MkLoc{startLine = 0, startColumn = 0, endLine = 0, endColumn = 0, file = [osp|<<dummy>>|]}
 
 {- | In order to allow optional semicolons, everything that should expect a semicolon actually accepts
 an arbitrary number of semicolons
@@ -141,10 +144,13 @@ chainr1 parser between = do
             , pure acc
             ]
 
-parse :: ModuleName -> FilePath -> [(Token, Loc)] -> Either (ParseErrorBundle [(Token, Loc)] AdditionalParseError) ParsedModule
+parse :: ModuleName -> OsPath -> [(Token, Loc)] -> Either (ParseErrorBundle [(Token, Loc)] AdditionalParseError) ParsedModule
 parse moduleName filePath tokens = do
     let parserEnv = MkParserEnv{moduleName}
-    MegaParsec.parse (runReaderT (module_ <* single EOF) parserEnv) filePath tokens
+
+    let filePathString = Util.decodeOsPathUnchecked filePath
+
+    MegaParsec.parse (runReaderT (module_ <* single EOF) parserEnv) filePathString tokens
 
 module_ :: Parser ParsedModule
 module_ = do

@@ -95,7 +95,7 @@ let runCompiledProgram(backend, testName) = match backend {
         }
     }
     JavaScript -> {
-        try !node "${testName}.js" with {
+        try !node ".vega/${testName}.js" with {
             CommandFailure(failure) -> failure.stdout
         }
     }

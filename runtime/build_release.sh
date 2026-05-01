@@ -1,5 +1,5 @@
 #!/usr/bin/bash
 set -e
-mkdir -p ../.out
+mkdir -p ../.build
 cargo build --release
-cp target/release/libvega_runtime.a ../.out/libvega_runtime.a
+cp target/release/libvega_runtime.a ../.build/libvega_runtime.a
