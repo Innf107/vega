@@ -1,5 +1,4 @@
 -- type: compile
--- KNOWN
 
 data List(a) =
     | Nil

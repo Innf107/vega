@@ -201,7 +201,7 @@ data Expr p
         { loc :: Loc
         , boundTypeParameters :: Seq (Loc, XLocalName p)
         , parameters :: Seq (XWithRepresentation p (Pattern p))
-        , body :: Expr p
+        , body :: XWithRepresentation p (Expr p)
         }
     | StringLiteral Loc Text
     | IntLiteral

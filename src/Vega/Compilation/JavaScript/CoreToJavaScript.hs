@@ -93,7 +93,7 @@ compileExpr = \case
     Core.JumpJoin name arguments -> do
         jsArguments <- for arguments compileValue
         pure ([], JS.Application (JS.Var (JS.compileLocalCoreName name)) jsArguments)
-    Core.Lambda parameters statements returnExpr -> do
+    Core.Lambda parameters statements returnExpr _returnRepresentation -> do
         let jsParameters = fmap (\(name, _) -> JS.compileLocalCoreName name) parameters
         bodyStatements <- compileFunctionBody statements returnExpr
         pure ([], JS.Lambda jsParameters bodyStatements)

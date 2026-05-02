@@ -78,8 +78,11 @@ data Instruction
     | Unbox {var :: Variable, boxedTarget :: Variable, representation :: Representation}
     | ProductConstructor {var :: Variable, values :: Seq Variable, representation :: Representation}
     | SumConstructor {var :: Variable, tag :: Int, payload :: Variable, representation :: Representation}
-    | AllocClosure {var :: Variable, closedValues :: Seq Variable, representation :: Representation}
-    | LoadGlobalClosure {var :: Variable, functionName :: Vega.GlobalName, representationArguments :: Seq Representation}
+    | LoadFunctionPointer {var :: Variable, functionName :: Vega.GlobalName, representationArguments :: Seq Representation}
+    | -- TODO: we should probably replace LoadGlobalClosure with LoadFunctionPointer and ProductConstructor.
+      -- This will also let us remove the awkward LLVM bits where layout generation only has implicit knowledge of
+      -- the MIR representation of closures
+      LoadGlobalClosure {var :: Variable, functionName :: Vega.GlobalName, representationArguments :: Seq Representation}
     | LoadGlobal {var :: Variable, representationArguments :: Seq Representation, globalName :: Vega.GlobalName, representation :: Representation}
     | LoadIntLiteral {var :: Variable, literal :: Int, sizeInBits :: Int}
     | LoadSumTag {var :: Variable, sum :: Variable}
@@ -198,7 +201,11 @@ instance Pretty Instruction where
             pretty var <+> keyword "=" <+> keyword "product" <+> arguments values <+> keyword ":" <+> pretty representation
         SumConstructor{var, tag, payload, representation} ->
             pretty var <+> keyword "=" <+> keyword "sum" <+> lparen "[" <> number tag <> rparen "]" <> lparen "(" <> pretty payload <> rparen ")" <+> keyword ":" <+> pretty representation
-        AllocClosure{var, closedValues, representation} -> keywordInstruction "allocClosure" var (fmap pretty closedValues <> [pretty representation])
+        LoadFunctionPointer{var, functionName, representationArguments} -> do
+            let instantiation = case representationArguments of
+                    [] -> mempty
+                    _ -> lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty representationArguments) <> rparen "]"
+            keywordInstruction "loadFunctionPointer" var [Vega.prettyGlobal Vega.VarKind functionName <> instantiation]
         LoadGlobalClosure{var, functionName, representationArguments} -> do
             let instantiation = case representationArguments of
                     [] -> mempty

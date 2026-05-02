@@ -547,7 +547,8 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
                     representation <- representationOfType (getLoc pattern_) env parameterType
                     pure ((pattern_, representation), envTrans)
             body <- check (compose envTransformers env) expectedEffect returnType body
-            pure (Lambda loc typeParameters parameters body)
+            returnRepresentation <- representationOfType loc env returnType
+            pure (Lambda loc typeParameters parameters (body, returnRepresentation))
         StringLiteral{} -> deferToInference
         IntLiteral{} -> deferToInference
         DoubleLiteral{} -> deferToInference
@@ -708,7 +709,8 @@ infer env ambientEffect expr = do
             bodyEffect <- MetaVar <$> freshMeta "e" Effect
             (bodyType, body) <- infer (compose envTransformers env) bodyEffect body
 
-            pure (Function parameterTypes bodyEffect bodyType, Lambda loc typeParameters parameters body)
+            returnRepresentation <- representationOfType loc env bodyType
+            pure (Function parameterTypes bodyEffect bodyType, Lambda loc typeParameters parameters (body, returnRepresentation))
         StringLiteral loc literal -> pure (Builtins.stringType, StringLiteral loc literal)
         IntLiteral loc literal literalTypeInBits -> pure (typeForIntLiteral literalTypeInBits, IntLiteral loc literal literalTypeInBits)
         DoubleLiteral loc literal -> pure (Builtins.doubleType, DoubleLiteral loc literal)

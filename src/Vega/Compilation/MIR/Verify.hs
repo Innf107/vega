@@ -135,8 +135,9 @@ verifyInstruction = \case
                 Nothing -> verificationError $ "SumConstructor tag" <+> pretty tag <+> "is out of bounds for representation" <+> pretty representation
                 Just expectedRepresentation -> checkVarRepresentation payload expectedRepresentation var
             _ -> verificationError $ "Invalid non-sum representation for SumConstructor: " <> pretty representation
-    MIR.AllocClosure{var, closedValues, representation} -> do
-        undefined
+    MIR.LoadFunctionPointer{var, functionName = _} -> do
+        -- TODO: check that functionName exists
+        insertVarRepresentation var (Core.PrimitiveRep (Vega.PointerRep))
     MIR.LoadGlobalClosure{var, functionName = _} -> do
         -- TODO: check that functionName exists
         insertVarRepresentation var Core.functionRepresentation

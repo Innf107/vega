@@ -39,7 +39,12 @@ data Expr
     | Application {function :: CoreName, representationArguments :: Seq Representation, arguments :: Seq Value, resultRepresentation :: Representation}
     | -- INVARIANT: JumpJoin never occurs in a let
       JumpJoin LocalCoreName (Seq Value)
-    | Lambda (Seq (LocalCoreName, Representation)) (Seq Statement) Expr
+    | Lambda
+        { parameters :: Seq (LocalCoreName, Representation)
+        , statements :: (Seq Statement)
+        , returnExpr :: Expr
+        , returnRepresentation :: Representation
+        }
     | ProductAccess {product :: Value, index :: Int, resultRepresentation :: Representation}
     | Box Value
     | Unbox {value :: Value, innerRepresentation :: Representation}
@@ -165,7 +170,7 @@ instance Pretty Expr where
                     _ -> pretty funName <> lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty representationArguments) <> rparen "]"
             instantiation <> arguments argValues <+> keyword ":" <+> pretty representation
         JumpJoin name jumpArguments -> keyword "join" <+> pretty name <> arguments jumpArguments
-        Lambda parameters bodyStatements bodyExpr -> keyword "\\" <> typedParameters parameters <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
+        Lambda parameters bodyStatements bodyExpr returnRepresentation -> keyword "\\" <> typedParameters parameters <+> keyword ":" <+> pretty returnRepresentation <+> keyword "->" <+> prettyBody bodyStatements bodyExpr
         ProductAccess tupleValue index returnRepresentation -> do
             pretty tupleValue <> lparen "[" <> number index <> rparen "]" <+> keyword ":" <+> pretty returnRepresentation
         Box value -> keyword "box" <+> pretty value

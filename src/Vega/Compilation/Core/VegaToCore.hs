@@ -140,7 +140,7 @@ compileExpr expr = do
                     pure (name, rep)
 
                 (lambdaBody, lambdaExpr) <- compileCorePrimop primop returnRepresentation (fmap (\(name, _) -> Core.Var (Core.Local name)) parameters)
-                pure ([], Core.Lambda parameters lambdaBody lambdaExpr, Core.functionRepresentation)
+                pure ([], Core.Lambda parameters lambdaBody lambdaExpr returnRepresentation, Core.functionRepresentation)
             | otherwise -> deferToValue
         Vega.DataConstructor{valueRepresentation, name} ->
             arityOfDataConstructor name >>= \case
@@ -205,17 +205,19 @@ compileExpr expr = do
                         , resultRepresentation = undefined
                         }
                     )
+                    undefined
                 , undefined
                 )
         Vega.VisibleTypeApplication{} -> deferToValue
-        Vega.Lambda{parameters, body} -> do
+        Vega.Lambda{parameters, body = (body, returnRepresentation)} -> do
             let caseTree = PatternMatching.serializeSubPatterns (fmap fst parameters) ()
             variables <- for parameters \(_pattern, representation) -> do
                 local <- newLocal
                 representation <- convertRepresentation representation
                 pure (local, representation)
             (bodyStatements, body) <- compileCaseTree (\() -> compileExpr_ body) caseTree (fmap (\(localName, _) -> Core.Var (Core.Local localName)) variables)
-            pure ([], Core.Lambda variables bodyStatements body, Core.functionRepresentation)
+            returnRepresentation <- convertRepresentation returnRepresentation
+            pure ([], Core.Lambda variables bodyStatements body returnRepresentation, Core.functionRepresentation)
         Vega.StringLiteral{} -> deferToValue
         Vega.IntLiteral{} -> deferToValue
         Vega.DoubleLiteral{} -> deferToValue
@@ -812,7 +814,7 @@ coalesceExpr substitution = \case
             , \substitution ->
                 Core.JumpJoin joinPoint (fmap (applySubst substitution) arguments)
             )
-    Core.Lambda parameters statements expr -> do
+    Core.Lambda parameters statements expr returnRepresentation -> do
         (substitution, makeStatements) <- coalesceStatements substitution statements
         (substitution, makeExpr) <- coalesceExpr substitution expr
         pure
@@ -822,6 +824,7 @@ coalesceExpr substitution = \case
                     (fmap (\(name, representation) -> (getFinalName substitution name, representation)) parameters)
                     (makeStatements substitution)
                     (makeExpr substitution)
+                    returnRepresentation
             )
     Core.ProductAccess{product, index, resultRepresentation} ->
         pure (substitution, \substitution -> Core.ProductAccess{product = applySubst substitution product, index, resultRepresentation})

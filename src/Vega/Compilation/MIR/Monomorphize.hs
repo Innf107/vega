@@ -120,8 +120,6 @@ monomorphizeInstruction instruction = case instruction of
         pure (MIR.ProductConstructor{var, values, representation = substituteRepresentation representation})
     MIR.SumConstructor{var, tag, payload, representation} ->
         pure (MIR.SumConstructor{var, tag, payload, representation = substituteRepresentation representation})
-    MIR.AllocClosure{var, closedValues, representation} ->
-        pure (MIR.AllocClosure{var, closedValues, representation = substituteRepresentation representation})
     MIR.LoadGlobal{var, globalName, representationArguments, representation}
         | Vega.isInternalName globalName ->
             pure
@@ -142,6 +140,18 @@ monomorphizeInstruction instruction = case instruction of
                     , representation = substituteRepresentation representation
                     }
                 )
+    MIR.LoadFunctionPointer{var, functionName, representationArguments}
+        | Vega.isInternalName functionName ->
+            pure
+                ( MIR.LoadFunctionPointer
+                    { var
+                    , functionName
+                    , representationArguments = fmap substituteRepresentation representationArguments
+                    }
+                )
+        | otherwise -> do
+            monomorphizedFunctionName <- monomorphizeDeclaration functionName (fmap substituteRepresentation representationArguments)
+            pure (MIR.LoadFunctionPointer{var, functionName = monomorphizedFunctionName, representationArguments = []})
     MIR.LoadGlobalClosure{var, functionName, representationArguments}
         | Vega.isInternalName functionName ->
             pure

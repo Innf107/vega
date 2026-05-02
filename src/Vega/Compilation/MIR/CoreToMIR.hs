@@ -1,18 +1,50 @@
 module Vega.Compilation.MIR.CoreToMIR (compileDeclaration) where
 
 import Effectful
-import Relude hiding (State, execState, get, modify, put, runState)
+import Relude (
+    Applicative (pure),
+    Eq ((==)),
+    Foldable (toList),
+    Functor (fmap),
+    HasCallStack,
+    HashMap,
+    HashSet,
+    Int,
+    IsList (fromList),
+    Maybe (..),
+    Monad ((>>=)),
+    Monoid (mempty),
+    Num ((+)),
+    Semigroup ((<>)),
+    Seq,
+    Text,
+    fromIntegral,
+    fst,
+    not,
+    otherwise,
+    show,
+    undefined,
+    ($),
+    (&),
+    (.),
+    (<$>),
+ )
 
 import Effectful.State.Static.Local (State, execState, get, modify, put, runState)
 
 import Control.Exception qualified as Assert
-import Data.Foldable (foldrM)
+import Control.Monad (when)
+import Control.Monad.ST.Strict (runST)
+import Data.Foldable (Foldable (foldl', foldr'), foldlM, foldrM, for_)
 import Data.HashMap.Strict qualified as HashMap
+import Data.HashSet qualified as HashSet
+import Data.STRef.Strict (modifySTRef', newSTRef, readSTRef)
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Data.Unique qualified as Unique
 import Data.Vector.Generic qualified as Vector
+import Vega.Builtins qualified as Builtins
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.MIR.Syntax (Phis (..), Terminator (..))
@@ -26,10 +58,16 @@ import Vega.Pretty (pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax qualified as Vega
-import Vega.Util (assert, forFoldLM, forIndexed_, indexed, mapAccumLM)
-import qualified Vega.Builtins as Builtins
+import Vega.Util (assert, forFoldLM, forIndexed, forIndexed_, indexed, mapAccumLM)
+import Vega.Util qualified as Util
 
-type Compile es = (GraphPersistence :> es, Trace :> es, NewUnique :> es, State CurrentDeclarationState :> es)
+type Compile es =
+    ( GraphPersistence :> es
+    , Trace :> es
+    , NewUnique :> es
+    , State CurrentDeclarationState :> es
+    , ?currentDeclarationName :: Vega.GlobalName
+    )
 
 data CurrentDeclarationState = MkDeclarationState
     { blocks :: HashMap MIR.BlockDescriptor MIR.Block
@@ -67,17 +105,26 @@ registerAdditionalDeclarations declarations = modify (\state -> state{additional
 compileDeclaration :: (GraphPersistence :> es, Trace :> es, NewUnique :> es) => Core.Declaration -> Eff es (Seq MIR.Declaration)
 compileDeclaration = \case
     Core.DefineFunction{name, representationParameters = _, parameters, returnRepresentation, statements, result} -> do
-        compileFunction (Core.Global name) parameters returnRepresentation statements result
+        compileFunction name parameters returnRepresentation statements result []
+
+data ClosureEntry = MkClosureEntry
+    { variableName :: LocalCoreName
+    , variableRepresentation :: Representation
+    , closureParameter :: LocalCoreName
+    , closureIndex :: Int
+    }
 
 compileFunction ::
     (GraphPersistence :> es, Trace :> es, NewUnique :> es) =>
-    CoreName ->
+    Vega.GlobalName ->
     Seq (LocalCoreName, Core.Representation) ->
     Core.Representation ->
     Seq Core.Statement ->
     Core.Expr ->
+    Seq ClosureEntry ->
     Eff es (Seq MIR.Declaration)
-compileFunction functionName parameters returnRepresentation statements returnExpr = do
+compileFunction functionName parameters returnRepresentation statements returnExpr closureEntries = do
+    let ?currentDeclarationName = functionName
     ((initDescriptor, mirParameters), finalDeclarationState) <- runState initialDeclarationState $ do
         mirParameters <- for parameters \(parameterName, representation) -> do
             var <- newVarFromName parameterName
@@ -85,17 +132,38 @@ compileFunction functionName parameters returnRepresentation statements returnEx
             pure (var, representation)
 
         initialBlock <- newBlock
-        compileBody initialBlock statements returnExpr
+        block <- compileClosureAccesses initialBlock closureEntries
+        compileBody block statements returnExpr
         pure (initialBlock.descriptor, mirParameters)
     let declaration =
             MIR.DefineFunction
-                { name = functionName
+                { name = Core.Global functionName
                 , parameters = mirParameters
                 , returnRepresentation
                 , blocks = finalDeclarationState.blocks
                 , init = initDescriptor
                 }
     pure $ [declaration] <> finalDeclarationState.additionalDeclarations
+
+compileClosureAccesses :: (Compile es) => BlockBuilder -> Seq ClosureEntry -> Eff es BlockBuilder
+compileClosureAccesses block = \case
+    Empty -> pure block
+    (MkClosureEntry{variableName, variableRepresentation, closureParameter, closureIndex} :<| rest) -> do
+        var <- newVarFromName variableName
+        registerVariable variableName var variableRepresentation
+
+        (closure, _closureRepresentation) <- getLocal closureParameter
+        block <-
+            addInstruction
+                block
+                ( MIR.AccessField
+                    { var
+                    , target = closure
+                    , path = [MIR.ProductFieldPath closureIndex]
+                    , fieldRepresentation = variableRepresentation
+                    }
+                )
+        compileClosureAccesses block rest
 
 compileBody :: (Compile es) => BlockBuilder -> Seq Core.Statement -> Core.Expr -> Eff es ()
 compileBody block statements returnExpr = compileBodyWith compileReturn block statements returnExpr
@@ -155,8 +223,7 @@ compileLet block local representation = \case
                         addInstruction block (MIR.CallDirect{var = local, representationArguments, functionName, arguments, returnRepresentation})
     Core.JumpJoin joinPoint _arguments -> do
         panic $ "JumpJoin for join point " <> pretty joinPoint <> " in non-tail position"
-    Core.Lambda parameters statements returnExpr -> do
-        let returnRepresentation = undefined returnExpr
+    Core.Lambda parameters statements returnExpr returnRepresentation -> do
         compileLambda block local parameters returnRepresentation statements returnExpr
     Core.ProductAccess{product, index, resultRepresentation} -> do
         (block, product) <- compileValue block product
@@ -333,10 +400,9 @@ compileReturn block expr = do
                 compileBody defaultBlockBuilder defaultStatements defaultExpr
                 pure defaultBlockDescriptor
             finish block (MIR.SwitchInt{var = scrutinee, cases = fromList targets, default_ = defaultBlock})
-        Core.Lambda parameters statements returnExpr -> do
+        Core.Lambda parameters statements returnExpr returnRepresentation -> do
             lambdaName <- undefined
-            let returnRepresentation = undefined returnExpr
-            lambdaDeclarations <- compileFunction lambdaName parameters returnRepresentation statements returnExpr
+            lambdaDeclarations <- compileFunction lambdaName parameters returnRepresentation statements returnExpr undefined
             registerAdditionalDeclarations lambdaDeclarations
             let value = undefined
             finish block (MIR.Return value)
@@ -419,15 +485,174 @@ compileValue block = \case
         pure (block, var)
 
 compileLambda :: (Compile es) => BlockBuilder -> MIR.Variable -> Seq (LocalCoreName, Core.Representation) -> Core.Representation -> Seq Core.Statement -> Core.Expr -> Eff es BlockBuilder
-compileLambda block local parameters returnRepresentation statements returnExpr = do
-    lambdaName <- undefined
+compileLambda block var parameters returnRepresentation statements returnExpr = do
+    lambdaUnique <- newUnique
+    -- TODO: make this more structured than this string manipulation
+    let lambdaName = Vega.MkGlobalName{moduleName = ?currentDeclarationName.moduleName, name = ?currentDeclarationName.name <> "$lambda" <> show (Unique.hashUnique lambdaUnique)}
 
-    lambdaDeclarations <- compileFunction lambdaName parameters returnRepresentation statements returnExpr
+    let freeLocals :: Seq LocalCoreName = Util.viaList $ freeLocalVariables (Util.viaList (fmap fst parameters)) statements returnExpr
+
+    closureParameterIndex <- newUnique
+    let closureParameter = Core.Generated closureParameterIndex
+
+    closureEntries <- forIndexed freeLocals \local closureIndex -> do
+        (_, variableRepresentation) <- getLocal local
+        pure
+            MkClosureEntry
+                { variableName = local
+                , variableRepresentation
+                , closureParameter
+                , closureIndex
+                }
+
+    let payloadRepresentation = Core.ProductRep (fmap (\entry -> entry.variableRepresentation) closureEntries)
+
+    lambdaDeclarations <-
+        compileFunction
+            lambdaName
+            (parameters <> [(closureParameter, payloadRepresentation)])
+            returnRepresentation
+            statements
+            returnExpr
+            closureEntries
     registerAdditionalDeclarations lambdaDeclarations
-    -- TODO: do this properly with the right layout
-    let locals = undefined
-    -- addInstruction block (MIR.AllocateClosure local lambdaName locals)
-    undefined
+
+    closedOverMIRVars <- for freeLocals \local -> do
+        (mirVar, _) <- getLocal local
+        pure mirVar
+
+    payloadVar <- newVar "payload"
+    block <- addInstruction block (MIR.ProductConstructor payloadVar closedOverMIRVars payloadRepresentation)
+
+    boxedPayloadVar <- newVar "boxedPayload"
+    block <- addInstruction block (MIR.Box boxedPayloadVar payloadVar)
+
+    functionPointerVar <- newVar "function"
+    block <- addInstruction block (MIR.LoadFunctionPointer functionPointerVar lambdaName [])
+
+    block <- addInstruction block (MIR.ProductConstructor var [functionPointerVar, boxedPayloadVar] Core.functionRepresentation)
+    pure block
+
+freeLocalVariables :: HashSet LocalCoreName -> Seq Core.Statement -> Core.Expr -> HashSet LocalCoreName
+freeLocalVariables initialBound statements expr = runST do
+    found <- newSTRef HashSet.empty
+
+    let tryAdd bound variable = do
+            when (not (HashSet.member variable bound)) do
+                modifySTRef' found (HashSet.insert variable)
+
+    let goValue bound = \case
+            Core.Var (Core.Global{}) -> pure ()
+            Core.Var (Core.Local local) -> tryAdd bound local
+            Core.Instantiation (Core.Global{}) _ -> pure ()
+            Core.Instantiation (Core.Local local) _ -> tryAdd bound local
+            Core.Literal{} -> pure ()
+            Core.ProductConstructor{arguments, resultRepresentation = _} -> do
+                for_ arguments $ goValue bound
+            Core.SumConstructor{constructorIndex = _, payload, resultRepresentation = _} -> do
+                goValue bound payload
+
+        goExpr bound = \case
+            Core.Value value -> goValue bound value
+            Core.Unreachable -> pure ()
+            Core.Application{function, representationArguments = _, arguments, resultRepresentation = _} -> do
+                case function of
+                    Core.Local localName -> tryAdd bound localName
+                    Core.Global{} -> pure ()
+                for_ arguments (goValue bound)
+            Core.JumpJoin joinPointName arguments -> do
+                tryAdd bound joinPointName
+                for_ arguments (goValue bound)
+            Core.Lambda{parameters, statements, returnExpr, returnRepresentation = _} -> do
+                let boundInner = foldr' (HashSet.insert . fst) bound parameters
+                goBody boundInner statements returnExpr
+            Core.ProductAccess{product, index = _, resultRepresentation = _} -> goValue bound product
+            Core.Box value -> goValue bound value
+            Core.Unbox{value, innerRepresentation = _} -> goValue bound value
+            Core.PureOperator pureOperatorExpr -> goPureOperatorExpr bound pureOperatorExpr
+            Core.ConstructorCase
+                { scrutinee
+                , scrutineeRepresentation = _
+                , cases
+                , default_
+                } -> do
+                    goValue bound scrutinee
+                    for_ cases \(parameters, statements, expr) -> do
+                        let boundInner = foldr' HashSet.insert bound parameters
+                        goBody boundInner statements expr
+                    for_ default_ \(statements, expr) -> goBody bound statements expr
+            Core.IntCase
+                { scrutinee
+                , intCases
+                , default_
+                } -> do
+                    goValue bound scrutinee
+                    for_ intCases \(statements, expr) -> goBody bound statements expr
+                    for_ default_ \(statements, expr) -> goBody bound statements expr
+
+        goPureOperatorExpr bound = \case
+            Core.PureOperatorValue value -> goValue bound value
+            Core.Add left right -> do
+                goPureOperatorExpr bound left
+                goPureOperatorExpr bound right
+            Core.Subtract left right -> do
+                goPureOperatorExpr bound left
+                goPureOperatorExpr bound right
+            Core.Multiply left right -> do
+                goPureOperatorExpr bound left
+                goPureOperatorExpr bound right
+            Core.Divide left right -> do
+                goPureOperatorExpr bound left
+                goPureOperatorExpr bound right
+            Core.Less left right -> do
+                goPureOperatorExpr bound left
+                goPureOperatorExpr bound right
+            Core.LessEqual left right -> do
+                goPureOperatorExpr bound left
+                goPureOperatorExpr bound right
+            Core.Equal left right -> do
+                goPureOperatorExpr bound left
+                goPureOperatorExpr bound right
+            Core.NotEqual left right -> do
+                goPureOperatorExpr bound left
+                goPureOperatorExpr bound right
+
+        goStatement (bound :: HashSet LocalCoreName) = \case
+            Core.Let boundName _ expr -> do
+                -- Lets are non-recursive
+                goExpr bound expr
+                pure (HashSet.insert boundName bound)
+            Core.LetFunction
+                { name
+                , parameters
+                , returnRepresentation = _
+                , statements
+                , result
+                } -> do
+                    let boundByFunction = HashSet.insert name bound
+                    let boundInner = foldr' (HashSet.insert . fst) boundByFunction parameters
+                    -- We do need to recurse on the body here.
+                    -- These variables won't actually be part of our outer function, but we still need to
+                    -- keep them around to be able to build up a closure for the inner function
+                    -- at this point.
+                    goBody boundInner statements result
+                    pure boundByFunction
+            Core.LetJoin
+                { name
+                , parameters
+                , statements
+                , result
+                } -> do
+                    let boundByFunction = HashSet.insert name bound
+                    let boundInner = foldr' (HashSet.insert . fst) boundByFunction parameters
+
+                    goBody boundInner statements result
+                    pure boundByFunction
+        goBody bound statements expr = do
+            boundByStatements <- foldlM goStatement bound statements
+            goExpr boundByStatements expr
+    goBody initialBound statements expr
+    readSTRef found
 
 addJoinPoint :: (Compile es) => LocalCoreName -> MIR.BlockDescriptor -> Eff es ()
 addJoinPoint name blockDescriptor = do
