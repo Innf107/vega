@@ -218,13 +218,16 @@ traverseLeavesWithBoundVars tree onLeaf = go [] onLeaf tree
 instance (Pretty goal) => Pretty (CaseTree goal) where
     pretty = \case
         Leaf goal -> keyword "Leaf" <+> pretty goal
-        BindVar name rep subTree -> keyword "BindVar" <+> prettyLocal VarKind name <> pretty rep <> prettySubTree subTree
+        BindVar name rep subTree -> keyword "BindVar" <+> prettyLocal VarKind name <+> keyword ":" <+> pretty rep <> prettySubTree subTree
         IntCase{cases, default_} -> do
             let prettyCase (int, subTree) = do
                     number int <> prettySubTree subTree
             keyword "ConstructorCase"
                 <> "\n"
                 <> indent 2 (align $ vsep (fmap prettyCase (Map.toList cases)))
+                <> case default_ of
+                    Nothing -> mempty
+                    Just defaultTree -> "\n" <> indent 2 (align $ keyword "default" <+> pretty defaultTree)
         ConstructorCase{constructors, default_} -> do
             let prettyCase (name, (representations, subTree)) = do
                     prettyName DataConstructorKind name <> lparen "(" <> intercalateDoc ", " (fmap pretty representations) <> rparen ") -> " <> prettySubTree subTree

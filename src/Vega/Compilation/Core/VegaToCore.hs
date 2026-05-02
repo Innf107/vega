@@ -542,16 +542,21 @@ compileCaseTree compileGoal caseTree scrutinees = do
                     _ -> panic $ "Not all scrutinees consumed. Remaining: [" <> intercalateDoc ", " (fmap pretty scrutinees) <> "]"
             PatternMatching.ConstructorCase{constructors, scrutineeRepresentation, default_} -> do
                 let (scrutinee, rest) = consume scrutinees
-                cases <-
-                    fromList <$> for (Map.toList constructors) \(constructor, (argumentRepresentations, subTree)) -> do
+
+                let constructorList = Map.toList constructors
+
+                onlyConstructor <- case constructorList of
+                    [(constructor, (argumentRepresentations, subTree))] ->
+                        GraphPersistence.getDataConstructorIndex constructor >>= \case
+                            GraphPersistence.OnlyConstructor -> pure (Just (constructor, argumentRepresentations, subTree))
+                            GraphPersistence.MultiConstructor{} -> pure Nothing
+                    _ -> pure Nothing
+
+                let constructAutoBoxedPayload constructor argumentRepresentations subTree = do
                         locals <- for argumentRepresentations \representation -> do
                             local <- newLocal
+                            representation <- convertRepresentation representation
                             pure (representation, local)
-                        index <-
-                            GraphPersistence.getDataConstructorIndex constructor >>= \case
-                                GraphPersistence.OnlyConstructor -> undefined
-                                GraphPersistence.MultiConstructor index -> pure index
-
                         autoBoxingFlags <- case constructor of
                             Vega.Global globalName -> GraphPersistence.getAutoBoxing globalName
                             Vega.Local{} -> undefined
@@ -559,13 +564,12 @@ compileCaseTree compileGoal caseTree scrutinees = do
                         assert (length locals == length autoBoxingFlags)
 
                         (possiblyBoxedLocals, boxingStatements) <-
-                            Seq.unzip <$> for (Seq.zip locals autoBoxingFlags) \((vegaRepresentation, local), isAutoBoxed) -> do
+                            Seq.unzip <$> for (Seq.zip locals autoBoxingFlags) \((representation, local), isAutoBoxed) -> do
                                 if isAutoBoxed
                                     then do
-                                        representation <- convertRepresentation vegaRepresentation
                                         boxedLocal <- newLocal
                                         pure
-                                            ( boxedLocal
+                                            ( (boxedLocal, Core.PrimitiveRep Vega.BoxedRep)
                                             ,
                                                 [ Core.Let
                                                     local
@@ -573,15 +577,35 @@ compileCaseTree compileGoal caseTree scrutinees = do
                                                     (Core.Unbox{value = Core.Var (Core.Local boxedLocal), innerRepresentation = representation})
                                                 ]
                                             )
-                                    else
-                                        pure (local, [])
+                                    else do
+                                        pure ((local, representation), [])
 
                         (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local . snd) locals <> rest) boundValues subTree
-                        pure (index, (possiblyBoxedLocals, fold boxingStatements <> subTreeStatements, subTreeExpr))
-                default_ <- for default_ (go rest boundValues)
+                        pure (possiblyBoxedLocals, fold boxingStatements <> subTreeStatements, subTreeExpr)
 
-                scrutineeRepresentation <- convertRepresentation scrutineeRepresentation
-                pure ([], Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases, default_})
+                case onlyConstructor of
+                    Just (constructor, representations, subTree) -> do
+                        (possiblyBoxedLocals, statements, expr) <- constructAutoBoxedPayload constructor representations subTree
+                        assert (length possiblyBoxedLocals == length representations)
+
+                        extractStatements <- case possiblyBoxedLocals of
+                            [(onlyVar, representation)] -> pure [Core.Let onlyVar representation (Core.Value scrutinee)]
+                            _ -> Util.forIndexed possiblyBoxedLocals \(name, representation) index -> do
+                                pure (Core.Let name representation (Core.ProductAccess scrutinee index representation))
+                        pure (extractStatements <> statements, expr)
+                    Nothing -> do
+                        cases <-
+                            fromList <$> for constructorList \(constructor, (argumentRepresentations, subTree)) -> do
+                                index <-
+                                    GraphPersistence.getDataConstructorIndex constructor >>= \case
+                                        GraphPersistence.OnlyConstructor -> undefined
+                                        GraphPersistence.MultiConstructor index -> pure index
+                                (possiblyBoxedLocals, statements, expr) <- constructAutoBoxedPayload constructor argumentRepresentations subTree
+                                pure (index, (fmap fst possiblyBoxedLocals, statements, expr))
+                        default_ <- for default_ (go rest boundValues)
+
+                        scrutineeRepresentation <- convertRepresentation scrutineeRepresentation
+                        pure ([], Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases, default_})
             PatternMatching.IntCase{cases, default_} -> do
                 -- TODO: this currently drops the default
                 let (scrutinee, rest) = consume scrutinees
