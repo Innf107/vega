@@ -333,11 +333,11 @@ renderCompilationError = \case
                     emphasis "Function defined with incorrect number of parameters\n"
                         <> "  "
                         <> align
-                            ( emphasis "The function "
+                            ( "The function "
                                 <> prettyName VarKind functionName
-                                <> emphasis " is declared with"
-                                    <+> pluralNumber emphasis numberOfDefinedParameters "parameter"
-                                <> emphasis "\n  but its type suggests that it should have "
+                                <> " is declared with"
+                                    <+> pluralNumber plain numberOfDefinedParameters "parameter"
+                                <> "\n  but its type suggests that it should have "
                                 <> number expectedNumberOfArguments
                                 <> "\n"
                                 <> "    Expected type: "
@@ -387,10 +387,10 @@ renderCompilationError = \case
                     emphasis "Tuple literal has" <+> pluralNumber emphasis actual "element" <+> emphasis "but its type expects it to have" <+> number expected
                         <> "\n    The tuple is expected to have type" <+> pretty expectedType
         MismatchedRecordFieldsInLiteral{loc = _, expectedFields, actualFields} -> do
-            let missingFieldsMessage = case toList actualFields List.\\ toList (VectorMap.sortedKeys expectedFields) of
+            let missingFieldsMessage = case toList (VectorMap.sortedKeys expectedFields) List.\\ toList actualFields of
                     [] -> ""
                     missingFields -> "\n    Missing fields: " <> intercalateDoc (keyword ", ") (fmap globalIdentText missingFields)
-            let excessiveFieldsMessage = case toList (VectorMap.sortedKeys expectedFields) List.\\ toList actualFields of
+            let excessiveFieldsMessage = case toList actualFields List.\\ toList (VectorMap.sortedKeys expectedFields) of
                     [] -> ""
                     missingFields -> "\n    Excessive fields: " <> intercalateDoc (keyword ", ") (fmap globalIdentText missingFields)
             align $
@@ -399,10 +399,10 @@ renderCompilationError = \case
                     <> excessiveFieldsMessage
                     <> "\n    This record is expected to have type" <+> pretty (Record expectedFields)
         MismatchedRecordFieldsInPattern{loc = _, expectedFields, actualFields} -> do
-            let missingFieldsMessage = case toList actualFields List.\\ toList (VectorMap.sortedKeys expectedFields) of
+            let missingFieldsMessage = case toList (VectorMap.sortedKeys expectedFields) List.\\ toList actualFields of
                     [] -> ""
                     missingFields -> "\n    Missing fields: " <> intercalateDoc (keyword ", ") (fmap globalIdentText missingFields)
-            let excessiveFieldsMessage = case toList (VectorMap.sortedKeys expectedFields) List.\\ toList actualFields of
+            let excessiveFieldsMessage = case toList actualFields List.\\ toList (VectorMap.sortedKeys expectedFields) of
                     [] -> ""
                     missingFields -> "\n    Excessive fields: " <> intercalateDoc (keyword ", ") (fmap globalIdentText missingFields)
             align $
@@ -616,9 +616,10 @@ generateFancyParseErrorMessage = \case
                 NonLiteralMultiplication{} -> do
                     emphasis "Non-literal type-level multiplication"
                         <> "\n  At least one argument of a type level multiplication must be an integer literal."
-                SizeInTypeLevelInt _loc -> do
-                    emphasis "Size specifier in type level integer"
-                    <> "\n  Type level integers are always unbounded."
+                SizeInTypeLevelInt _loc ->
+                    do
+                        emphasis "Size specifier in type level integer"
+                        <> "\n  Type level integers are always unbounded."
             }
 
 prettyErrorItem :: ErrorItem (Token, Loc) -> Doc Ann
