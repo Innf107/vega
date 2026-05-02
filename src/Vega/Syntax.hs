@@ -475,6 +475,7 @@ data Type
 
 data PrimitiveRep
     = BoxedRep
+    | PointerRep
     | IntRep {sizeInBits :: Int}
     | DoubleRep
     deriving stock (Generic, Eq, Ord)
@@ -483,6 +484,7 @@ data PrimitiveRep
 instance Pretty PrimitiveRep where
     pretty = \case
         BoxedRep -> keyword "Boxed"
+        PointerRep -> keyword "PointerRep"
         IntRep{sizeInBits = 64} -> keyword "IntRep"
         IntRep{sizeInBits} -> keyword ("Int" <> show sizeInBits <> "Rep")
         DoubleRep -> keyword "DoubleRep"

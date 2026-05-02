@@ -106,7 +106,6 @@ data Representation
     = ProductRep (Seq Representation)
     | SumRep (Seq Representation)
     | ArrayRep Representation
-    | FunctionPointerRep
     | PrimitiveRep Vega.PrimitiveRep
     | ParameterRep Debruijn.Index
     deriving stock (Eq, Generic)
@@ -124,7 +123,6 @@ instance Pretty Representation where
     pretty (SumRep []) = keyword "Empty"
     pretty (SumRep representations) = lparen "(" <> intercalateDoc (" " <> keyword "+" <> " ") (fmap pretty representations) <> rparen ")"
     pretty (ArrayRep inner) = keyword "ArrayRep" <> lparen "(" <> pretty inner <> rparen ")"
-    pretty FunctionPointerRep = keyword "FunctionPointer"
     pretty (PrimitiveRep rep) = pretty rep
     pretty (ParameterRep index) = pretty index
 
@@ -264,7 +262,7 @@ stringRepresentation = PrimitiveRep Vega.BoxedRep
 -- The representation of functions. This *will* probably change in the future so code
 -- should treat it abstractly instead of depending on its concrete value
 functionRepresentation :: Representation
-functionRepresentation = ProductRep [FunctionPointerRep, PrimitiveRep Vega.BoxedRep]
+functionRepresentation = ProductRep [PrimitiveRep Vega.PointerRep, PrimitiveRep Vega.BoxedRep]
 
 boolRepresentation :: Representation
 boolRepresentation = SumRep [ProductRep [], ProductRep []]

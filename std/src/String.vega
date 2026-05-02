@@ -1,0 +1,3 @@
+
+-- TODO: this should really be a nominal record
+data String = String({ content : Array(UInt8), offset : Int, length : Int })

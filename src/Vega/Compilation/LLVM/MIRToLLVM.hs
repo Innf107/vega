@@ -527,20 +527,33 @@ compilePrimopCall builder primop arguments returnRepresentation varName = do
     argumentValues <- for arguments lookupVarValue
     case primop of
         DebugInt -> outOfLineBuiltin builder "vega_debug_int" argumentValues returnRepresentation varName
-        UnsafeReadArray -> compileReadArray builder arguments returnRepresentation varName
+        UnsafeReadArray -> compileUnsafeReadArray builder arguments returnRepresentation varName
+        UnsafeWriteArray -> compileUnsafeWriteArray builder arguments returnRepresentation varName
         ReplicateArray -> compileReplicateArray builder arguments returnRepresentation varName
         ArrayLength -> undefined
+        UnsafeArrayContents -> compileUnsafeArrayContents builder arguments returnRepresentation varName
         CodePoints -> undefined
         Panic -> undefined
 
-compileReadArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
-compileReadArray builder arguments returnRepresentation varName = case arguments of
+compileUnsafeReadArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeReadArray builder arguments returnRepresentation varName = case arguments of
     [array, index] -> do
         valueLayout <- Layout.representationLayout returnRepresentation
         array <- lookupVarValue array
         index <- lookupVarValue index
 
         buildArrayLoad builder valueLayout array index varName
+    _ -> panic $ "unsafeReadArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
+
+compileUnsafeWriteArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeWriteArray builder arguments _returnRepresentation _varName = case arguments of
+    [array, index, value] -> do
+        array <- lookupVarValue array
+        index <- lookupVarValue index
+        (value, valueLayout) <- lookupVar value
+
+        buildArrayStore builder valueLayout array index value
+        pure zeroSizedDummyValue
     _ -> panic $ "unsafeReadArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
 compileReplicateArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
@@ -573,6 +586,14 @@ compileReplicateArray builder arguments returnRepresentation varName = case argu
         LLVMBuilder.positionBuilderAtEnd builder completedBlock
         pure array
     _ -> panic $ "replicateArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
+
+compileUnsafeArrayContents :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeArrayContents _builder arguments _returnRepresentation _varName = case arguments of
+    [array] -> do
+        -- Arrays are represented as pointers to their contents so unsafeArrayContents doesn't actually need to do anything
+        -- TODO: this might need to do a bitcast to turn this into an *unmanaged* pointer once we track GC roots though
+        lookupVarValue array
+    _ -> panic $ "unsafeReadArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
 {- | Generate a call to a builtin function that is defined in the rust runtime rather than inline
 TODO: it might be nice to have out of line functions defined directly in LLVM IR with tailcc instead of

@@ -42,7 +42,9 @@ import Vega.Syntax qualified as Vega
 data Primop
     = ReplicateArray
     | UnsafeReadArray
+    | UnsafeWriteArray
     | ArrayLength
+    | UnsafeArrayContents
     | CodePoints
     | Panic
     | DebugInt
@@ -57,7 +59,9 @@ primops :: HashMap Text Primop
 primops =
     [ ("replicateArray", ReplicateArray)
     , ("unsafeReadArray", UnsafeReadArray)
+    , ("unsafeWriteArray", UnsafeWriteArray)
     , ("arrayLength", ArrayLength)
+    , ("unsafeArrayContents", UnsafeArrayContents)
     , ("codePoints", CodePoints)
     , ("panic", Panic)
     , ("debugInt", DebugInt)
@@ -130,6 +134,7 @@ primitiveTypeConstructors =
     , ("Bool", Type boolRepresentation)
     , ("Array", forallVisible Monomorphized "r" Rep \r -> [Type r] :-> Type (ArrayRep r))
     , ("Box", forallVisible Monomorphized "r" Rep \r -> [Type r] :-> Type (PrimitiveRep BoxedRep))
+    , ("Pointer", forallVisible Parametric "r" Rep \r -> [Type r] :-> Type (PrimitiveRep PointerRep))
     ]
 
 builtinGlobals :: HashMap (Text, NameKind) GlobalName
@@ -143,7 +148,9 @@ primopType :: Primop -> Type
 primopType = \case
     ReplicateArray -> forall_ "a" \a -> [intType, a] --> arrayType @@ [a]
     UnsafeReadArray -> forall_ "a" \a -> [arrayType @@ [a], intType] --> a
+    UnsafeWriteArray -> forall_ "a" \a -> [arrayType @@ [a], intType, a] --> unitType
     ArrayLength -> forall_ "a" \a -> [arrayType @@ [a]] --> intType
+    UnsafeArrayContents -> forall_ "a" \a -> [arrayType @@ [a]] --> pointerType @@ [a]
     CodePoints -> [stringType] --> arrayType @@ [int32Type]
     Panic -> forall_ "a" \a -> [stringType] --> a
     DebugInt -> [intType] --> unitType
@@ -154,9 +161,11 @@ primopRepresentation :: (HasCallStack) => Primop -> Seq Core.Representation -> (
 primopRepresentation primop arguments = case primop of
     ReplicateArray -> ([intRep 64, argument 0], Core.ArrayRep (argument 0))
     UnsafeReadArray -> ([Core.ArrayRep (argument 0), intRep 64], argument 0)
+    UnsafeWriteArray -> ([Core.ArrayRep (argument 0), intRep 64, argument 0], unitRep)
     ArrayLength -> ([Core.ArrayRep (argument 0)], intRep 64)
-    CodePoints -> ([undefined], Core.ArrayRep (intRep 32))
-    Panic -> ([undefined], argument 0)
+    UnsafeArrayContents -> ([Core.ArrayRep (argument 0)], pointerRep)
+    CodePoints -> ([Core.stringRepresentation], Core.ArrayRep (intRep 32))
+    Panic -> ([Core.stringRepresentation], argument 0)
     DebugInt -> ([intRep 64], unitRep)
   where
     argument i = case Seq.lookup i arguments of
@@ -233,6 +242,9 @@ arrayType = TypeConstructor (Global (internalName "Array"))
 boxType :: Type
 boxType = TypeConstructor (Global (internalName "Box"))
 
+pointerType :: Type
+pointerType = TypeConstructor (Global (internalName "Pointer"))
+
 unitType :: Type
 unitType = Tuple []
 
@@ -276,3 +288,6 @@ intRep sizeInBits = Core.PrimitiveRep (Vega.IntRep sizeInBits)
 
 unitRep :: Core.Representation
 unitRep = Core.ProductRep []
+
+pointerRep :: Core.Representation
+pointerRep = Core.PrimitiveRep Vega.PointerRep

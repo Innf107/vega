@@ -341,6 +341,7 @@ type_ =
                                 "Unit" -> ProductRepS loc mempty
                                 "Empty" -> SumRepS loc mempty
                                 "Boxed" -> PrimitiveRepS loc BoxedRep
+                                "PointerRep" -> PrimitiveRepS loc PointerRep
                                 "IntRep" -> PrimitiveRepS loc (IntRep 64)
                                 "Int32Rep" -> PrimitiveRepS loc (IntRep 32)
                                 "Int16Rep" -> PrimitiveRepS loc (IntRep 16)

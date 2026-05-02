@@ -6,7 +6,7 @@ module Vega.Compilation.LLVM.Layout (
     -- * Specific Layouts
     boxedLayout,
     intLayoutInBytes,
-    functionPointerLayout,
+    rawPointerLayout,
     closureLayout,
     boolLayout,
 
@@ -171,8 +171,6 @@ representationLayout = \case
         -- Currently, arrays are just boxed pointers (pointing to an array heap object).
         -- This will probably change in the future so that we don't need to dereference the array to access its size
         pure boxedLayout
-    Core.FunctionPointerRep ->
-        pure (MkLayout{sizeInBits = 8 * 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive})
     rep@Core.ParameterRep{} -> panic $ "Non-monomorphized parameter representation in layout generation: " <> pretty rep
 
 productLayout :: (?context :: LLVM.Context) => Seq Layout -> Layout
@@ -220,6 +218,7 @@ sumLayout payloads = do
 primitiveLayout :: (?context :: LLVM.Context) => Vega.PrimitiveRep -> Eff es Layout
 primitiveLayout = \case
     Vega.BoxedRep -> pure boxedLayout
+    Vega.PointerRep -> pure rawPointerLayout
     Vega.IntRep{sizeInBits}
         | sizeInBits `mod` 8 /= 0 -> panic "Int layouts of non-byte sizes are not supported by the LLVM backend yet"
         | otherwise -> pure (intLayoutInBytes (sizeInBits `div` 8))
@@ -231,16 +230,15 @@ intLayoutInBytes size = MkLayout{sizeInBits = size * 8, alignment = Alignment.fr
 boxedLayout :: (?context :: LLVM.Context) => Layout
 boxedLayout = MkLayout{sizeInBits = 8 * 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive}
 
+rawPointerLayout :: (?context :: LLVM.Context) => Layout
+rawPointerLayout = MkLayout{sizeInBits = 8 * 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive}
+
 -- TODO: i don't think the way we're treating booleans in the frontend actually lets us use i1 here
 boolLayout :: (?context :: LLVM.Context) => Layout
 boolLayout = MkLayout{sizeInBits = 1, alignment = Alignment.fromValue 1, kind = LLVMScalar LLVM.int1Type, details = Primitive}
 
--- TODO: This pointer should not count as boxed since it doesn't need to be followed by the GC
-functionPointerLayout :: (?context :: LLVM.Context) => Layout
-functionPointerLayout = MkLayout{sizeInBits = 8 * 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive}
-
 closureLayout :: (?context :: LLVM.Context) => Layout -> Layout
-closureLayout payloadLayout = productLayout [functionPointerLayout, payloadLayout]
+closureLayout payloadLayout = productLayout [rawPointerLayout, payloadLayout]
 
 -- | Return a 'Text' identifier that uniquely identifies this layout for the purposes of info-table generation
 identifier :: Layout -> Text

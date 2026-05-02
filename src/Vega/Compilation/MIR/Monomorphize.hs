@@ -221,7 +221,6 @@ substituteRepresentation = \case
     ProductRep inner -> ProductRep (fmap substituteRepresentation inner)
     SumRep inner -> SumRep (fmap substituteRepresentation inner)
     ArrayRep inner -> ArrayRep (substituteRepresentation inner)
-    FunctionPointerRep -> FunctionPointerRep
     PrimitiveRep primitive -> PrimitiveRep primitive
 
 -- TODO: maybe don't use naive text representations like this
@@ -237,9 +236,9 @@ renderRepresentation representation = TextBuilder.toText $ go representation
         ProductRep inner -> "P(" <> TextBuilder.intercalateMap "," go inner <> ")"
         SumRep inner -> "S(" <> TextBuilder.intercalateMap "," go inner <> ")"
         ArrayRep inner -> "A(" <> go inner <> ")"
-        FunctionPointerRep -> "FP"
         PrimitiveRep prim -> case prim of
             Vega.BoxedRep -> "B"
+            Vega.PointerRep -> "P"
             Vega.IntRep size -> "I" <> show size
             Vega.DoubleRep -> "D"
         ParameterRep index -> panic $ "Trying to render non-monomorphized parameter representation " <> pretty (ParameterRep index)
