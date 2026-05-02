@@ -110,7 +110,7 @@ monomorphizeInstruction instruction = case instruction of
     MIR.Identity _ _
     MIR.ArithmeticOperator _ _
     MIR.Box _ _
-    MIR.LoadIntLiteral _ _
+    MIR.LoadIntLiteral _ _ _
     MIR.LoadSumTag _ _ -> pure instruction
     MIR.AccessField{var, path, target, fieldRepresentation} ->
         pure (MIR.AccessField{var, path, target, fieldRepresentation = substituteRepresentation fieldRepresentation})
@@ -240,6 +240,6 @@ renderRepresentation representation = TextBuilder.toText $ go representation
         FunctionPointerRep -> "FP"
         PrimitiveRep prim -> case prim of
             Vega.BoxedRep -> "B"
-            Vega.IntRep -> "I"
+            Vega.IntRep size -> "I" <> show size
             Vega.DoubleRep -> "D"
         ParameterRep index -> panic $ "Trying to render non-monomorphized parameter representation " <> pretty (ParameterRep index)

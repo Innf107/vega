@@ -13,10 +13,11 @@ import Data.List.NonEmpty qualified as NonEmptyList
 import Data.Ratio ((%))
 import Data.Text qualified as Text
 import Relude.Unsafe (read)
+import System.OsPath (OsPath)
 import Vega.Error (LexicalError (..))
 import Vega.Lexer.Token (Token (..))
 import Vega.Loc (Loc (..))
-import System.OsPath (OsPath)
+import Vega.Util (Sign (..))
 
 newtype Lexer a = MkLexer (Either LexicalError a)
     deriving newtype (Functor, Applicative, Monad)
@@ -223,7 +224,17 @@ lexNumber digits state = case state of
     '.' :! state -> lexFloat digits [] state
     char :! state
         | Char.isDigit char -> lexNumber (char : digits) state
-    _ -> pure (IntLiteral (read (reverse digits)), state)
+    'i' :! '6' :! '4' :! state -> buildSized Signed 64 state
+    'u' :! '6' :! '4' :! state -> buildSized Unsigned 64 state
+    'i' :! '3' :! '2' :! state -> buildSized Signed 32 state
+    'u' :! '3' :! '2' :! state -> buildSized Unsigned 32 state
+    'i' :! '1' :! '6' :! state -> buildSized Signed 16 state
+    'u' :! '1' :! '6' :! state -> buildSized Unsigned 16 state
+    'i' :! '8' :! state -> buildSized Signed 8 state
+    'u' :! '8' :! state -> buildSized Unsigned 8 state
+    _ -> pure (IntLiteral (read (reverse digits)) Nothing, state)
+  where
+    buildSized sign size state = pure (IntLiteral (read (reverse digits)) (Just (sign, size)), state)
 
 lexFloat :: [Char] -> [Char] -> LexState -> Lexer (Token, LexState)
 lexFloat integralDigits decimalDigits state = case state of

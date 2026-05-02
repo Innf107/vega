@@ -20,6 +20,7 @@ import Vega.MultiSet qualified as MultiSet
 import Vega.Pretty (Ann, Doc, Pretty (..), globalConstructorText, globalIdentText, intercalateDoc, keyword, lparen, meta, number, rparen, skolem, (<+>))
 import Vega.Seq.NonEmpty (NonEmpty (..))
 import {-# SOURCE #-} Vega.TypeCheck.IntSum qualified as IntSum
+import Vega.Util (Sign)
 import Vega.VectorMap (VectorMap)
 import Vega.VectorMap qualified as VectorMap
 
@@ -203,7 +204,11 @@ data Expr p
         , body :: Expr p
         }
     | StringLiteral Loc Text
-    | IntLiteral Loc Integer
+    | IntLiteral
+        { loc :: Loc
+        , value :: Integer
+        , literalTypeInBits :: Maybe (Sign, Int)
+        }
     | DoubleLiteral Loc Rational
     | TupleLiteral Loc (Seq (Expr p))
     | RecordLiteral Loc (NonEmpty (Text, Expr p))
@@ -287,7 +292,7 @@ data TypeOperator
 data Pattern p
     = WildcardPattern Loc
     | VarPattern {loc :: Loc, ext :: (XVarPattern p), name :: (XLocalName p), isShadowed :: Bool}
-    | IntLiteralPattern {loc :: Loc, intLiteral :: Integer}
+    | IntLiteralPattern {loc :: Loc, intLiteral :: Integer, literalTypeInBits :: Maybe (Sign, Int)}
     | StringLiteralPattern {loc :: Loc, stringLiteral :: Text}
     | DoubleLiteralPattern {loc :: Loc, doubleLiteral :: Rational}
     | AsPattern Loc (XAsPattern p) (Pattern p) (XLocalName p)
@@ -470,7 +475,7 @@ data Type
 
 data PrimitiveRep
     = BoxedRep
-    | IntRep
+    | IntRep {sizeInBits :: Int}
     | DoubleRep
     deriving stock (Generic, Eq, Ord)
     deriving anyclass (Hashable)
@@ -478,7 +483,8 @@ data PrimitiveRep
 instance Pretty PrimitiveRep where
     pretty = \case
         BoxedRep -> keyword "Boxed"
-        IntRep -> keyword "IntRep"
+        IntRep{sizeInBits = 64} -> keyword "IntRep"
+        IntRep{sizeInBits} -> keyword ("Int" <> show sizeInBits <> "Rep")
         DoubleRep -> keyword "DoubleRep"
 
 type Kind = Type

@@ -398,9 +398,9 @@ compileValue block = \case
     Core.Literal literal -> do
         var <- newVar ""
         case literal of
-            Core.IntLiteral value -> do
+            Core.IntLiteral value sizeInBits -> do
                 -- TODO: check the size properly etc.
-                block <- addInstruction block (MIR.LoadIntLiteral var (fromIntegral value))
+                block <- addInstruction block (MIR.LoadIntLiteral var (fromIntegral value) sizeInBits)
                 pure (block, var)
             _ -> undefined
     Core.ProductConstructor arguments representation -> do

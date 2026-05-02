@@ -38,6 +38,7 @@ import Data.Sequence qualified as Seq
 import Effectful.State.Static.Local (evalState, get, put)
 import Vega.Effect.Output.Static.Local (execOutputSeq, output, outputAll)
 import Vega.Seq.NonEmpty (NonEmpty, toSeq)
+import Vega.Util (Sign)
 import Vega.Util qualified as Util
 
 data DiffChange
@@ -148,5 +149,6 @@ deriving via DiffFromEq Rational instance Diff Rational
 deriving via DiffFromEq () instance Diff ()
 deriving via DiffFromEq Bool instance Diff Bool
 deriving via DiffFromEq TypeOperator instance Diff TypeOperator
+deriving via DiffFromEq Sign instance Diff Sign
 
 deriving via IgnoredInDiff Loc instance Diff Loc

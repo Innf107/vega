@@ -263,11 +263,12 @@ compileExpr expr = do
                 (leftBindStatements, left) <- asOperatorExpr leftRepresentation leftExpr
                 (rightBindStatements, right) <- asOperatorExpr rightRepresentation rightExpr
                 let (pureOperator, representation) = case operator of
-                        -- TODO: these only work on integers *for now*, but that will change in the future
-                        Vega.Add -> (Core.Add left right, Core.PrimitiveRep Vega.IntRep)
-                        Vega.Subtract -> (Core.Subtract left right, Core.PrimitiveRep Vega.IntRep)
-                        Vega.Multiply -> (Core.Multiply left right, Core.PrimitiveRep Vega.IntRep)
-                        Vega.Divide -> (Core.Divide left right, Core.PrimitiveRep Vega.IntRep)
+                        -- TODO: This assumes that all operators use the same representation for all arguments.
+                        -- This is currently true but might change in the future
+                        Vega.Add -> (Core.Add left right, leftRepresentation)
+                        Vega.Subtract -> (Core.Subtract left right, leftRepresentation)
+                        Vega.Multiply -> (Core.Multiply left right, leftRepresentation)
+                        Vega.Divide -> (Core.Divide left right, leftRepresentation)
                         Vega.Less -> (Core.Less left right, Core.boolRepresentation)
                         Vega.LessEqual -> (Core.LessEqual left right, Core.boolRepresentation)
                         Vega.Equal -> (Core.Equal left right, Core.boolRepresentation)
@@ -352,7 +353,11 @@ compileExprToValue expr = do
                     pure ([], Core.Instantiation{varName = nameToCoreName varName, representationArguments = representationArguments}, representation)
         Vega.Lambda{} -> deferToLet
         Vega.StringLiteral _loc literal -> pure ([], Core.Literal (Core.StringLiteral literal), stringRepresentation)
-        Vega.IntLiteral _loc literal -> pure ([], Core.Literal (Core.IntLiteral literal), Core.PrimitiveRep Vega.IntRep)
+        Vega.IntLiteral _loc literal literalTypeInBits -> do
+            let sizeInBits = case literalTypeInBits of
+                    Nothing -> 64
+                    Just (_sign, size) -> size
+            pure ([], Core.Literal (Core.IntLiteral{value = literal, sizeInBits}), Core.PrimitiveRep (Vega.IntRep{sizeInBits}))
         Vega.DoubleLiteral _loc literal -> pure ([], Core.Literal (Core.DoubleLiteral literal), Core.PrimitiveRep Vega.DoubleRep)
         Vega.TupleLiteral _loc elements -> do
             (statements, elementValues, elementRepresentations) <- Util.unzip3Seq <$> for elements compileExprToValue

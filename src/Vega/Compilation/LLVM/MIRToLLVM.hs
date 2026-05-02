@@ -352,11 +352,14 @@ compileInstruction builder = \case
     MIR.LoadGlobalClosure{var, functionName} -> do
         asVar_ var (Layout.closureLayout Layout.boxedLayout) $ buildClosure builder functionName Layout.boxedLayout LLVM.constNullPointer
     MIR.LoadGlobal{var, globalName, representation} -> undefined
-    MIR.LoadIntLiteral{var, literal} -> do
-        insertVarMapping var (LLVM.constInt LLVM.int64Type (fromIntegral literal) True) Layout.intLayout
+    MIR.LoadIntLiteral{var, literal, sizeInBits}
+        | sizeInBits `mod` 8 /= 0 -> panic "Int layouts with non-byte sizes are not supported yet"
+        | otherwise -> do
+            let sizeInBytes = sizeInBits `div` 8
+            insertVarMapping var (LLVM.constInt LLVM.int64Type (fromIntegral literal) True) (Layout.intLayoutInBytes sizeInBytes)
     MIR.LoadSumTag{var, sum} -> do
         (sumValue, sumLayout) <- lookupVar sum
-        let tagLayout = Layout.sizedIntLayoutInBytes (Layout.sumTagSizeInBytes sumLayout)
+        let tagLayout = Layout.intLayoutInBytes (Layout.sumTagSizeInBytes sumLayout)
         case Layout.sumTagOffset sumLayout of
             Just offset -> do
                 tagPointer <- buildGEPOffset builder sumValue offset "tagptr"
@@ -876,25 +879,25 @@ zeroSizedDummyValue = LLVM.constString "USE_OF_ZERO_SIZED_VALUE" LLVM.Don'tNullT
 compileArithmeticOperator :: (Compile es) => LLVMBuilder.Builder -> MIR.ArithmeticExpr -> Text -> Eff es (LLVM.Value, Layout)
 compileArithmeticOperator builder arithmeticExpr varName = case arithmeticExpr of
     MIR.Add var1 var2 -> do
-        arg1 <- lookupVarValue var1
+        (arg1, representation) <- lookupVar var1
         arg2 <- lookupVarValue var2
         result <- LLVMBuilder.buildAdd builder arg1 arg2 varName
-        pure (result, Layout.intLayout)
+        pure (result, representation)
     MIR.Subtract var1 var2 -> do
-        arg1 <- lookupVarValue var1
+        (arg1, representation) <- lookupVar var1
         arg2 <- lookupVarValue var2
         result <- LLVMBuilder.buildSub builder arg1 arg2 varName
-        pure (result, Layout.intLayout)
+        pure (result, representation)
     MIR.Multiply var1 var2 -> do
-        arg1 <- lookupVarValue var1
+        (arg1, representation) <- lookupVar var1
         arg2 <- lookupVarValue var2
         result <- LLVMBuilder.buildMul builder arg1 arg2 varName
-        pure (result, Layout.intLayout)
+        pure (result, representation)
     MIR.Divide var1 var2 -> do
-        arg1 <- lookupVarValue var1
+        (arg1, representation) <- lookupVar var1
         arg2 <- lookupVarValue var2
         result <- LLVMBuilder.buildSDiv builder arg1 arg2 varName
-        pure (result, Layout.intLayout)
+        pure (result, representation)
     MIR.Less var1 var2 -> do
         arg1 <- lookupVarValue var1
         arg2 <- lookupVarValue var2

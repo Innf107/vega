@@ -9,7 +9,7 @@ import Relude hiding (NonEmpty, State, Type, evalState, get, mapMaybe, put, runS
 import Relude.Extra
 
 import Vega.Error (TypeError (..), TypeErrorSet (MkTypeErrorSet))
-import Vega.Util (compose, for2, mapAccumLM, unzip3Seq, zipWithSeqM)
+import Vega.Util (Sign (..), compose, for2, mapAccumLM, unzip3Seq, zipWithSeqM)
 
 import Vega.Effect.GraphPersistence (CachedType (..), GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
@@ -401,7 +401,8 @@ inferPattern env pattern_ = withTrace TypeCheck ("inferPattern " <> showHeadCons
         rep <- MetaVar <$> freshMeta "r" Rep
         type_ <- MetaVar <$> freshMeta (varName.name) (Type rep)
         pure (VarPattern{loc = loc, ext = rep, name = varName, isShadowed = isShadowed}, type_, bindVarType varName type_)
-    IntLiteralPattern{loc, intLiteral} -> pure (IntLiteralPattern{loc, intLiteral}, Builtins.intType, id)
+    IntLiteralPattern{loc, intLiteral, literalTypeInBits} -> do
+        pure (IntLiteralPattern{loc, intLiteral, literalTypeInBits}, typeForIntLiteral literalTypeInBits, id)
     StringLiteralPattern{loc, stringLiteral} -> pure (StringLiteralPattern{loc, stringLiteral}, Builtins.stringType, id)
     DoubleLiteralPattern{loc, doubleLiteral} -> pure (DoubleLiteralPattern{loc, doubleLiteral}, Builtins.doubleType, id)
     AsPattern loc () innerPattern name -> do
@@ -702,7 +703,7 @@ infer env ambientEffect expr = do
 
             pure (Function parameterTypes bodyEffect bodyType, Lambda loc typeParameters parameters body)
         StringLiteral loc literal -> pure (Builtins.stringType, StringLiteral loc literal)
-        IntLiteral loc literal -> pure (Builtins.intType, IntLiteral loc literal)
+        IntLiteral loc literal literalTypeInBits -> pure (typeForIntLiteral literalTypeInBits, IntLiteral loc literal literalTypeInBits)
         DoubleLiteral loc literal -> pure (Builtins.doubleType, DoubleLiteral loc literal)
         BinaryOperator loc left operator right -> do
             let (leftType, rightType, resultType) = binaryOperatorType operator
@@ -1242,6 +1243,19 @@ substituteTypeVariables substitution type_ =
         type_@PrimitiveRep{} -> pure type_
         type_@Kind -> pure type_
         type_@Integer -> pure type_
+
+typeForIntLiteral :: Maybe (Sign, Int) -> Type
+typeForIntLiteral = \case
+    Nothing -> Builtins.intType
+    Just (Signed, 64) -> Builtins.intType
+    Just (Unsigned, 64) -> Builtins.uintType
+    Just (Signed, 32) -> Builtins.int32Type
+    Just (Unsigned, 32) -> Builtins.uint32Type
+    Just (Signed, 16) -> Builtins.int16Type
+    Just (Unsigned, 16) -> Builtins.uint16Type
+    Just (Signed, 8) -> Builtins.int8Type
+    Just (Unsigned, 8) -> Builtins.uint8Type
+    Just (sign, size) -> panic $ "Unsupported integer sign/size: " <> show (sign, size)
 
 binaryOperatorType :: BinaryOperator -> (Type, Type, Type)
 binaryOperatorType = \case

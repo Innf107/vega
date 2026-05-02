@@ -19,6 +19,7 @@ import Vega.Panic (panic)
 import Vega.Pretty (Ann, Doc, keyword, number, pretty, (<+>))
 import Vega.Syntax (PrimitiveRep (..))
 import Vega.Syntax qualified as Vega
+import Vega.Util (smallestPowerOfTwoFitting)
 
 type FunctionSignatures = HashMap CoreName (Seq Representation, Representation)
 
@@ -142,13 +143,15 @@ verifyInstruction = \case
     MIR.LoadGlobal{var, globalName, representation} -> do
         -- TODO: check that the global has the correct representation
         insertVarRepresentation var representation
-    MIR.LoadIntLiteral{var, literal = _} -> do
-        insertVarRepresentation var (PrimitiveRep IntRep)
+    MIR.LoadIntLiteral{var, literal = _, sizeInBits} -> do
+        insertVarRepresentation var (PrimitiveRep (IntRep sizeInBits))
     MIR.LoadSumTag{var, sum} -> do
-        -- TODO: what is the representation of var now?
-        -- IntRep isn't actually correct (might be close enough for now though, the LLVM backend will do something more sensible)
-        -- it should be int8/int16/... depending on the number of constructors but we don't actually have that in MIR yet
-        insertVarRepresentation var (PrimitiveRep IntRep)
+        repOf sum >>= \case
+            Nothing -> pure ()
+            Just (SumRep constructors) -> do
+                let sumTagSizeInBytes = smallestPowerOfTwoFitting (length constructors)
+                insertVarRepresentation var (PrimitiveRep (IntRep sumTagSizeInBytes))
+            Just rep -> verificationError $ "LoadSumTag on variable " <> pretty var <> " of non-sum representation " <> pretty rep
     MIR.CallDirect{var, functionName, arguments, representationArguments, returnRepresentation} -> do
         (expectedArgumentRepresentations, expectedReturnRepresentation) <- case Builtins.asPrimop functionName of
             Just primop -> pure (Builtins.primopRepresentation primop representationArguments)
@@ -185,23 +188,29 @@ verifyInstruction = \case
 
 verifyArithmeticOperator :: (Verify es) => MIR.Variable -> MIR.ArithmeticExpr -> Eff es ()
 verifyArithmeticOperator var = \case
-    MIR.Add arg1 arg2 -> allInts arg1 arg2
-    MIR.Subtract arg1 arg2 -> allInts arg1 arg2
-    MIR.Multiply arg1 arg2 -> allInts arg1 arg2
-    MIR.Divide arg1 arg2 -> allInts arg1 arg2
+    MIR.Add arg1 arg2 -> allSameInt arg1 arg2
+    MIR.Subtract arg1 arg2 -> allSameInt arg1 arg2
+    MIR.Multiply arg1 arg2 -> allSameInt arg1 arg2
+    MIR.Divide arg1 arg2 -> allSameInt arg1 arg2
     MIR.Less arg1 arg2 -> comparison arg1 arg2
     MIR.LessEqual arg1 arg2 -> comparison arg1 arg2
     MIR.Equal arg1 arg2 -> comparison arg1 arg2
     MIR.NotEqual arg1 arg2 -> comparison arg1 arg2
   where
-    allInts arg1 arg2 = do
-        checkVarRepresentation arg1 (PrimitiveRep IntRep) var
-        checkVarRepresentation arg2 (PrimitiveRep IntRep) var
-        insertVarRepresentation var (PrimitiveRep IntRep)
+    allSameInt arg1 arg2 = do
+        repOf arg1 >>= \case
+            Nothing -> pure ()
+            Just rep@(PrimitiveRep (IntRep _)) -> do
+                checkVarRepresentation arg2 rep var
+                insertVarRepresentation var rep
+            Just otherRep -> verificationError $ pretty var <> ": Non-integer representation in arithmetic expression: " <> pretty otherRep
     comparison arg1 arg2 = do
-        checkVarRepresentation arg1 (PrimitiveRep IntRep) var
-        checkVarRepresentation arg2 (PrimitiveRep IntRep) var
-        insertVarRepresentation var (Core.boolRepresentation)
+        repOf arg1 >>= \case
+            Nothing -> pure ()
+            Just rep@(PrimitiveRep (IntRep _)) -> do
+                checkVarRepresentation arg2 rep var
+                insertVarRepresentation var Core.boolRepresentation
+            Just otherRep -> verificationError $ pretty var <> ": Non-integer representation in arithmetic comparison: " <> pretty otherRep
 
 verifyValidPath :: (Verify es) => MIR.Variable -> Representation -> MIR.Path -> Representation -> Eff es ()
 verifyValidPath var fullInputRep path expectedRep = go fullInputRep path
@@ -259,8 +268,10 @@ verifyTerminator = \case
     MIR.Unreachable -> pure ()
     MIR.Jump block -> pure ()
     MIR.SwitchInt{var, cases = _} -> do
-        -- TODO: this also needs to work for other, smaller int representations
-        checkVarRepresentation var (PrimitiveRep IntRep) var
+        repOf var >>= \case
+            Nothing -> pure ()
+            Just (PrimitiveRep (IntRep _)) -> pure ()
+            Just otherRep -> verificationError $ pretty var <> ": Non-integer representation in SwitchInt: " <> pretty otherRep
     -- TODO: verify that the targets actually exist
     MIR.TailCallDirect{functionName, arguments = _, returnRepresentation} -> do
         -- TODO: verify that the function exists and the arguments are correct

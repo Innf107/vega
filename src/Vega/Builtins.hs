@@ -13,6 +13,13 @@ module Vega.Builtins (
     defaultImportScope,
     builtinGlobals,
     intType,
+    uintType,
+    int32Type,
+    uint32Type,
+    int16Type,
+    uint16Type,
+    int8Type,
+    uint8Type,
     stringType,
     doubleType,
     boolType,
@@ -110,7 +117,14 @@ corePrimopRepresentation primop arguments = case primop of
 
 primitiveTypeConstructors :: HashMap Text Kind
 primitiveTypeConstructors =
-    [ ("Int", Type (PrimitiveRep IntRep))
+    [ ("Int", Type (PrimitiveRep (IntRep 64))) -- TODO: Int should really be an alias for Int64
+    , ("UInt", Type (PrimitiveRep (IntRep 64))) -- TODO: Int should really be an alias for Int64
+    , ("Int32", Type (PrimitiveRep (IntRep 32)))
+    , ("UInt32", Type (PrimitiveRep (IntRep 32)))
+    , ("Int16", Type (PrimitiveRep (IntRep 16)))
+    , ("UInt16", Type (PrimitiveRep (IntRep 16)))
+    , ("Int8", Type (PrimitiveRep (IntRep 8)))
+    , ("UInt8", Type (PrimitiveRep (IntRep 8)))
     , ("String", Type (PrimitiveRep BoxedRep))
     , ("Double", Type (PrimitiveRep DoubleRep))
     , ("Bool", Type boolRepresentation)
@@ -130,7 +144,7 @@ primopType = \case
     ReplicateArray -> forall_ "a" \a -> [intType, a] --> arrayType @@ [a]
     UnsafeReadArray -> forall_ "a" \a -> [arrayType @@ [a], intType] --> a
     ArrayLength -> forall_ "a" \a -> [arrayType @@ [a]] --> intType
-    CodePoints -> [stringType] --> arrayType @@ [intType]
+    CodePoints -> [stringType] --> arrayType @@ [int32Type]
     Panic -> forall_ "a" \a -> [stringType] --> a
     DebugInt -> [intType] --> unitType
 
@@ -138,12 +152,12 @@ primopType = \case
 -- involving the type checker so we have to write it out manually for now.
 primopRepresentation :: (HasCallStack) => Primop -> Seq Core.Representation -> (Seq Core.Representation, Core.Representation)
 primopRepresentation primop arguments = case primop of
-    ReplicateArray -> ([intRep, argument 0], Core.ArrayRep (argument 0))
-    UnsafeReadArray -> ([Core.ArrayRep (argument 0), intRep], argument 0)
-    ArrayLength -> ([Core.ArrayRep (argument 0)], intRep)
-    CodePoints -> ([undefined], Core.ArrayRep intRep)
+    ReplicateArray -> ([intRep 64, argument 0], Core.ArrayRep (argument 0))
+    UnsafeReadArray -> ([Core.ArrayRep (argument 0), intRep 64], argument 0)
+    ArrayLength -> ([Core.ArrayRep (argument 0)], intRep 64)
+    CodePoints -> ([undefined], Core.ArrayRep (intRep 32))
     Panic -> ([undefined], argument 0)
-    DebugInt -> ([intRep], unitRep)
+    DebugInt -> ([intRep 64], unitRep)
   where
     argument i = case Seq.lookup i arguments of
         Just representation -> representation
@@ -157,7 +171,24 @@ defaultImportScope =
                 ( internalModuleName
                 , MkImportedItems
                     { qualifiedAliases = []
-                    , unqualifiedItems = ["Int", "String", "Double", "Bool", "Array", "Box", "panic", "box", "unbox"]
+                    , unqualifiedItems =
+                        [ "Int"
+                        , "UInt"
+                        , "Int32"
+                        , "UInt32"
+                        , "Int16"
+                        , "UInt16"
+                        , "Int8"
+                        , "UInt8"
+                        , "String"
+                        , "Double"
+                        , "Bool"
+                        , "Array"
+                        , "Box"
+                        , "panic"
+                        , "box"
+                        , "unbox"
+                        ]
                     }
                 )
             ]
@@ -168,6 +199,27 @@ stringType = TypeConstructor (Global (internalName "String"))
 
 intType :: Type
 intType = TypeConstructor (Global (internalName "Int"))
+
+uintType :: Type
+uintType = TypeConstructor (Global (internalName "UInt"))
+
+int32Type :: Type
+int32Type = TypeConstructor (Global (internalName "Int32"))
+
+uint32Type :: Type
+uint32Type = TypeConstructor (Global (internalName "UInt32"))
+
+int16Type :: Type
+int16Type = TypeConstructor (Global (internalName "Int16"))
+
+uint16Type :: Type
+uint16Type = TypeConstructor (Global (internalName "UInt16"))
+
+int8Type :: Type
+int8Type = TypeConstructor (Global (internalName "Int8"))
+
+uint8Type :: Type
+uint8Type = TypeConstructor (Global (internalName "UInt8"))
 
 doubleType :: Type
 doubleType = TypeConstructor (Global (internalName "Double"))
@@ -219,8 +271,8 @@ forall_ varName body =
             forallVisible Parametric varName (Type r) body
         )
 
-intRep :: Core.Representation
-intRep = Core.PrimitiveRep Vega.IntRep
+intRep :: Int -> Core.Representation
+intRep sizeInBits = Core.PrimitiveRep (Vega.IntRep sizeInBits)
 
 unitRep :: Core.Representation
 unitRep = Core.ProductRep []

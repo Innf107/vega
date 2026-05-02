@@ -26,9 +26,12 @@ module Vega.Util (
     partitionMapM,
     type (?),
     decodeOsPathUnchecked,
+    smallestPowerOfTwoFitting,
+    Sign (..),
 ) where
 
 import Control.Exception (throw)
+import Data.Bits qualified as Bits
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import Data.Traversable (for)
@@ -195,3 +198,9 @@ decodeOsPathUnchecked :: OsPath -> FilePath
 decodeOsPathUnchecked osPath = case OsPath.decodeUtf osPath of
     Left exception -> throw exception
     Right filePath -> filePath
+
+smallestPowerOfTwoFitting :: Int -> Int
+smallestPowerOfTwoFitting n = Bits.finiteBitSize n - Bits.countLeadingZeros (n - 1)
+
+data Sign = Signed | Unsigned
+    deriving (Show, Eq, Ord, Generic)

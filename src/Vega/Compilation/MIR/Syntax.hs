@@ -81,7 +81,7 @@ data Instruction
     | AllocClosure {var :: Variable, closedValues :: Seq Variable, representation :: Representation}
     | LoadGlobalClosure {var :: Variable, functionName :: Vega.GlobalName, representationArguments :: Seq Representation}
     | LoadGlobal {var :: Variable, representationArguments :: Seq Representation, globalName :: Vega.GlobalName, representation :: Representation}
-    | LoadIntLiteral {var :: Variable, literal :: Int}
+    | LoadIntLiteral {var :: Variable, literal :: Int, sizeInBits :: Int}
     | LoadSumTag {var :: Variable, sum :: Variable}
     | CallDirect
         { var :: Variable
@@ -209,8 +209,8 @@ instance Pretty Instruction where
                     [] -> mempty
                     _ -> lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty representationArguments) <> rparen "]"
             keywordInstruction "loadGlobal" var [Vega.prettyGlobal Vega.VarKind globalName <> instantiation, pretty representation]
-        LoadIntLiteral var int ->
-            keywordInstruction "int" var [number int]
+        LoadIntLiteral var int sizeInBits ->
+            keywordInstruction "int" var [number int] <+> pretty (PrimitiveRep (Vega.IntRep sizeInBits))
         LoadSumTag{var, sum} -> keywordInstruction "loadSumTag" var [pretty sum]
         CallDirect{var, representationArguments, functionName, arguments = callArguments} -> do
             let instantiation = case representationArguments of

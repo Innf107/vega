@@ -223,7 +223,7 @@ compileValue = \case
         | otherwise -> pure $ JS.Var (JS.compileCoreName varName)
     Core.Instantiation{varName, representationArguments = _} -> pure $ JS.Var (JS.compileCoreName varName)
     Core.Literal literal -> case literal of
-        Core.IntLiteral int -> pure (JS.IntLiteral int)
+        Core.IntLiteral int _ -> pure (JS.IntLiteral int)
         Core.DoubleLiteral rational -> pure (JS.DoubleLiteral rational)
         Core.StringLiteral string -> pure (JS.StringLiteral string)
     Core.ProductConstructor{arguments, resultRepresentation = _} -> do

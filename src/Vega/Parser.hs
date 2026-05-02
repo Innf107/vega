@@ -18,7 +18,7 @@ import Vega.Loc (HasLoc, Loc (MkLoc, endColumn, endLine, file, startColumn, star
 import Vega.Seq.NonEmpty (NonEmpty (..), pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax qualified as Syntax
-import Vega.Util (partitionWithSeq)
+import Vega.Util (Sign, partitionWithSeq)
 import Vega.Util qualified as Util
 
 data AdditionalParseError
@@ -30,8 +30,12 @@ data AdditionalParseError
     | NonVarInFunctionDefinition Loc
     | InvalidExistentialBinder (ForallBinderS Parsed)
     | NonLiteralMultiplication {loc :: Loc}
+    | SizeInTypeLevelInt {loc :: Loc}
     deriving stock (Eq, Ord, Generic)
     deriving anyclass (HasLoc)
+
+additionalParseError :: AdditionalParseError -> Parser ()
+additionalParseError error = registerFancyFailure (fromList [ErrorCustom error])
 
 newtype ParserEnv = MkParserEnv
     { moduleName :: ModuleName
@@ -68,11 +72,11 @@ stringLit = MegaParsec.token match (fromList [Label (fromList "string literal")]
         (Lexer.StringLiteral text, loc) -> Just (text, loc)
         _ -> Nothing
 
-intLit :: Parser (Integer, Loc)
+intLit :: Parser (Integer, Maybe (Sign, Int), Loc)
 intLit = MegaParsec.token match (fromList [Label (fromList "integer literal")])
   where
     match = \case
-        (Lexer.IntLiteral int, loc) -> Just (int, loc)
+        (Lexer.IntLiteral int literalTypeInBits, loc) -> Just (int, literalTypeInBits, loc)
         _ -> Nothing
 
 doubleLit :: Parser (Rational, Loc)
@@ -177,17 +181,12 @@ defineFunction = do
     definitionName <- identifier
 
     when (name /= definitionName) do
-        registerFancyFailure
-            ( fromList
-                [ ErrorCustom
-                    ( MismatchedFunctionName
-                        { loc = startLoc
-                        , typeSignature = name
-                        , definition = definitionName
-                        }
-                    )
-                ]
-            )
+        additionalParseError $
+            MismatchedFunctionName
+                { loc = startLoc
+                , typeSignature = name
+                , definition = definitionName
+                }
 
     declaredTypeParameters <- option Empty do
         _ <- single LBracket
@@ -342,7 +341,10 @@ type_ =
                                 "Unit" -> ProductRepS loc mempty
                                 "Empty" -> SumRepS loc mempty
                                 "Boxed" -> PrimitiveRepS loc BoxedRep
-                                "IntRep" -> PrimitiveRepS loc IntRep
+                                "IntRep" -> PrimitiveRepS loc (IntRep 64)
+                                "Int32Rep" -> PrimitiveRepS loc (IntRep 32)
+                                "Int16Rep" -> PrimitiveRepS loc (IntRep 16)
+                                "Int8Rep" -> PrimitiveRepS loc (IntRep 8)
                                 "Kind" -> KindS loc
                                 "Integer" -> IntegerS loc
                                 _ -> TypeConstructorS loc name
@@ -355,7 +357,10 @@ type_ =
                 (name, loc) <- identifierWithLoc
                 pure $ TypeVarS loc name
             , do
-                (literal, loc) <- intLit
+                (literal, literalTypeInBits, loc) <- intLit
+                case literalTypeInBits of
+                    Nothing -> pure ()
+                    Just _ -> additionalParseError (SizeInTypeLevelInt loc)
                 pure $ TypeIntLiteral loc literal
             , do
                 (parameters, loc) <- argumentsWithLoc type_
@@ -525,8 +530,8 @@ pattern_ = do
                 loc <- single Underscore
                 pure (WildcardPattern loc)
             , do
-                (int, loc) <- intLit
-                pure (IntLiteralPattern loc int)
+                (int, literalTypeInBits, loc) <- intLit
+                pure (IntLiteralPattern loc int literalTypeInBits)
             , do
                 (string, loc) <- stringLit
                 pure (StringLiteralPattern loc string)
@@ -615,8 +620,8 @@ expr = label "expression" exprLogical
                 (literal, loc) <- stringLit
                 pure (Syntax.StringLiteral loc literal)
             , do
-                (integer, loc) <- intLit
-                pure (Syntax.IntLiteral loc integer)
+                (integer, literalTypeInBits, loc) <- intLit
+                pure (Syntax.IntLiteral loc integer literalTypeInBits)
             , do
                 (float, loc) <- doubleLit
                 pure (Syntax.DoubleLiteral loc float)

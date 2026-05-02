@@ -1,0 +1,31 @@
+-- type: compile
+
+int8 : () -> Int8
+int8() = 42i8
+
+uint8 : () -> UInt8
+uint8() = 42u8
+
+int16 : () -> Int16
+int16() = 42i16
+
+uint16 : () -> UInt16
+uint16() = 42u16
+
+int32 : () -> Int32
+int32() = 42i32
+
+uint32 : () -> UInt32
+uint32() = 42u32
+
+int64 : () -> Int
+int64() = 42i64
+
+uint64 : () -> UInt
+uint64() = 42u64
+
+int : () -> Int
+int() = 42
+
+main : () -> ()
+main() = ()

@@ -3,13 +3,14 @@ module Vega.Lexer.Token (Token (..)) where
 import Relude
 import Vega.Pretty (Pretty)
 import Vega.Pretty qualified as Pretty
+import Vega.Util (Sign (..))
 
 data Token
     = EOF
     | Ident Text
     | Constructor Text
     | StringLiteral Text
-    | IntLiteral Integer
+    | IntLiteral {value :: Integer, literalTypeInBits :: Maybe (Sign, Int)}
     | FloatLiteral Rational
     | LParen
     | RParen
@@ -63,7 +64,9 @@ instance Pretty Token where
         Ident ident -> Pretty.localIdentText ident
         Constructor constr -> Pretty.localConstructorText constr
         StringLiteral literal -> Pretty.literal ("\"" <> literal <> "\"")
-        IntLiteral int -> Pretty.number int
+        IntLiteral int Nothing -> Pretty.number int
+        IntLiteral int (Just (Signed, size)) -> Pretty.number int <> Pretty.keyword ("i" <> show size)
+        IntLiteral int (Just (Unsigned, size)) -> Pretty.number int <> Pretty.keyword ("u" <> show size)
         FloatLiteral _rational -> undefined
         LParen -> Pretty.keyword "("
         RParen -> Pretty.keyword ")"

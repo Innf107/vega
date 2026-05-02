@@ -615,7 +615,10 @@ generateFancyParseErrorMessage = \case
                                 <+> reason
                 NonLiteralMultiplication{} -> do
                     emphasis "Non-literal type-level multiplication"
-                        <> "\n  at least one argument of a type level multiplication must be an integer literal."
+                        <> "\n  At least one argument of a type level multiplication must be an integer literal."
+                SizeInTypeLevelInt _loc -> do
+                    emphasis "Size specifier in type level integer"
+                    <> "\n  Type level integers are always unbounded."
             }
 
 prettyErrorItem :: ErrorItem (Token, Loc) -> Doc Ann

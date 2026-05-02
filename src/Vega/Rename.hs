@@ -334,7 +334,7 @@ renamePattern env = \case
     VarPattern{loc, ext = (), name, isShadowed} -> do
         (localName, envTrans) <- bindLocalVar loc env isShadowed name
         pure (VarPattern{loc, ext = (), name = localName, isShadowed}, envTrans)
-    IntLiteralPattern{loc, intLiteral} -> pure (IntLiteralPattern{loc, intLiteral}, id)
+    IntLiteralPattern{loc, intLiteral, literalTypeInBits} -> pure (IntLiteralPattern{loc, intLiteral, literalTypeInBits}, id)
     StringLiteralPattern{loc, stringLiteral} -> pure (StringLiteralPattern{loc, stringLiteral}, id)
     DoubleLiteralPattern{loc, doubleLiteral} -> pure (DoubleLiteralPattern{loc, doubleLiteral}, id)
     AsPattern loc () innerPattern name -> do
@@ -393,7 +393,7 @@ renameExpr env = \case
         body <- renameExpr (Util.compose transformers env) body
         pure (Lambda loc boundTypeParameters parameters body)
     StringLiteral loc literal -> pure (StringLiteral loc literal)
-    IntLiteral loc literal -> pure (IntLiteral loc literal)
+    IntLiteral{loc, value, literalTypeInBits} -> pure (IntLiteral{loc, value, literalTypeInBits})
     DoubleLiteral loc literal -> pure (DoubleLiteral loc literal)
     TupleLiteral loc elements -> do
         elements <- traverse (renameExpr env) elements

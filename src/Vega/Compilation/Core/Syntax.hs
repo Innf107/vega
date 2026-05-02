@@ -98,7 +98,7 @@ data Value
         }
 
 data Literal
-    = IntLiteral Integer
+    = IntLiteral {value :: Integer, sizeInBits :: Int}
     | DoubleLiteral Rational
     | StringLiteral Text
 
@@ -228,7 +228,7 @@ instance Pretty Value where
 
 instance Pretty Literal where
     pretty = \case
-        IntLiteral int -> number int
+        IntLiteral int size -> number int <> "i" <> pretty size
         DoubleLiteral rational -> number rational
         -- TODO: use real vega quoting instead of haskell quoting
         StringLiteral string -> literal (show string)
@@ -284,7 +284,6 @@ falseValue =
         , payload = unitValue
         , resultRepresentation = boolRepresentation
         }
-
 
 unitValue :: Value
 unitValue = ProductConstructor{arguments = [], resultRepresentation = ProductRep []}

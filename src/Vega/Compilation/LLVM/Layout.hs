@@ -5,8 +5,7 @@ module Vega.Compilation.LLVM.Layout (
 
     -- * Specific Layouts
     boxedLayout,
-    intLayout,
-    sizedIntLayoutInBytes,
+    intLayoutInBytes,
     functionPointerLayout,
     closureLayout,
     boolLayout,
@@ -54,6 +53,7 @@ import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
 import Vega.Pretty (number, pretty)
 import Vega.Syntax qualified as Vega
+import Vega.Util (smallestPowerOfTwoFitting)
 
 data Layout = MkLayout
     { sizeInBits :: Int
@@ -220,14 +220,13 @@ sumLayout payloads = do
 primitiveLayout :: (?context :: LLVM.Context) => Vega.PrimitiveRep -> Eff es Layout
 primitiveLayout = \case
     Vega.BoxedRep -> pure boxedLayout
-    Vega.IntRep -> pure intLayout
+    Vega.IntRep{sizeInBits}
+        | sizeInBits `mod` 8 /= 0 -> panic "Int layouts of non-byte sizes are not supported by the LLVM backend yet"
+        | otherwise -> pure (intLayoutInBytes (sizeInBits `div` 8))
     Vega.DoubleRep -> pure $ MkLayout{sizeInBits = 8 * 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.doubleType, details = Primitive}
 
-intLayout :: (?context :: LLVM.Context) => Layout
-intLayout = sizedIntLayoutInBytes 8
-
-sizedIntLayoutInBytes :: (?context :: LLVM.Context) => Int -> Layout
-sizedIntLayoutInBytes size = MkLayout{sizeInBits = size * 8, alignment = Alignment.fromValue size, kind = LLVMScalar (LLVM.intType (size * 8)), details = Primitive}
+intLayoutInBytes :: (?context :: LLVM.Context) => Int -> Layout
+intLayoutInBytes size = MkLayout{sizeInBits = size * 8, alignment = Alignment.fromValue size, kind = LLVMScalar (LLVM.intType (size * 8)), details = Primitive}
 
 boxedLayout :: (?context :: LLVM.Context) => Layout
 boxedLayout = MkLayout{sizeInBits = 8 * 8, alignment = Alignment.fromValue 8, kind = LLVMScalar LLVM.pointerType, details = Primitive}
@@ -242,9 +241,6 @@ functionPointerLayout = MkLayout{sizeInBits = 8 * 8, alignment = Alignment.fromV
 
 closureLayout :: (?context :: LLVM.Context) => Layout -> Layout
 closureLayout payloadLayout = productLayout [functionPointerLayout, payloadLayout]
-
-smallestPowerOfTwoFitting :: Int -> Int
-smallestPowerOfTwoFitting n = Bits.finiteBitSize n - Bits.countLeadingZeros (n - 1)
 
 -- | Return a 'Text' identifier that uniquely identifies this layout for the purposes of info-table generation
 identifier :: Layout -> Text
