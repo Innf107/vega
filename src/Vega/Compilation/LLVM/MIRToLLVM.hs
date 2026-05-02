@@ -350,8 +350,7 @@ compileInstruction builder = \case
                 buildComplexStore builder payloadLayout value payloadPointer
     MIR.LoadFunctionPointer{var, functionName} -> do
         functionPointer <-
-            -- We need to use the closure wrapper instead of the actual function here. See Note: [Closure Representation].
-            LLVM.getNamedFunction ?module_ (closureWrapperNameForFunction (Core.Global functionName)) >>= \case
+            LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
                 Nothing -> panic $ "Trying to create closure for non-existent top-level function: " <> Vega.prettyGlobal Vega.VarKind functionName
                 Just function_ -> pure function_
         insertVarMapping var functionPointer Layout.rawPointerLayout
