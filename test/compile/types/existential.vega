@@ -1,5 +1,4 @@
 -- type: print(4)
--- KNOWN
 
 import internal:Internal (debugInt)
 

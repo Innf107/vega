@@ -401,11 +401,9 @@ compileReturn block expr = do
                 pure defaultBlockDescriptor
             finish block (MIR.SwitchInt{var = scrutinee, cases = fromList targets, default_ = defaultBlock})
         Core.Lambda parameters statements returnExpr returnRepresentation -> do
-            lambdaName <- undefined
-            lambdaDeclarations <- compileFunction lambdaName parameters returnRepresentation statements returnExpr undefined
-            registerAdditionalDeclarations lambdaDeclarations
-            let value = undefined
-            finish block (MIR.Return value)
+            closure <- newVar "closure"
+            block <- compileLambda block closure parameters returnRepresentation statements returnExpr
+            finish block (MIR.Return closure)
         Core.PureOperator pureOperator -> do
             (block, var) <- compilePureOperator block Nothing pureOperator
             finish block (MIR.Return var)
