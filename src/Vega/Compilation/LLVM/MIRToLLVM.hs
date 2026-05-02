@@ -805,9 +805,9 @@ buildComplexLoad builder layout pointer varName = case Layout.kind layout of
 The offset is assumed to be in-bounds.
 -}
 buildGEPOffset :: (Compile es) => LLVMBuilder.Builder -> LLVM.Value -> Int -> Text -> Eff es LLVM.Value
-buildGEPOffset builder pointer offset name = do
-    result <- LLVMBuilder.buildInBoundsGetElementPtr builder LLVM.int8Type pointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] name
-    pure result
+buildGEPOffset builder pointer offset name = case offset of
+    0 -> pure pointer
+    _ -> LLVMBuilder.buildInBoundsGetElementPtr builder LLVM.int8Type pointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] name
 
 buildLayoutAlloca :: (Compile es) => LLVMBuilder.Builder -> Layout -> Text -> Eff es LLVM.Value
 buildLayoutAlloca builder layout varName = do
