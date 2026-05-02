@@ -416,9 +416,7 @@ userDefinedDataConstructorApplication name arguments representation = do
 
     GraphPersistence.getDataConstructorIndex name >>= \case
         GraphPersistence.OnlyConstructor -> do
-            case representation of
-                Core.SumRep [onlyRepresentation] -> pure (statements, payload onlyRepresentation)
-                _ -> panic $ "Non-single constructor sum representation " <> pretty representation <> " for only sum constructor " <> Vega.prettyName Vega.DataConstructorKind name
+            pure (statements, payload representation)
         GraphPersistence.MultiConstructor constructorIndex -> do
             let payloadRepresentation = case representation of
                     Core.SumRep inner -> case Seq.lookup constructorIndex inner of
