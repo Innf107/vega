@@ -1,5 +1,7 @@
 -- type: error
 
+import internal:Internal (String)
+
 f : forall *(r : Rep). () -> exists (a : Type(r)). (Int -> a, a -> String);
 f() = (\_ -> 4, \_ -> "a");
 

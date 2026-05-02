@@ -1,5 +1,7 @@
 -- type: compile
 
+import internal:Internal (String)
+
 f : Int -> Int;
 f(x) = x;
 

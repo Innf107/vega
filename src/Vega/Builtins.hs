@@ -189,7 +189,6 @@ defaultImportScope =
                         , "UInt16"
                         , "Int8"
                         , "UInt8"
-                        , "String"
                         , "Double"
                         , "Bool"
                         , "Array"

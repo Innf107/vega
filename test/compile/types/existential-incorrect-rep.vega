@@ -1,5 +1,7 @@
 -- type: error
 
+import internal:Internal (String)
+
 f : () -> exists (a : Type(IntRep)). (Int -> a, a -> String);
 f() = (\_ -> "not of kind IntRep", \_ -> "a");
 

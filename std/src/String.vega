@@ -1,3 +1,11 @@
 
+import internal:Internal (replicateArray)
+
 -- TODO: this should really be a nominal record
 data String = String({ content : Array(UInt8), offset : Int, length : Int })
+
+replicateChar : (UInt8, Int) -> String
+replicateChar(char, length) = {
+    let array = replicateArray(length, char)
+    String({ content = array, offset = 0, length = length })
+}

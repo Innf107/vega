@@ -1,8 +1,8 @@
-$FILE:4:14: ERROR:
+$FILE:6:14: ERROR:
 Type mismatch
   Unable to unify
     expected type r
       actual type IntRep
   ┃ 
-4 ┃ f() = (\_ -> 4, \_ -> "a");
+6 ┃ f() = (\_ -> 4, \_ -> "a");
   ┃              ▔

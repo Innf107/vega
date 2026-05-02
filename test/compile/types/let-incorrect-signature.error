@@ -1,16 +1,16 @@
-$FILE:5:22: ERROR:
+$FILE:7:22: ERROR:
 Type mismatch
   Unable to unify
     expected type internal:Internal:String
       actual type internal:Internal:Int
   ┃ 
-5 ┃     let y : String = x;
+7 ┃     let y : String = x;
   ┃                      ▔
-$FILE:6:5: ERROR:
+$FILE:8:5: ERROR:
 Type mismatch
   Unable to unify
     expected type internal:Internal:Int
       actual type internal:Internal:String
   ┃ 
-6 ┃     y
+8 ┃     y
   ┃     ▔

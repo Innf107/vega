@@ -1,4 +1,7 @@
 -- type: error
+
+import internal:Internal (String)
+
 f : ((Int, String)) -> Int;
 f((x, y, z)) = x;
 

@@ -1,0 +1,12 @@
+-- type: print(5)
+
+import internal:Internal (debugInt)
+
+data Identity(a) = Identity(a)
+
+main : () -> ()
+main() = {
+    match Identity(5) {
+        Identity(x) -> debugInt(x)
+    }
+}
