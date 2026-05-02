@@ -209,10 +209,10 @@ compileExpr expr = do
                 )
         Vega.VisibleTypeApplication{} -> deferToValue
         Vega.Lambda{parameters, body} -> do
-            let caseTree = PatternMatching.serializeSubPatterns parameters ()
-            variables <- for parameters \_ -> do
+            let caseTree = PatternMatching.serializeSubPatterns (fmap fst parameters) ()
+            variables <- for parameters \(_pattern, representation) -> do
                 local <- newLocal
-                representation <- undefined
+                representation <- convertRepresentation representation
                 pure (local, representation)
             (bodyStatements, body) <- compileCaseTree (\() -> compileExpr_ body) caseTree (fmap (\(localName, _) -> Core.Var (Core.Local localName)) variables)
             pure ([], Core.Lambda variables bodyStatements body, Core.functionRepresentation)

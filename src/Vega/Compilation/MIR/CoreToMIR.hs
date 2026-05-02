@@ -27,6 +27,7 @@ import Vega.Pretty qualified as Pretty
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax qualified as Vega
 import Vega.Util (assert, forFoldLM, forIndexed_, indexed, mapAccumLM)
+import qualified Vega.Builtins as Builtins
 
 type Compile es = (GraphPersistence :> es, Trace :> es, NewUnique :> es, State CurrentDeclarationState :> es)
 
@@ -380,16 +381,18 @@ compileVarInstantiation block var representationArguments = do
         Core.Local name -> do
             (var, _) <- getLocal name
             pure (block, var)
-        Core.Global globalName -> do
-            -- TODO: detect if name is a function and return MIR.LoadGlobalClosure in that case instead
-            var <- newVar globalName.name
-            GraphPersistence.getGlobalRepresentation globalName >>= \case
-                GlobalVar representation -> do
-                    block <- addInstruction block (MIR.LoadGlobal{var, representationArguments, globalName, representation})
-                    pure (block, var)
-                GlobalClosure -> do
-                    block <- addInstruction block (MIR.LoadGlobalClosure{var, representationArguments, functionName = globalName})
-                    pure (block, var)
+        Core.Global globalName
+            | Just _ <- Builtins.asPrimop globalName -> do
+                undefined
+            | otherwise -> do
+                var <- newVar globalName.name
+                GraphPersistence.getGlobalRepresentation globalName >>= \case
+                    GlobalVar representation -> do
+                        block <- addInstruction block (MIR.LoadGlobal{var, representationArguments, globalName, representation})
+                        pure (block, var)
+                    GlobalClosure -> do
+                        block <- addInstruction block (MIR.LoadGlobalClosure{var, representationArguments, functionName = globalName})
+                        pure (block, var)
 
 compileValue :: (Compile es) => BlockBuilder -> Core.Value -> Eff es (BlockBuilder, MIR.Variable)
 compileValue block = \case

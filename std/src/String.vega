@@ -9,3 +9,9 @@ replicateChar(char, length) = {
     let array = replicateArray(length, char)
     String({ content = array, offset = 0, length = length })
 }
+
+length : String -> Int
+length(String({ content=_, offset=_, length })) = length
+
+-- Internal definitions (we don't have visibility yet oops)
+

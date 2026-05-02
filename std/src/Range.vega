@@ -1,0 +1,16 @@
+-- TODO: nominal record, etc.
+data Range = Range({fromInclusive : Int, toInclusive : Int})
+
+for : (Range, Int -> ()) -> ()
+for(Range({fromInclusive, toInclusive}), f) = {
+    let go(index) = {
+        if index > toInclusive then {}
+        else {
+            f(index)
+            go(index + 1)
+        }
+    }
+    go(fromInclusive)
+}
+
+

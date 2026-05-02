@@ -541,9 +541,11 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
                             }
                         )
 
-            let checkParameter parameter parameterType = do
-                    checkPattern env parameterType parameter
-            (parameters, envTransformers) <- Seq.unzip <$> zipWithSeqM checkParameter parameters parameterTypes
+            (parameters, envTransformers) <-
+                Seq.unzip <$> for (Seq.zip parameters parameterTypes) \(parameter, parameterType) -> do
+                    (pattern_, envTrans) <- checkPattern env parameterType parameter
+                    representation <- representationOfType (getLoc pattern_) env parameterType
+                    pure ((pattern_, representation), envTrans)
             body <- check (compose envTransformers env) expectedEffect returnType body
             pure (Lambda loc typeParameters parameters body)
         StringLiteral{} -> deferToInference
@@ -697,7 +699,11 @@ infer env ambientEffect expr = do
             case typeParameters of
                 [] -> pure ()
                 _ -> undefined -- error? I don't think we can handle type parameters in infer mode
-            (parameters, parameterTypes, envTransformers) <- unzip3Seq <$> traverse (inferPattern env) parameters
+            (parameters, parameterTypes, envTransformers) <-
+                unzip3Seq <$> for parameters \pattern_ -> do
+                    (pattern_, type_, envTrans) <- inferPattern env pattern_
+                    representation <- representationOfType (getLoc pattern_) env type_
+                    pure ((pattern_, representation), type_, envTrans)
 
             bodyEffect <- MetaVar <$> freshMeta "e" Effect
             (bodyType, body) <- infer (compose envTransformers env) bodyEffect body

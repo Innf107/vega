@@ -200,7 +200,7 @@ data Expr p
     | Lambda
         { loc :: Loc
         , boundTypeParameters :: Seq (Loc, XLocalName p)
-        , parameters :: Seq (Pattern p)
+        , parameters :: Seq (XWithRepresentation p (Pattern p))
         , body :: Expr p
         }
     | StringLiteral Loc Text
