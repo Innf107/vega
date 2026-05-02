@@ -1,0 +1,12 @@
+-- type: print(3)
+
+import internal:Internal (debugInt)
+
+data Blah = Blah(Int, Int)
+
+main : () -> ()
+main() = {
+    match Blah(1, 2) {
+        Blah(x, y) -> debugInt(x + y)
+    }
+}

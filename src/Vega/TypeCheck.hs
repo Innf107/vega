@@ -659,6 +659,7 @@ infer env ambientEffect expr = do
             arguments <- zipWithSeqM checkArguments arguments argumentTypes
 
             returnRepresentation <- representationOfType loc env returnType
+            trace TypeCheck $ "return representation: " <> pretty returnRepresentation
             pure (returnType, Application{loc, functionExpr, arguments, representation = returnRepresentation})
         VisibleTypeApplication{loc, varName, typeArguments = typeArgumentSyntax} -> do
             type_ <- varType env varName
@@ -974,7 +975,7 @@ inferType env syntax = do
             (resultType, resultTypeSyntax) <- checkType env Monomorphized Kind result
             pure (Kind, TypeFunction parameterTypes resultType, TypeFunctionS loc parameterTypeSyntax resultTypeSyntax)
         TupleS loc elements -> do
-            (elementReps, elementTypes, elementTypeSyntax) <- unzip3Seq <$> traverse (inferType env) elements
+            (elementReps, elementTypes, elementTypeSyntax) <- unzip3Seq <$> traverse (inferTypeRep env) elements
             pure (Type (ProductRep elementReps), Tuple elementTypes, TupleS loc elementTypeSyntax)
         RecordS loc fields -> do
             fieldsWithReps <- for fields \(fieldName, fieldType) -> do
