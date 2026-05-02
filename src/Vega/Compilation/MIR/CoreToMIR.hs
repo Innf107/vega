@@ -152,7 +152,9 @@ compileClosureAccesses block = \case
         var <- newVarFromName variableName
         registerVariable variableName var variableRepresentation
 
-        (closure, _closureRepresentation) <- getLocal closureParameter
+        (boxedClosure, closureRepresentation) <- getLocal closureParameter
+        closure <- newVar "closure"
+        block <- addInstruction block (MIR.Unbox closure boxedClosure closureRepresentation)
         block <-
             addInstruction
                 block
@@ -508,7 +510,7 @@ compileLambda block var parameters returnRepresentation statements returnExpr = 
     lambdaDeclarations <-
         compileFunction
             lambdaName
-            (parameters <> [(closureParameter, payloadRepresentation)])
+            (parameters <> [(closureParameter, Core.PrimitiveRep Vega.BoxedRep)])
             returnRepresentation
             statements
             returnExpr
