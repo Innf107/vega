@@ -321,9 +321,7 @@ compileInstruction builder = \case
                     pointer <- case offset of
                         0 -> pure productPointer
                         _ -> buildGEPOffset builder productPointer offset ""
-                    store <- LLVMBuilder.buildStore builder value pointer
-                    LLVM.setAlignment store (Alignment.toInt (Layout.alignment subLayout))
-                    pure ()
+                    buildComplexStore builder subLayout value pointer
     MIR.SumConstructor{var, tag, payload, representation} -> do
         (value, _) <- lookupVar payload
         layout <- Layout.representationLayout representation
