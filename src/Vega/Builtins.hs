@@ -193,6 +193,7 @@ defaultImportScope =
                         , "Bool"
                         , "Array"
                         , "Box"
+                        , "Pointer"
                         , "panic"
                         , "box"
                         , "unbox"

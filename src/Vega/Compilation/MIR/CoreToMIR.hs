@@ -106,6 +106,8 @@ compileDeclaration :: (GraphPersistence :> es, Trace :> es, NewUnique :> es) => 
 compileDeclaration = \case
     Core.DefineFunction{name, representationParameters = _, parameters, returnRepresentation, statements, result} -> do
         compileFunction name parameters returnRepresentation statements result []
+    Core.DefineExternalFunction{name, externalName, parameterRepresentations, returnRepresentation} -> do
+        pure [MIR.DefineExternalFunction{name, externalName, parameterRepresentations, returnRepresentation}]
 
 data ClosureEntry = MkClosureEntry
     { variableName :: LocalCoreName
@@ -137,7 +139,7 @@ compileFunction functionName parameters returnRepresentation statements returnEx
         pure (initialBlock.descriptor, mirParameters)
     let declaration =
             MIR.DefineFunction
-                { name = Core.Global functionName
+                { name = functionName
                 , parameters = mirParameters
                 , returnRepresentation
                 , blocks = finalDeclarationState.blocks

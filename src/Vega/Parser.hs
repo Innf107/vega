@@ -265,12 +265,20 @@ defineVariantType = do
 defineExternalFunction :: Parser (Declaration Parsed)
 defineExternalFunction = do
     startLoc <- single External
-    name <- identifier
+    literalName <- identifier
     _ <- single Colon
     type_ <- type_
+    externalNameWithLoc <- optional do
+        _ <- single Equals
+        stringLit
 
-    (declarationName, name) <- globalNamesForCurrentModule name
-    pure (MkDeclaration{name = declarationName, loc = startLoc <> getLoc type_, syntax = DefineExternalFunction{name, type_}})
+    (declarationName, name) <- globalNamesForCurrentModule literalName
+
+    let (loc, externalName) = case externalNameWithLoc of
+            Just (externalName, endLoc) -> (startLoc <> endLoc, externalName)
+            Nothing -> (startLoc <> getLoc type_, literalName)
+
+    pure (MkDeclaration{name = declarationName, loc, syntax = DefineExternalFunction{name, type_, externalName, representations = ()}})
 
 -- TODO: (k1 + ... + kn), (k1 * .. * kn)
 type_ :: Parser (TypeSyntax Parsed)

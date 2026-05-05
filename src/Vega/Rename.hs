@@ -234,9 +234,9 @@ renameDeclarationSyntax = \case
 
             pure (loc, dataConstructorName, parameters)
         pure (DefineVariantType{name, typeParameters, constructors})
-    DefineExternalFunction{name, type_} -> do
+    DefineExternalFunction{name, externalName, type_, representations} -> do
         type_ <- renameTypeSyntax emptyEnv type_
-        pure (DefineExternalFunction{name, type_})
+        pure (DefineExternalFunction{name, externalName, type_, representations})
 
 renameTypeSyntax :: (Rename es) => Env -> TypeSyntax Parsed -> Eff es (TypeSyntax Renamed)
 renameTypeSyntax env = \case

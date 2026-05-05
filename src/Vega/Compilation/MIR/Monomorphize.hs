@@ -36,7 +36,7 @@ type Monomorphize es =
 --      but we still keep monomorphized names for the actual declaration and skip needing to traverse them all again at the end
 data MonomorphizedDefinitions = MkMonomorphizedDeclarations
     { monomorphizedSoFar :: HashMap (Vega.GlobalName, Seq Representation) Vega.GlobalName
-    , declarations :: HashMap CoreName MIR.Declaration
+    , declarations :: HashMap Vega.GlobalName MIR.Declaration
     }
 
 monomorphize :: (Trace :> es) => MIR.Program -> Vega.GlobalName -> Eff es MIR.Program
@@ -64,11 +64,11 @@ monomorphizeDeclaration name argumentRepresentations
                 let instantiationName = monomorphizedName name argumentRepresentations
                 modify (\state -> state{monomorphizedSoFar = HashMap.insert (name, argumentRepresentations) instantiationName monomorphizedSoFar})
 
-                let preMonoDeclaration = case HashMap.lookup (Core.Global name) ?program.declarations of
+                let preMonoDeclaration = case HashMap.lookup name ?program.declarations of
                         Just declaration -> declaration
                         Nothing -> panic $ "Declaration not found: " <> Vega.prettyGlobal Vega.VarKind name
                 declaration <- substituteMonomorphizedDeclaration instantiationName preMonoDeclaration argumentRepresentations
-                modify (\state -> state{declarations = HashMap.insert (Core.Global instantiationName) declaration state.declarations})
+                modify (\state -> state{declarations = HashMap.insert instantiationName declaration state.declarations})
                 pure instantiationName
 
 substituteMonomorphizedDeclaration ::
@@ -90,7 +90,9 @@ substituteMonomorphizedDeclaration instantiationName declaration arguments = do
 
             blocks <- for blocks monomorphizeBlock
 
-            pure (MIR.DefineFunction{name = Core.Global instantiationName, parameters, returnRepresentation, init, blocks})
+            pure (MIR.DefineFunction{name = instantiationName, parameters, returnRepresentation, init, blocks})
+        -- External functions cannot be representation polymorphic anyway
+        declaration@MIR.DefineExternalFunction{} -> pure declaration
 
 monomorphizeBlock :: (Monomorphize es) => MIR.Block -> Eff es MIR.Block
 monomorphizeBlock block = do

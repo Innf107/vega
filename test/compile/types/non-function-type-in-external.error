@@ -1,0 +1,7 @@
+$FILE:3:1: ERROR:
+Non-function type in external declaration for non-function-type-in-external:Main:putc
+  internal:Internal:Int
+    is not a valid type for external declarations
+  ┃ 
+3 ┃ external putc : Int
+  ┃ ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔

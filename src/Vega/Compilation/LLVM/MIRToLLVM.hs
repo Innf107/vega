@@ -102,7 +102,7 @@ addMainFunction entryPoint module_ = do
     LLVMBuilder.positionBuilderAtEnd builder initialBlock
 
     entryPointFunction <-
-        LLVM.getNamedFunction module_ (renderLLVMName (Core.Global entryPoint)) >>= \case
+        LLVM.getNamedFunction module_ (renderLLVMName entryPoint) >>= \case
             Nothing -> panic $ "Entry point not found: " <> Vega.prettyGlobal Vega.VarKind entryPoint
             Just entryPointFunction -> pure entryPointFunction
     callInstruction <- LLVMBuilder.buildCall builder (LLVM.functionType [] LLVM.voidType False) entryPointFunction [] ""
@@ -179,6 +179,37 @@ forwardDeclareDeclaration = \case
             Layout.ZeroSized -> do
                 _ <- LLVMBuilder.buildRetVoid builder
                 pure ()
+    MIR.DefineExternalFunction{name, externalName, parameterRepresentations, returnRepresentation} -> do
+        externalParameterTypes <- for parameterRepresentations externalTypeForRepresentation
+        externalReturnType <- externalTypeForRepresentation returnRepresentation
+        let externalFunctionType = attributeFunctionType (viaList (fmap (\parameter -> (parameter, [])) externalParameterTypes)) (externalReturnType, [])
+
+        -- We declare the actual external function first
+        externalFunction <- addFunctionWithAttributes ?module_ externalName externalFunctionType
+        LLVM.setFunctionCallConv externalFunction LLVM.ccallConv
+
+        -- And then we define the vega wrapper that converts arguments as necessary
+        parameterLayouts <- for parameterRepresentations Layout.representationLayout
+        returnLayout <- Layout.representationLayout returnRepresentation
+        (internalFunctionType, _sret) <- functionLLVMType parameterLayouts returnLayout
+
+        wrapperFunction <- addFunctionWithAttributes ?module_ (renderLLVMName name) internalFunctionType
+        LLVM.setFunctionCallConv wrapperFunction LLVM.tailCallConv
+
+        block <- LLVM.appendBasicBlock wrapperFunction ""
+
+        builder <- LLVMBuilder.createBuilder
+        LLVMBuilder.positionBuilderAtEnd builder block
+
+        result <- buildCallWithAttributes builder externalFunctionType externalFunction (viaList $ Seq.mapWithIndex (\i _ -> LLVM.getParam wrapperFunction i) parameterLayouts) ""
+        case Layout.kind returnLayout of
+            Layout.AggregatePointer -> undefined
+            Layout.ZeroSized -> do
+                _ <- LLVMBuilder.buildRetVoid builder
+                pure ()
+            Layout.LLVMScalar _ -> do
+                _ <- LLVMBuilder.buildRet builder result
+                pure ()
 
 compileDeclaration ::
     ( ?context :: LLVM.Context
@@ -203,7 +234,7 @@ compileDeclaration = \case
 
             function <-
                 LLVM.getNamedFunction ?module_ (renderLLVMName name) >>= \case
-                    Nothing -> panic $ "Unable to access function '" <> pretty name <> "' that should have been forward-declared."
+                    Nothing -> panic $ "Unable to access function '" <> Vega.prettyGlobal Vega.VarKind name <> "' that should have been forward-declared."
                     Just function_ -> pure function_
             let ?function = function
             let ?functionEnv =
@@ -242,11 +273,14 @@ compileDeclaration = \case
                             put state{outstandingBlocks = []}
                             for_ blockDescriptors \descriptor -> do
                                 let block = case HashMap.lookup descriptor blocks of
-                                        Nothing -> panic $ "Unknown block descriptor: " <> pretty descriptor <> " in function " <> pretty name
+                                        Nothing -> panic $ "Unknown block descriptor: " <> pretty descriptor <> " in function " <> Vega.prettyGlobal Vega.VarKind name
                                         Just block -> block
                                 compileRegisteredBlock builder descriptor block
                             go
             go
+    MIR.DefineExternalFunction{} -> do
+        -- We already defined everything for this in the forward declaration pass
+        pure ()
 
 compileRegisteredBlock :: (Compile es) => LLVMBuilder.Builder -> MIR.BlockDescriptor -> MIR.Block -> Eff es ()
 compileRegisteredBlock builder descriptor block = do
@@ -348,7 +382,7 @@ compileInstruction builder = \case
                 buildComplexStore builder payloadLayout value payloadPointer
     MIR.LoadFunctionPointer{var, functionName} -> do
         functionPointer <-
-            LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
+            LLVM.getNamedFunction ?module_ (renderLLVMName functionName) >>= \case
                 Nothing -> panic $ "Trying to create closure for non-existent top-level function: " <> Vega.prettyGlobal Vega.VarKind functionName
                 Just function_ -> pure function_
         insertVarMapping var functionPointer Layout.rawPointerLayout
@@ -359,7 +393,7 @@ compileInstruction builder = \case
         | sizeInBits `mod` 8 /= 0 -> panic "Int layouts with non-byte sizes are not supported yet"
         | otherwise -> do
             let sizeInBytes = sizeInBits `div` 8
-            insertVarMapping var (LLVM.constInt LLVM.int64Type (fromIntegral literal) True) (Layout.intLayoutInBytes sizeInBytes)
+            insertVarMapping var (LLVM.constInt (LLVM.intType sizeInBits) (fromIntegral literal) True) (Layout.intLayoutInBytes sizeInBytes)
     MIR.LoadSumTag{var, sum} -> do
         (sumValue, sumLayout) <- lookupVar sum
         let tagLayout = Layout.intLayoutInBytes (Layout.sumTagSizeInBytes sumLayout)
@@ -381,7 +415,7 @@ compileInstruction builder = \case
             returnLayout <- Layout.representationLayout returnRepresentation
 
             function <-
-                LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
+                LLVM.getNamedFunction ?module_ (renderLLVMName functionName) >>= \case
                     Nothing -> panic $ "Trying to generate call to non-existent function " <> pretty (Core.Global functionName)
                     Just function -> pure function
 
@@ -484,7 +518,7 @@ compileTerminator builder = \case
             returnLayout <- Layout.representationLayout returnRepresentation
 
             function <-
-                LLVM.getNamedFunction ?module_ (renderLLVMName (Core.Global functionName)) >>= \case
+                LLVM.getNamedFunction ?module_ (renderLLVMName functionName) >>= \case
                     Nothing -> panic $ "Trying to generate call to non-existent function " <> pretty (Core.Global functionName)
                     Just function -> pure function
 
@@ -518,6 +552,22 @@ compileTerminator builder = \case
         pure ()
     _ -> undefined
 
+externalTypeForRepresentation :: (?context :: LLVM.Context) => Representation -> Eff es LLVM.Type
+externalTypeForRepresentation representation = case representation of
+    -- This is a vega boolean
+    Core.SumRep [Core.ProductRep [], Core.ProductRep []] -> pure LLVM.int1Type
+    Core.ProductRep [] -> pure LLVM.voidType
+    Core.PrimitiveRep primitive -> case primitive of
+        Vega.PointerRep -> pure LLVM.pointerType
+        Vega.IntRep{sizeInBits} -> pure (LLVM.intType sizeInBits)
+        Vega.DoubleRep -> pure LLVM.doubleType
+        Vega.BoxedRep -> invalidRepresentation
+    Core.ProductRep{} -> invalidRepresentation
+    Core.SumRep{} -> invalidRepresentation
+    Core.ArrayRep{} -> invalidRepresentation
+    Core.ParameterRep{} -> invalidRepresentation
+    where
+        invalidRepresentation = panic $ "Invalid representation for external type: " <> pretty representation
 compilePrimopCall ::
     (Compile es) =>
     LLVMBuilder.Builder ->
@@ -707,7 +757,7 @@ buildClosure :: (Compile es) => LLVMBuilder.Builder -> Vega.GlobalName -> Layout
 buildClosure builder functionName payloadLayout closureValue varName = do
     functionPointer <-
         -- We need to use the closure wrapper instead of the actual function here. See Note: [Closure Representation].
-        LLVM.getNamedFunction ?module_ (closureWrapperNameForFunction (Core.Global functionName)) >>= \case
+        LLVM.getNamedFunction ?module_ (closureWrapperNameForFunction functionName) >>= \case
             Nothing -> panic $ "Trying to create closure for non-existent top-level function: " <> Vega.prettyGlobal Vega.VarKind functionName
             Just function_ -> pure function_
     let combinedLayout = Layout.closureLayout payloadLayout
@@ -852,7 +902,7 @@ asVar_ var layout cont = do
     _ <- asVar var layout cont
     pure ()
 
-closureWrapperNameForFunction :: Core.CoreName -> Text
+closureWrapperNameForFunction :: Vega.GlobalName -> Text
 closureWrapperNameForFunction coreName = renderLLVMName coreName <> "__closure"
 
 lookupVar :: (HasCallStack, Compile es) => MIR.Variable -> Eff es (LLVM.Value, Layout)
@@ -878,10 +928,8 @@ renderVariable :: MIR.Variable -> Text
 renderVariable (MIR.MkVariable name index) = name <> "_" <> show index
 
 -- TODO: consider using more standard name mangling i guess
-renderLLVMName :: Core.CoreName -> Text
-renderLLVMName = \case
-    Core.Global name -> "_vega_" <> renderPackageName name.moduleName.package <> "::" <> Text.intercalate "/" (toList (name.moduleName.subModules)) <> "::" <> name.name
-    Core.Local _ -> undefined
+renderLLVMName :: Vega.GlobalName -> Text
+renderLLVMName name = "_vega_" <> renderPackageName name.moduleName.package <> "::" <> Text.intercalate "/" (toList (name.moduleName.subModules)) <> "::" <> name.name
 
 sretAttribute :: (?context :: LLVM.Context, IOE :> es) => LLVM.Type -> Eff es LLVM.Attribute
 sretAttribute targetType = do

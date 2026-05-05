@@ -23,21 +23,28 @@ import GHC.Generics (Generically (..))
 import Relude hiding (Identity)
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation (..))
 import Vega.Panic (panic)
-import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, localIdentText, lparen, number, pretty, rparen, (<+>))
+import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, localIdentText, lparen, number, pretty, rparen, (<+>), literal)
 import Vega.Syntax qualified as Vega
 
 data Program = MkProgram
-    { declarations :: HashMap CoreName Declaration
+    { declarations :: HashMap Vega.GlobalName Declaration
     }
     deriving (Generic)
 
-data Declaration = DefineFunction
-    { name :: CoreName
-    , parameters :: Seq (Variable, Representation)
-    , returnRepresentation :: Representation
-    , init :: BlockDescriptor
-    , blocks :: HashMap BlockDescriptor Block
-    }
+data Declaration
+    = DefineFunction
+        { name :: Vega.GlobalName
+        , parameters :: Seq (Variable, Representation)
+        , returnRepresentation :: Representation
+        , init :: BlockDescriptor
+        , blocks :: HashMap BlockDescriptor Block
+        }
+    | DefineExternalFunction
+        { name :: Vega.GlobalName
+        , externalName :: Text
+        , parameterRepresentations :: Seq Representation
+        , returnRepresentation :: Representation
+        }
     deriving (Generic)
 
 newtype BlockDescriptor = MkBlockDescriptor Unique
@@ -142,7 +149,7 @@ instance Pretty Declaration where
     pretty :: Declaration -> Doc Ann
     pretty = \case
         DefineFunction{name, parameters, returnRepresentation, init, blocks} -> do
-            pretty name
+            Vega.prettyGlobal Vega.VarKind name
                 <> typedArguments parameters
                     <+> keyword ":"
                     <+> pretty returnRepresentation
@@ -159,6 +166,15 @@ instance Pretty Declaration where
                     )
                 <> "\n"
                 <> rparen "}"
+        DefineExternalFunction{name, externalName, parameterRepresentations, returnRepresentation} ->
+            keyword "external"
+                <+> Vega.prettyGlobal Vega.VarKind name
+                <+> keyword ":"
+                <+> arguments parameterRepresentations
+                <+> keyword "->"
+                <+> pretty returnRepresentation
+                <+> keyword "="
+                <+> literal externalName
 
 prettyBlock :: BlockDescriptor -> Block -> Doc Ann
 prettyBlock descriptor MkBlock{phis = MkPhis phiMap, instructions, terminator} =

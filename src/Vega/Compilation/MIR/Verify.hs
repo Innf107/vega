@@ -21,7 +21,7 @@ import Vega.Syntax (PrimitiveRep (..))
 import Vega.Syntax qualified as Vega
 import Vega.Util (smallestPowerOfTwoFitting)
 
-type FunctionSignatures = HashMap CoreName (Seq Representation, Representation)
+type FunctionSignatures = HashMap Vega.GlobalName (Seq Representation, Representation)
 
 data VerifyState = MkVerifyState
     { representations :: HashMap MIR.Variable Representation
@@ -60,6 +60,8 @@ verifyDeclaration = \case
                 runReader descriptor (verifyBlock block)
 
         pure ()
+    -- We can't actually verify anything about external functions here
+    MIR.DefineExternalFunction{} -> pure ()
 
 repOf :: (Verify es) => MIR.Variable -> Eff es (Maybe Representation)
 repOf var = do
@@ -158,7 +160,7 @@ verifyInstruction = \case
             Just primop -> pure (Builtins.primopRepresentation primop representationArguments)
             Nothing -> do
                 functionSignatures <- ask @FunctionSignatures
-                case HashMap.lookup (Core.Global functionName) functionSignatures of
+                case HashMap.lookup functionName functionSignatures of
                     Nothing -> panic $ "Missing signature for function" <+> pretty (Core.Global functionName)
                     Just signature -> pure signature
 
@@ -287,8 +289,9 @@ verifyTerminator = \case
 verificationError :: (Output (Doc Ann) :> es) => Doc Ann -> Eff es ()
 verificationError message = output message
 
-computeFunctionSignatures :: MIR.Program -> HashMap CoreName (Seq Representation, Representation)
+computeFunctionSignatures :: MIR.Program -> HashMap Vega.GlobalName (Seq Representation, Representation)
 computeFunctionSignatures program = do
     let toSignature = \case
             MIR.DefineFunction{name, parameters, returnRepresentation} -> Just (name, (fmap snd parameters, returnRepresentation))
+            MIR.DefineExternalFunction{name, parameterRepresentations, returnRepresentation} -> Just (name, (parameterRepresentations, returnRepresentation))
     fromList (mapMaybe toSignature (toList program.declarations))

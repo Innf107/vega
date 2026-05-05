@@ -308,9 +308,52 @@ checkDeclarationSyntax loc = \case
             (representations, _, parameters) <- unzip3Seq <$> traverse (inferTypeRep env) parameters
             pure (name, loc, parameters)
         pure (DefineVariantType{name, typeParameters, constructors})
-    DefineExternalFunction{name, type_} -> do
-        (_, type_) <- checkType emptyEnv Parametric (Type functionRepresentation) type_
-        pure (DefineExternalFunction{name, type_})
+    DefineExternalFunction{name, type_, externalName, representations = ()} -> do
+        let env = emptyEnv
+        -- We could technically check this against (Type functionRep) since we know that the result is
+        -- supposed to be a function, but since we're matching on the type anyway we don't need to do it that way
+        -- and doing so would only produce an unhelpful error message
+        (_, type_, typeSyntax) <- inferTypeRep env type_
+        -- We *probably* don't need followMetas here since the type is entirely user written,
+        -- but there might be meta variables appearing in kinds and it's not like it particularly hurts
+        followMetas type_ >>= \case
+            -- TODO: foralls should be okay here as long as they only have parametric parameters i think?
+            Function arguments effect resultType -> do
+                -- TODO: would be nice to provide a better error message here
+                -- (but we'll want to allow (or even demand?) at least IO here anyway)
+                subsumes loc env effect Pure
+                -- TODO: Use more specific locations here. This will require us to actually match on the type syntax to get them out
+                -- (although we can't rely on the type syntax to get the actual argument types since we could
+                -- have something of the form `external f : SomeTypeSynonym` that is not syntactically a function type)
+                parameterRepresentations <- for arguments (checkValidExternalType loc env)
+                resultRepresentation <- checkValidExternalType loc env resultType
+                pure
+                    ( DefineExternalFunction
+                        { name
+                        , externalName
+                        , type_ = typeSyntax
+                        , representations =
+                            ExternalFunctionRepresentations
+                                { parameters = parameterRepresentations
+                                , result = resultRepresentation
+                                }
+                        }
+                    )
+            _ -> do
+                typeError (NonFunctionTypeInExternal{loc, name, type_})
+                dummyResultRepresentation <- dummyTypeMeta
+                pure
+                    ( DefineExternalFunction
+                        { name
+                        , externalName
+                        , type_ = typeSyntax
+                        , representations =
+                            ExternalFunctionRepresentations
+                                { parameters = []
+                                , result = dummyResultRepresentation
+                                }
+                        }
+                    )
 
 checkPattern :: (TypeCheck es) => Env -> Type -> Pattern Renamed -> Eff es (Pattern Typed, Env -> Env)
 checkPattern env expectedType pattern_ = withTrace TypeCheck ("checkPattern " <> showHeadConstructor pattern_) do
@@ -1101,6 +1144,29 @@ kindOf loc env = \case
     PrimitiveRep{} -> pure Rep
     Integer -> pure Kind
     Kind -> pure Kind
+
+checkValidExternalType :: (TypeCheck es) => Loc -> Env -> Type -> Eff es Representation
+checkValidExternalType loc env type_ = do
+    representation <- representationOfType loc env type_
+    followMetas type_ >>= \case
+        -- We are going to replace this with something user-extensible (a bit like Storable in haskell)
+        -- eventually, but until then we just hardcode all FFI-compatible types directly
+        TypeApplication (TypeConstructor name) _argument
+            -- the argument to a pointer doesn't actually matter since it's a phantom parameter anyway
+            | Global globalName <- name, globalName == internalName "Pointer" -> pure representation
+        TypeConstructor name
+            | Global globalName <- name, globalName == internalName "Int" -> pure representation
+            | Global globalName <- name, globalName == internalName "UInt" -> pure representation
+            | Global globalName <- name, globalName == internalName "Int32" -> pure representation
+            | Global globalName <- name, globalName == internalName "UInt32" -> pure representation
+            | Global globalName <- name, globalName == internalName "Int16" -> pure representation
+            | Global globalName <- name, globalName == internalName "UInt16" -> pure representation
+            | Global globalName <- name, globalName == internalName "Int8" -> pure representation
+            | Global globalName <- name, globalName == internalName "UInt8" -> pure representation
+        Tuple [] -> pure representation
+        _ -> do
+            typeError (InvalidExternalType{loc, type_})
+            MetaVar <$> freshMeta "dummy" Rep
 
 -- | Like checkType but on evaluated `Type`s rather than TypeSyntax
 checkEvaluatedType :: (TypeCheck es) => Loc -> Env -> Kind -> Type -> Eff es ()

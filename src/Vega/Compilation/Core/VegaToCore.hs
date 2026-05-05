@@ -114,8 +114,15 @@ compileDeclarationSyntax _declarationName = \case
                     , representationParameters = representationParameters
                     }
                 ]
-    Vega.DefineVariantType{constructors} -> pure []
-    Vega.DefineExternalFunction{} -> pure []
+    Vega.DefineVariantType{} -> pure []
+    Vega.DefineExternalFunction{name, externalName, representations} -> do
+        GraphPersistence.setGlobalRepresentation name GraphPersistence.GlobalClosure
+        let env = MkEnv{monomorphizableRepresentationVariables = mempty}
+        runReader env do
+            parameterRepresentations <- for representations.parameters convertRepresentation
+            returnRepresentation <- convertRepresentation representations.result
+
+            pure [Core.DefineExternalFunction{name, externalName, parameterRepresentations, returnRepresentation}]
 
 -- | Like 'compileExpr' but discards the representation
 compileExpr_ :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Expr)
@@ -748,6 +755,7 @@ coalesceVariables = \case
                 , representationParameters
                 }
             )
+    declaration@Core.DefineExternalFunction{} -> pure declaration
 
 coalesceStatements :: Substitution -> Seq Core.Statement -> Eff es (Substitution, Substitution -> Seq Core.Statement)
 coalesceStatements substitution = \case

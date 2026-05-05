@@ -101,60 +101,71 @@ let runCompiledProgram(backend, testName) = match backend {
     }
 }
 
+let shouldSkip(backend, testFile) = {
+    match regexpMatch("--\\s*skip-backend:\\s*${backendToString(backend)}", !cat testFile) {
+        [] -> false
+        _ -> true
+    }
+}
+
 let runTest : (Backend, String) -> < Passed, Failed(String) >
 let runTest(backend, testFile) = {
     chdir(testdir)
 
-    let testName = !basename "-s" ".vega" testFile
-
-    let testKind = parseTestKind(testFile)
-
-    !rm "-rf" "./run"
-    !mkdir "./run"
-    writeFile("./run/vega.yaml", compileYmlFile(testName, backend))
-    !cp testFile "./run/Main.vega"
-
-    chdir("./run")
-    let compileResult = try {
-        let _ = !bash "-c" "${vega} build ${if skipMIRVerification then "" else "--verify-mir"} 2>&1"
-        Compiled
-    } with {
-        CommandFailure(failure) -> {
-            CompilerError(failure.stdout)
-        }
+    if shouldSkip(backend, testFile) then {
+        Passed
     }
-    match testKind {
-        ExpectCompile -> match compileResult {
-            Compiled -> Passed
-            CompilerError(output) -> Failed("\e[31m${output}")
-        }
-        ExpectFail(expectedMessage) -> match compileResult {
-            Compiled -> Failed("\e[31m\e[1mTest should have failed to compile. Expected error message:\n\e[0m\e[31m${expectedMessage}\e[0m")
-            CompilerError(actualMessage) -> {
-                # We don't want to include the exact, machine-dependent path of the file here
-                # so we allow error files to use $FILE to refer to it.
-                let expectedMessage = regexpReplace("\\$FILE", "${!pwd}/./Main.vega", expectedMessage)
-                if (expectedMessage == actualMessage) then {
-                    Passed
-                } else {
-                    Failed("\e[0m\n\e[31m\e[1mExpected error message:\e[0m\e[31m ${expectedMessage}\n\e[1mActual error message:\e[0m\e[31m ${actualMessage}\e[0m")
-                }
+    else {
+        let testName = !basename "-s" ".vega" testFile
+
+        let testKind = parseTestKind(testFile)
+
+        !rm "-rf" "./run"
+        !mkdir "./run"
+        writeFile("./run/vega.yaml", compileYmlFile(testName, backend))
+        !cp testFile "./run/Main.vega"
+
+        chdir("./run")
+        let compileResult = try {
+            let _ = !bash "-c" "${vega} build ${if skipMIRVerification then "" else "--verify-mir"} 2>&1"
+            Compiled
+        } with {
+            CommandFailure(failure) -> {
+                CompilerError(failure.stdout)
             }
         }
-        ExpectPrint(expectation) -> match compileResult {
-            CompilerError(output) -> Failed("\e[31m${output}")
-            Compiled -> {
-                let actualOutput = runCompiledProgram(backend, testName)
-                if (actualOutput == expectation) then {
-                    Passed
-                } else {
-                    Failed("\e[0m\e[31m\e[1mExpected:\e[0m\e[31m ${expectation}\n\e[0m\e[31m\e[1m  Actual:\e[0m\e[31m ${actualOutput}")
+        match testKind {
+            ExpectCompile -> match compileResult {
+                Compiled -> Passed
+                CompilerError(output) -> Failed("\e[31m${output}")
+            }
+            ExpectFail(expectedMessage) -> match compileResult {
+                Compiled -> Failed("\e[31m\e[1mTest should have failed to compile. Expected error message:\n\e[0m\e[31m${expectedMessage}\e[0m")
+                CompilerError(actualMessage) -> {
+                    # We don't want to include the exact, machine-dependent path of the file here
+                    # so we allow error files to use $FILE to refer to it.
+                    let expectedMessage = regexpReplace("\\$FILE", "${!pwd}/./Main.vega", expectedMessage)
+                    if (expectedMessage == actualMessage) then {
+                        Passed
+                    } else {
+                        Failed("\e[0m\n\e[31m\e[1mExpected error message:\e[0m\e[31m ${expectedMessage}\n\e[1mActual error message:\e[0m\e[31m ${actualMessage}\e[0m")
+                    }
+                }
+            }
+            ExpectPrint(expectation) -> match compileResult {
+                CompilerError(output) -> Failed("\e[31m${output}")
+                Compiled -> {
+                    let actualOutput = runCompiledProgram(backend, testName)
+                    if (actualOutput == expectation) then {
+                        Passed
+                    } else {
+                        Failed("\e[0m\e[31m\e[1mExpected:\e[0m\e[31m ${expectation}\n\e[0m\e[31m\e[1m  Actual:\e[0m\e[31m ${actualOutput}")
+                    }
                 }
             }
         }
     }
 }
-
 let isKnownFailure(testFile) = {
     match regexpMatch("--\\s*KNOWN", !cat testFile) {
         [] -> false

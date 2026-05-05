@@ -25,13 +25,19 @@ data LocalCoreName
 -- TODO: do we really want to use a seq of declarations over a hash map or something?
 data Declaration
     = DefineFunction
-    { name :: GlobalName
-    , representationParameters :: Debruijn.Limit
-    , parameters :: Seq (LocalCoreName, Representation)
-    , returnRepresentation :: Representation
-    , statements :: Seq Statement
-    , result :: Expr
-    }
+        { name :: GlobalName
+        , representationParameters :: Debruijn.Limit
+        , parameters :: Seq (LocalCoreName, Representation)
+        , returnRepresentation :: Representation
+        , statements :: Seq Statement
+        , result :: Expr
+        }
+    | DefineExternalFunction
+        { name :: GlobalName
+        , externalName :: Text
+        , parameterRepresentations :: Seq Representation
+        , returnRepresentation :: Representation
+        }
 
 data Expr
     = Value Value
@@ -147,10 +153,19 @@ instance Pretty Declaration where
                             parameterCount -> "[" <> number parameterCount <> "]"
                        )
                     <> arguments (fmap (\(param, rep) -> PrettyId (pretty param <+> keyword ":" <+> pretty rep)) parameters)
-                        <+> ":"
+                        <+> keyword ":"
                         <+> pretty returnRepresentation
                         <+> keyword "="
                         <+> prettyBody statements result
+        DefineExternalFunction{name, externalName, parameterRepresentations, returnRepresentation} ->
+            keyword "external"
+                <+> prettyGlobal VarKind name
+                <+> keyword ":"
+                <+> arguments parameterRepresentations
+                <+> keyword "->"
+                <+> pretty returnRepresentation
+                <+> keyword "="
+                <+> literal externalName
 
 instance Pretty Statement where
     pretty = \case

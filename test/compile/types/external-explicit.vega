@@ -1,0 +1,9 @@
+-- type: print(A)
+-- skip-backend: javascript
+
+external notCalledPutchar : Int32 -> () = "putchar"
+
+main : () -> ()
+main() = {
+    notCalledPutchar(65i32)
+}

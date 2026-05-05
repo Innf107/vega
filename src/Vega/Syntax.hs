@@ -133,9 +133,16 @@ data DeclarationSyntax p
         }
     | DefineExternalFunction
         { name :: GlobalName
+        , externalName :: Text
         , type_ :: TypeSyntax p
+        , representations :: XTypedOnly p (ExternalFunctionRepresentations)
         }
     deriving stock (Generic)
+
+data ExternalFunctionRepresentations = ExternalFunctionRepresentations
+    { parameters :: Seq Representation
+    , result :: Representation
+    }
 
 type family XDefineFunction p where
     XDefineFunction Parsed = ()

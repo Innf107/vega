@@ -38,6 +38,14 @@ compileDeclaration = \case
 
             jsBody <- compileFunctionBody statements result
             pure [JS.Function (JS.compileGlobalName name) jsParameters jsBody]
+    Core.DefineExternalFunction{name, externalName, parameterRepresentations} -> do
+        parameters <- for parameterRepresentations \_ -> newVar
+        pure
+            [ JS.Function
+                (JS.compileGlobalName name)
+                parameters
+                [JS.Return $ JS.Application (JS.Var externalName) (fmap JS.Var parameters)]
+            ]
 
 compileStatements :: (Compile es) => Seq Core.Statement -> Eff es (Seq JS.Statement)
 compileStatements = \case

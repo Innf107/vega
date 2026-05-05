@@ -1,0 +1,9 @@
+-- type: print(A)
+-- skip-backend: javascript
+
+external putchar : Int32 -> ()
+
+main : () -> ()
+main() = {
+    putchar(65i32)
+}

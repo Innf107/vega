@@ -184,6 +184,15 @@ data TypeError
         { loc :: Loc
         , sum :: IntSum
         }
+    | NonFunctionTypeInExternal
+        { loc :: Loc
+        , name :: GlobalName
+        , type_ :: Type
+        }
+    | InvalidExternalType
+        { loc :: Loc
+        , type_ :: Type
+        }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
 
@@ -497,6 +506,16 @@ renderCompilationError = \case
                 emphasis "Unable to solve integer sum\n"
                     <> "  "
                     <> pretty sum <+> keyword "=" <+> number @Int 0
+        NonFunctionTypeInExternal{loc = _, name, type_} -> do
+            align $
+                emphasis "Non-function type in external declaration for" <+> prettyGlobal VarKind name
+                    <> "\n  "
+                    <> pretty type_
+                    <> "\n    is not a valid type for external declarations"
+        InvalidExternalType{loc = _, type_} -> do
+            align $ emphasis "Invalid type in external declaration" <>
+                "\n  " <> pretty type_
+                <> "    cannot be used in external declarations"
     DriverError error -> pure $ case error of
         EntryPointNotFound entryPoint ->
             PlainError $
