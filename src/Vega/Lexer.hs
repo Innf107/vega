@@ -278,7 +278,7 @@ isIdentifierStart :: Char -> Bool
 isIdentifierStart char = Char.isAlpha char || char == '_'
 
 isIdentifier :: Char -> Bool
-isIdentifier char = Char.isAlphaNum char || char `elem` ("_'" :: String)
+isIdentifier char = Char.isAlphaNum char || char `elem` ("_" :: String)
 
 isConstructorStart :: Char -> Bool
 isConstructorStart char = Char.isAlpha char && Char.isUpper char
