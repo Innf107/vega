@@ -169,6 +169,9 @@ parseAndDiff filePath = do
     tokens <- case Lexer.run filePath contents of
         Left error -> throwError_ (Error.LexicalError error)
         Right tokens -> pure tokens
+
+    trace Tokens (pretty filePath <> ":\n  " <> Pretty.align (Pretty.intercalateDoc " " (fmap (\(token, _) -> pretty token) tokens)))
+
     parsedModule <- case Parser.parse moduleName filePath tokens of
         Left errors -> throwError_ (Error.ParseError errors)
         Right parsedModule -> pure parsedModule

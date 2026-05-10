@@ -1,0 +1,19 @@
+-- type: compile
+
+f : { 
+        x : Int,
+        y : Int
+    } -> { x : Int, y : Int }
+f({
+    x,
+    y
+    }) = {
+    
+    {
+        x = x,
+        y = y
+    }
+}
+
+main : () -> ()
+main() = ()

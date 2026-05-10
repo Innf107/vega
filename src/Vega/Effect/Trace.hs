@@ -41,6 +41,7 @@ data Category
     | Reachable
     | CoreRep
     | Monomorphization
+    | Tokens
     deriving (Generic, Show, Enum, Bounded)
 
 data Trace :: Effect where
@@ -71,6 +72,7 @@ data Traces = MkTraces
     , reachable :: Bool
     , coreRepresentations :: Bool
     , monomorphization :: Bool
+    , tokens :: Bool
     }
 
 defaultTraces :: Traces
@@ -91,6 +93,7 @@ defaultTraces =
         , reachable = False
         , coreRepresentations = False
         , monomorphization = False
+        , tokens = False
         }
 
 categoryWidth :: Traces -> Int
@@ -140,6 +143,7 @@ traceEnabledIn category enabledTraces = case category of
     Reachable -> enabledTraces.reachable
     CoreRep -> enabledTraces.coreRepresentations
     Monomorphization -> enabledTraces.monomorphization
+    Tokens -> enabledTraces.tokens
 
 getTraces :: (MonadIO io) => io Traces
 getTraces =
@@ -167,6 +171,7 @@ getTraces =
         ("reachable" : rest) -> go (traces{reachable = True}) rest
         ("core-representations" : rest) -> go (traces{coreRepresentations = True}) rest
         ("monomorphization" : rest) -> go (traces{monomorphization = True}) rest
+        ("tokens" : rest) -> go (traces{tokens = True}) rest
         (trace_ : rest) -> do
             -- TODO: make the warning prettier
             putTextLn $ "WARNING: unrecognized trace category: " <> trace_

@@ -65,6 +65,16 @@ semicolon =
         only :<|| Empty -> pure only
         first :<|| (_ :|> last) -> pure (first <> last)
 
+{- | Parse a single comma, optionally preceeded or followed by one or more semicolons.
+
+This is useful to allow arbitrary line breaks between comma-separated entries. Layout might
+insert a semicolon before or after a comma, but no part of the grammar ever expects a `,;` or `;,` anyway.
+
+@comma@ should be used over direct @single Lexer.Comma@ wherever possible.
+-}
+comma :: Parser Loc
+comma = try (MegaParsec.many (single Lexer.Semicolon) *> single Lexer.Comma) <* MegaParsec.many (single Lexer.Semicolon)
+
 stringLit :: Parser (Text, Loc)
 stringLit = MegaParsec.token match (fromList [Label (fromList "string literal")])
   where
@@ -190,12 +200,12 @@ defineFunction = do
 
     declaredTypeParameters <- option Empty do
         _ <- single LBracket
-        parameters <- (swap <$> identifierWithLoc) `sepBy` (single Comma)
+        parameters <- (swap <$> identifierWithLoc) `sepBy` comma
         _ <- single RBracket
         pure parameters
 
     _ <- single LParen
-    parameters <- pattern_ `sepBy` (single Comma)
+    parameters <- pattern_ `sepBy` comma
     _ <- single RParen
     _ <- single Equals
     body <- expr
@@ -398,7 +408,10 @@ type_ =
                         _ <- single Lexer.Colon
                         value <- type_
                         pure (key, value)
-                fields <- recordField `sepBy1` (single Comma <|> semicolon)
+                    
+                fields <- recordField `sepBy1` comma
+                -- We allow layout to insert a semicolon here
+                _ <- optional semicolon
                 endLoc <- single RBrace
                 pure (RecordS (startLoc <> endLoc) fields)
             ]
@@ -532,7 +545,8 @@ pattern_ = do
                     _ -> pure $ TuplePattern loc patterns
             , do
                 startLoc <- single LBrace
-                fields <- recordField `sepBy1` (single Comma <|> semicolon)
+                fields <- recordField `sepBy1` comma
+                _ <- optional semicolon
                 endLoc <- single RBrace
                 pure (RecordPattern (startLoc <> endLoc) fields)
             , do
@@ -606,7 +620,7 @@ expr = label "expression" exprLogical
                 choice
                     [ do
                         _ <- single LBracket
-                        typeArguments <- type_ `sepBy` (single Comma)
+                        typeArguments <- type_ `sepBy` comma
                         endLoc <- single RBracket
                         pure (VisibleTypeApplication (loc <> endLoc) name typeArguments () ())
                     , pure (Var{loc, instantiatedTypeArguments = (), name, representation = ()})
@@ -618,7 +632,7 @@ expr = label "expression" exprLogical
                 startLoc <- single Lexer.Lambda
                 typeParameters <- option Empty do
                     single LBracket
-                    parameters <- (swap <$> identifierWithLoc) `sepBy` single Comma
+                    parameters <- (swap <$> identifierWithLoc) `sepBy` comma
                     single RBracket
                     pure parameters
                 parameters <- many pattern_
@@ -669,8 +683,9 @@ blockOrRecord = do
         , do
             firstRecordField <- try recordField
             rest <- option [] do
-                _ <- single Lexer.Comma
-                recordField `sepEndBy1` (single Lexer.Comma <|> semicolon)
+                _ <- comma
+                recordField `sepEndBy1` comma
+            _ <- optional semicolon
             -- TODO: error on duplicate keys (here and for record types)
             endLoc <- single Lexer.RBrace
             pure (RecordLiteral (startLoc <> endLoc) (NonEmpty.fromNonEmptyList (firstRecordField :| rest)))
@@ -830,7 +845,7 @@ moduleName = do
 argumentsWithLoc :: Parser a -> Parser (Seq a, Loc)
 argumentsWithLoc parser = do
     startLoc <- single LParen
-    args <- parser `sepBy` (single Comma)
+    args <- parser `sepBy` comma
     endLoc <- single RParen
     pure (args, startLoc <> endLoc)
 
