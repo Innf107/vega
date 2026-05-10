@@ -1,5 +1,7 @@
 
-import internal:Internal (replicateArray)
+import std:Array (copyArray)
+
+import internal:Internal (replicateArray, arrayLength)
 
 -- TODO: this should really be a nominal record
 data String = String({ content : Array(UInt8), offset : Int, length : Int })
@@ -10,8 +12,37 @@ replicateChar(char, length) = {
     String({ content = array, offset = 0, length = length })
 }
 
+fromByteArray : Array(UInt8) -> String
+fromByteArray(array) = {
+    String({ content = array, offset = 0, length = arrayLength(array) })
+}
+
 length : String -> Int
 length(String({ content=_, offset=_, length })) = length
 
--- Internal definitions (we don't have visibility yet oops)
+append : (String, String) -> String
+append(string1, string2) = {
+    -- TODO: use dot notation here
+
+    let String({content = content1, offset = offset1, length = length1 }) = string1
+    let String({content = content2, offset = offset2, length = length2 }) = string2
+
+    let combinedArray = replicateArray(length1 + length2, 0u8)
+    copyArray({
+            targetArray = combinedArray, 
+            targetOffset = 0,
+            sourceArray = content1,
+            sourceOffset = offset1,
+            length = length1
+        })
+    copyArray({
+            targetArray = combinedArray,
+            targetOffset = length1,
+            sourceArray = content2,
+            sourceOffset = offset2,
+            length = length2
+        })
+    String({ content = combinedArray, offset = 0, length = length1 + length2 })
+}
+
 

@@ -1,0 +1,21 @@
+
+import internal:Internal (replicateArray, unsafeWriteArray, unsafeReadArray)
+
+-- TODO: This should probably use some primop that compiles directly to a memmov
+-- TODO: bounds checks lol
+copyArray : forall a. ({ 
+        targetArray : Array(a),
+        targetOffset : Int,
+        sourceArray : Array(a),
+        sourceOffset : Int,
+        length : Int
+    }) -> ()
+copyArray({targetArray, targetOffset, sourceArray, sourceOffset, length}) = {
+    let go(i) = {
+        if i >= length then () else {
+            unsafeWriteArray(targetArray, targetOffset + i, unsafeReadArray(sourceArray, sourceOffset + i))
+        }
+    }
+    go(0)
+}
+
