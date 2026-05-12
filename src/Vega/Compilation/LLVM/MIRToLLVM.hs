@@ -566,8 +566,8 @@ externalTypeForRepresentation representation = case representation of
     Core.SumRep{} -> invalidRepresentation
     Core.ArrayRep{} -> invalidRepresentation
     Core.ParameterRep{} -> invalidRepresentation
-    where
-        invalidRepresentation = panic $ "Invalid representation for external type: " <> pretty representation
+  where
+    invalidRepresentation = panic $ "Invalid representation for external type: " <> pretty representation
 compilePrimopCall ::
     (Compile es) =>
     LLVMBuilder.Builder ->
@@ -581,10 +581,15 @@ compilePrimopCall builder primop arguments returnRepresentation varName = do
     case primop of
         DebugInt -> outOfLineBuiltin builder "vega_debug_int" argumentValues returnRepresentation varName
         UnsafeReadArray -> compileUnsafeReadArray builder arguments returnRepresentation varName
-        UnsafeWriteArray -> compileUnsafeWriteArray builder arguments returnRepresentation varName
+        UnsafeReadMutableArray -> compileUnsafeReadArray builder arguments returnRepresentation varName
+        UnsafeWriteMutableArray -> compileUnsafeWriteArray builder arguments returnRepresentation varName
         ReplicateArray -> compileReplicateArray builder arguments returnRepresentation varName
         ArrayLength -> undefined
+        MutableArrayLength -> undefined
         UnsafeArrayContents -> compileUnsafeArrayContents builder arguments returnRepresentation varName
+        UnsafeFreezeArray -> compileUnsafeFreezeArray builder arguments returnRepresentation varName
+        UnsafeThawArray -> compileUnsafeThawArray builder arguments returnRepresentation varName
+        UnsafeMutableArrayContents -> compileUnsafeArrayContents builder arguments returnRepresentation varName
         CodePoints -> undefined
         Panic -> undefined
 
@@ -647,6 +652,17 @@ compileUnsafeArrayContents _builder arguments _returnRepresentation _varName = c
         -- TODO: this might need to do a bitcast to turn this into an *unmanaged* pointer once we track GC roots though
         lookupVarValue array
     _ -> panic $ "unsafeReadArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
+
+compileUnsafeFreezeArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeFreezeArray _builder arguments _returnRepresentation _varName = case arguments of
+    [array] -> lookupVarValue array
+    _ -> panic $ "unsafeFreezeArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
+
+compileUnsafeThawArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeThawArray _builder arguments _returnRepresentation _varName = case arguments of
+    [array] -> lookupVarValue array
+    _ -> panic $ "unsafeThawArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
+
 
 {- | Generate a call to a builtin function that is defined in the rust runtime rather than inline
 TODO: it might be nice to have out of line functions defined directly in LLVM IR with tailcc instead of

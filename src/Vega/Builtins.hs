@@ -42,30 +42,42 @@ import Vega.Syntax qualified as Vega
 data Primop
     = ReplicateArray
     | UnsafeReadArray
-    | UnsafeWriteArray
+    | UnsafeReadMutableArray
+    | UnsafeWriteMutableArray
     | ArrayLength
+    | MutableArrayLength
     | UnsafeArrayContents
+    | UnsafeMutableArrayContents
+    | UnsafeFreezeArray
+    | UnsafeThawArray
     | CodePoints
     | Panic
     | DebugInt
-    deriving (Show)
+    deriving (Show, Enum, Bounded)
 
 instance Pretty Primop where
     pretty primop = case show primop of
         "" -> ""
         (first : rest) -> keyword (toText (Char.toLower first : rest))
 
+primopVarName :: Primop -> Text
+primopVarName = \case
+    ReplicateArray -> "replicateArray"
+    UnsafeReadArray -> "unsafeReadArray"
+    UnsafeReadMutableArray -> "unsafeReadMutableArray"
+    UnsafeWriteMutableArray -> "unsafeWriteMutableArray"
+    ArrayLength -> "arrayLength"
+    MutableArrayLength -> "mutableArrayLength"
+    UnsafeArrayContents -> "unsafeArrayContents"
+    UnsafeMutableArrayContents -> "unsafeMutableArrayContents"
+    UnsafeFreezeArray -> "unsafeFreezeArray"
+    UnsafeThawArray -> "unsafeThawArray"
+    CodePoints -> "codePoints"
+    Panic -> "panic"
+    DebugInt -> "debugInt"
+
 primops :: HashMap Text Primop
-primops =
-    [ ("replicateArray", ReplicateArray)
-    , ("unsafeReadArray", UnsafeReadArray)
-    , ("unsafeWriteArray", UnsafeWriteArray)
-    , ("arrayLength", ArrayLength)
-    , ("unsafeArrayContents", UnsafeArrayContents)
-    , ("codePoints", CodePoints)
-    , ("panic", Panic)
-    , ("debugInt", DebugInt)
-    ]
+primops = fromList [(primopVarName primop, primop) | primop <- [minBound .. maxBound]]
 
 asPrimop :: GlobalName -> Maybe Primop
 asPrimop name
@@ -133,6 +145,9 @@ primitiveTypeConstructors =
     , ("Double", Type (PrimitiveRep DoubleRep))
     , ("Bool", Type boolRepresentation)
     , ("Array", forallVisible Monomorphized "r" Rep \r -> [Type r] :-> Type (ArrayRep r))
+    , -- TODO: we *might* eventually want a different representation for mutable arrays because
+      -- they have different write barriers. we *might* be able to do that entirely dynamically though
+      ("MutableArray", forallVisible Monomorphized "r" Rep \r -> [Type r] :-> Type (ArrayRep r))
     , ("Box", forallVisible Monomorphized "r" Rep \r -> [Type r] :-> Type (PrimitiveRep BoxedRep))
     , ("Pointer", forallVisible Parametric "r" Rep \r -> [Type r] :-> Type (PrimitiveRep PointerRep))
     ]
@@ -148,9 +163,14 @@ primopType :: Primop -> Type
 primopType = \case
     ReplicateArray -> forall_ "a" \a -> [intType, a] --> arrayType @@ [a]
     UnsafeReadArray -> forall_ "a" \a -> [arrayType @@ [a], intType] --> a
-    UnsafeWriteArray -> forall_ "a" \a -> [arrayType @@ [a], intType, a] --> unitType
+    UnsafeReadMutableArray -> forall_ "a" \a -> [mutableArrayType @@ [a], intType] --> a
+    UnsafeWriteMutableArray -> forall_ "a" \a -> [mutableArrayType @@ [a], intType, a] --> unitType
     ArrayLength -> forall_ "a" \a -> [arrayType @@ [a]] --> intType
+    MutableArrayLength -> forall_ "a" \a -> [mutableArrayType @@ [a]] --> intType
     UnsafeArrayContents -> forall_ "a" \a -> [arrayType @@ [a]] --> pointerType @@ [a]
+    UnsafeMutableArrayContents -> forall_ "a" \a -> [mutableArrayType @@ [a]] --> pointerType @@ [a]
+    UnsafeFreezeArray -> forall_ "a" \a -> [mutableArrayType @@ [a]] --> arrayType @@ [a]
+    UnsafeThawArray -> forall_ "a" \a -> [arrayType @@ [a]] --> mutableArrayType @@ [a]
     CodePoints -> [stringType] --> arrayType @@ [int32Type]
     Panic -> forall_ "a" \a -> [stringType] --> a
     DebugInt -> [intType] --> unitType
@@ -161,9 +181,14 @@ primopRepresentation :: (HasCallStack) => Primop -> Seq Core.Representation -> (
 primopRepresentation primop arguments = case primop of
     ReplicateArray -> ([intRep 64, argument 0], Core.ArrayRep (argument 0))
     UnsafeReadArray -> ([Core.ArrayRep (argument 0), intRep 64], argument 0)
-    UnsafeWriteArray -> ([Core.ArrayRep (argument 0), intRep 64, argument 0], unitRep)
+    UnsafeReadMutableArray -> ([Core.ArrayRep (argument 0), intRep 64], argument 0)
+    UnsafeWriteMutableArray -> ([Core.ArrayRep (argument 0), intRep 64, argument 0], unitRep)
     ArrayLength -> ([Core.ArrayRep (argument 0)], intRep 64)
+    MutableArrayLength -> ([Core.ArrayRep (argument 0)], intRep 64)
     UnsafeArrayContents -> ([Core.ArrayRep (argument 0)], pointerRep)
+    UnsafeMutableArrayContents -> ([Core.ArrayRep (argument 0)], pointerRep)
+    UnsafeFreezeArray -> ([Core.ArrayRep (argument 0)], Core.ArrayRep (argument 0))
+    UnsafeThawArray -> ([Core.ArrayRep (argument 0)], Core.ArrayRep (argument 0))
     CodePoints -> ([Core.stringRepresentation], Core.ArrayRep (intRep 32))
     Panic -> ([Core.stringRepresentation], argument 0)
     DebugInt -> ([intRep 64], unitRep)
@@ -192,6 +217,7 @@ defaultImportScope =
                         , "Double"
                         , "Bool"
                         , "Array"
+                        , "MutableArray"
                         , "Box"
                         , "Pointer"
                         , "panic"
@@ -238,6 +264,9 @@ boolType = TypeConstructor (Global (internalName "Bool"))
 
 arrayType :: Type
 arrayType = TypeConstructor (Global (internalName "Array"))
+
+mutableArrayType :: Type
+mutableArrayType = TypeConstructor (Global (internalName "MutableArray"))
 
 boxType :: Type
 boxType = TypeConstructor (Global (internalName "Box"))

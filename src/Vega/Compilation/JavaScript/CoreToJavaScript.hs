@@ -279,7 +279,13 @@ primopJSFunction = \case
             [array, index] -> pure ([], JS.Index array index)
             _ -> error "unreachable"
         )
-    Builtins.UnsafeWriteArray ->
+    Builtins.UnsafeReadMutableArray ->
+        ( 2
+        , \arguments -> case arguments of
+            [array, index] -> pure ([], JS.Index array index)
+            _ -> error "unreachable"
+        )
+    Builtins.UnsafeWriteMutableArray ->
         ( 3
         , \arguments -> case arguments of
             [array, index, value] -> pure ([JS.Assign (JS.Index array index) value], JS.Undefined)
@@ -291,7 +297,26 @@ primopJSFunction = \case
             [array] -> pure ([], JS.FieldAccess array "length")
             _ -> error "unreachable"
         )
+    Builtins.MutableArrayLength ->
+        ( 1
+        , \arguments -> case arguments of
+            [array] -> pure ([], JS.FieldAccess array "length")
+            _ -> error "unreachable"
+        )
     Builtins.UnsafeArrayContents -> panic "unsafeArrayContents is not available on the JS backend"
+    Builtins.UnsafeMutableArrayContents -> panic "unsafeMutableArrayContents is not available on the JS backend"
+    Builtins.UnsafeFreezeArray ->
+        ( 1
+        , \arguments -> case arguments of
+            [array] -> pure ([], array)
+            _ -> error "unreachable"
+        )
+    Builtins.UnsafeThawArray ->
+        ( 1
+        , \arguments -> case arguments of
+            [array] -> pure ([], array)
+            _ -> error "unreachable"
+        )
     Builtins.CodePoints -> asJSFunction 1 "internal$codePoints"
     Builtins.Panic -> asJSFunction 1 "internal$panic"
     Builtins.DebugInt -> asJSFunction 1 "console.log"

@@ -1,7 +1,7 @@
 
 import std:Array (copyArray)
 
-import internal:Internal (replicateArray, arrayLength)
+import internal:Internal (replicateArray, arrayLength, unsafeFreezeArray, unsafeThawArray)
 
 -- TODO: this should really be a nominal record
 data String = String({ content : Array(UInt8), offset : Int, length : Int })
@@ -27,7 +27,7 @@ append(string1, string2) = {
     let String({content = content1, offset = offset1, length = length1 }) = string1
     let String({content = content2, offset = offset2, length = length2 }) = string2
 
-    let combinedArray = replicateArray(length1 + length2, 0u8)
+    let combinedArray = unsafeThawArray(replicateArray(length1 + length2, 0u8))
     copyArray({
             targetArray = combinedArray, 
             targetOffset = 0,
@@ -42,7 +42,7 @@ append(string1, string2) = {
             sourceOffset = offset2,
             length = length2
         })
-    String({ content = combinedArray, offset = 0, length = length1 + length2 })
+    String({ content = unsafeFreezeArray(combinedArray), offset = 0, length = length1 + length2 })
 }
 
 
