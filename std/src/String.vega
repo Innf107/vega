@@ -3,18 +3,26 @@ import std:Array (copyArray)
 
 import internal:Internal (replicateArray, arrayLength, unsafeFreezeArray, unsafeThawArray)
 
--- TODO: this should really be a nominal record
-data String = String({ content : Array(UInt8), offset : Int, length : Int })
+-- While String is not a primitive type itself, it is wired into the compiler
+-- to support string literals.
+-- This means that the exact representation of String is absolutely crucial.
+-- If you ever change it, make sure to update stringRepresentation in 
+-- Vega.Builtins in the compiler.
+data String = String({ content : Array(UInt8), length : Int, offset : Int })
+
+-- This function is wired into the compiler. If you change anything about its signature or name,
+-- update stringFromByteArrayFunction in Vega.Builtins in the compiler.
+
+fromByteArray : Array(UInt8) -> String
+fromByteArray(array) = {
+    String({ content = array, offset = 0, length = arrayLength(array) })
+}
+
 
 replicateChar : (UInt8, Int) -> String
 replicateChar(char, length) = {
     let array = replicateArray(length, char)
     String({ content = array, offset = 0, length = length })
-}
-
-fromByteArray : Array(UInt8) -> String
-fromByteArray(array) = {
-    String({ content = array, offset = 0, length = arrayLength(array) })
 }
 
 length : String -> Int

@@ -106,8 +106,8 @@ data GraphPersistence :: Effect where
 
 makeEffect ''GraphPersistence
 
-reachableFrom :: (GraphPersistence :> es) => DeclarationName -> Stream (Of DeclarationName) (Eff es) ()
-reachableFrom name = hoist (evalState (mempty :: HashSet DeclarationName)) $ go name
+reachableFrom :: (GraphPersistence :> es) => Seq DeclarationName -> Stream (Of DeclarationName) (Eff es) ()
+reachableFrom roots = hoist (evalState (mempty :: HashSet DeclarationName)) $ for_ roots go
   where
     go :: (GraphPersistence :> es, State (HashSet DeclarationName) :> es) => DeclarationName -> Stream (Of DeclarationName) (Eff es) ()
     go name = do

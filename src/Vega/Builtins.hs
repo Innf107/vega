@@ -24,20 +24,23 @@ module Vega.Builtins (
     doubleType,
     boolType,
     arrayType,
+    stringRepresentation,
+    stringFromByteArrayFunction,
+    wiredInDeclarations,
 ) where
 
 import Data.Char qualified as Char
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence qualified as Seq
 import Data.Text qualified as Text
-import Relude hiding (Type)
+import Relude hiding (NonEmpty, Type)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Debug (showHeadConstructor)
 import Vega.Panic (panic)
 import Vega.Pretty (Pretty, keyword, number, pretty)
 import Vega.Seq.NonEmpty (NonEmpty (..))
-import Vega.Syntax hiding (forall_)
-import Vega.Syntax qualified as Vega
+import Vega.Syntax hiding (forall_, stringRepresentation)
+import Vega.Syntax qualified as Vega hiding (stringRepresentation)
 
 data Primop
     = ReplicateArray
@@ -229,8 +232,34 @@ defaultImportScope =
             ]
         }
 
+-- | Refer to a type defined in the 'std' package
+stdName :: NonEmpty Text -> Text -> GlobalName
+stdName subModules name = MkGlobalName{name, moduleName = MkModuleName{subModules, package = MkPackageName "std"}}
+
+stdDeclarationName :: NonEmpty Text -> Text -> DeclarationName
+stdDeclarationName subModules name = MkDeclarationName{name, moduleName = MkModuleName{subModules, package = MkPackageName "std"}}
+
+-- | This is necessary so we can lower literals to calls to String.fromByteArray
+stringRepresentation :: Core.Representation
+stringRepresentation =
+    Core.ProductRep
+        [ Core.ArrayRep (Core.PrimitiveRep (Vega.IntRep 8))
+        , Core.PrimitiveRep (Vega.IntRep 64)
+        , Core.PrimitiveRep (Vega.IntRep 64)
+        ]
+
+stringFromByteArrayFunction :: GlobalName
+stringFromByteArrayFunction = stdName ("String" :<|| []) "fromByteArray"
+
+{- | A list of all declarations that might be referred to by primitive operations or syntax (like string literals)
+This is important since we always need to compile these, even if they don't *look* like they're reachable from core,
+where the operations that refer to them haven't been lowered yet
+-}
+wiredInDeclarations :: Seq DeclarationName
+wiredInDeclarations = [stdDeclarationName ("String" :<|| []) "fromByteArray"]
+
 stringType :: Type
-stringType = TypeConstructor (Global (internalName "String"))
+stringType = TypeConstructor (Global (stdName ("String" :<|| []) "String"))
 
 intType :: Type
 intType = TypeConstructor (Global (internalName "Int"))

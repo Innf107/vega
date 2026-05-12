@@ -18,6 +18,7 @@ import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Text qualified as Text
 import Data.Traversable (for)
+import Data.Unique (hashUnique, newUnique)
 import Data.Vector.Storable qualified as Storable
 import Data.Vector.Strict qualified as Strict
 import Effectful (Eff, IOE, (:>))
@@ -40,7 +41,7 @@ import Vega.Compilation.LLVM.Layout (Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
 import Vega.Compilation.LLVM.Runtime (RuntimeDefinitions (..), declareRuntimeDefinitions)
 import Vega.Compilation.LLVM.Runtime.Heap qualified as Heap
-import Vega.Compilation.LLVM.Runtime.ToLLVMConstant (ToLLVMConstant (toLLVMConstant))
+import Vega.Compilation.LLVM.Runtime.ToLLVMConstant (ToLLVMConstant (toLLVMConstant), size)
 import Vega.Compilation.LLVM.Runtime.ToLLVMConstant qualified as ToLLVMConstant
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Debug (showHeadConstructor)
@@ -394,6 +395,22 @@ compileInstruction builder = \case
         | otherwise -> do
             let sizeInBytes = sizeInBits `div` 8
             insertVarMapping var (LLVM.constInt (LLVM.intType sizeInBits) (fromIntegral literal) True) (Layout.intLayoutInBytes sizeInBytes)
+    MIR.LoadByteArrayLiteral{var, bytes} -> do
+        infoTable <- getOrCreateArrayInfoTablePointer True (Layout.intLayoutInBytes 1)
+        unique <- liftIO newUnique
+
+        let arrayHeapType = LLVM.structType [LLVM.pointerType, LLVM.int64Type, LLVM.arrayType LLVM.int8Type (ByteString.length bytes)] False
+        global <- LLVM.addGlobal ?module_ arrayHeapType ("string_" <> show (hashUnique unique))
+        structValue <-
+            LLVM.constStructInContext
+                [ infoTable
+                , LLVM.constInt LLVM.int64Type (fromIntegral (ByteString.length bytes)) False
+                , LLVM.constDataArray LLVM.int8Type bytes
+                ]
+                False
+        LLVM.setInitializer global structValue
+
+        insertVarMapping var (LLVM.globalAsValue global) Layout.byteArrayLayout
     MIR.LoadSumTag{var, sum} -> do
         (sumValue, sumLayout) <- lookupVar sum
         let tagLayout = Layout.intLayoutInBytes (Layout.sumTagSizeInBytes sumLayout)
@@ -584,8 +601,8 @@ compilePrimopCall builder primop arguments returnRepresentation varName = do
         UnsafeReadMutableArray -> compileUnsafeReadArray builder arguments returnRepresentation varName
         UnsafeWriteMutableArray -> compileUnsafeWriteArray builder arguments returnRepresentation varName
         ReplicateArray -> compileReplicateArray builder arguments returnRepresentation varName
-        ArrayLength -> undefined
-        MutableArrayLength -> undefined
+        ArrayLength -> compileArrayLength builder arguments returnRepresentation varName
+        MutableArrayLength -> compileArrayLength builder arguments returnRepresentation varName
         UnsafeArrayContents -> compileUnsafeArrayContents builder arguments returnRepresentation varName
         UnsafeFreezeArray -> compileUnsafeFreezeArray builder arguments returnRepresentation varName
         UnsafeThawArray -> compileUnsafeThawArray builder arguments returnRepresentation varName
@@ -622,7 +639,7 @@ compileReplicateArray builder arguments returnRepresentation varName = case argu
 
         incomingBlock <- LLVMBuilder.getInsertBlock builder
 
-        infoTable <- getOrCreateArrayInfoTablePointer valueLayout
+        infoTable <- getOrCreateArrayInfoTablePointer False valueLayout
 
         array <- outOfLineBuiltin builder "vega_allocate_uninitialized_array" [infoTable, sizeValue] returnRepresentation varName
         loopBlock <- LLVM.appendBasicBlock ?function "replicate"
@@ -645,6 +662,14 @@ compileReplicateArray builder arguments returnRepresentation varName = case argu
         pure array
     _ -> panic $ "replicateArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
+compileArrayLength :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileArrayLength builder arguments _returnRepresentation varName = case arguments of
+    [array] -> do
+        array <- lookupVarValue array
+        lengthPointer <- buildGEPOffset builder array Heap.arrayLengthOffset "lengthPtr"
+        LLVMBuilder.buildLoad builder LLVM.int64Type lengthPointer varName
+    _ -> panic $ "arrayLength called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
+
 compileUnsafeArrayContents :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
 compileUnsafeArrayContents _builder arguments _returnRepresentation _varName = case arguments of
     [array] -> do
@@ -662,7 +687,6 @@ compileUnsafeThawArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variabl
 compileUnsafeThawArray _builder arguments _returnRepresentation _varName = case arguments of
     [array] -> lookupVarValue array
     _ -> panic $ "unsafeThawArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
-
 
 {- | Generate a call to a builtin function that is defined in the rust runtime rather than inline
 TODO: it might be nice to have out of line functions defined directly in LLVM IR with tailcc instead of
@@ -733,15 +757,15 @@ getOrCreateLayoutInfoTablePointer layout = do
             LLVM.setInitializer llvmInfoTableGlobal infoTableConstant
             pure (LLVM.globalAsValue llvmInfoTableGlobal)
 
-getOrCreateArrayInfoTablePointer :: (Compile es) => Layout -> Eff es LLVM.Value
-getOrCreateArrayInfoTablePointer elementLayout = do
+getOrCreateArrayInfoTablePointer :: (Compile es) => Bool -> Layout -> Eff es LLVM.Value
+getOrCreateArrayInfoTablePointer static elementLayout = do
     let identifier = "info_array_" <> Layout.identifier elementLayout
     LLVM.getNamedGlobal ?module_ identifier >>= \case
         Just global -> pure (LLVM.globalAsValue global)
         Nothing -> do
             let infoTable =
                     Heap.MkInfoTable
-                        { objectType = Heap.Array
+                        { objectType = if static then Heap.StaticArray else Heap.Array
                         , layout =
                             Heap.ArrayLayout
                                 ( Heap.MkArrayLayout

@@ -148,6 +148,8 @@ verifyInstruction = \case
         insertVarRepresentation var representation
     MIR.LoadIntLiteral{var, literal = _, sizeInBits} -> do
         insertVarRepresentation var (PrimitiveRep (IntRep sizeInBits))
+    MIR.LoadByteArrayLiteral{var, bytes = _} -> do
+        insertVarRepresentation var (ArrayRep (PrimitiveRep (IntRep 8)))
     MIR.LoadSumTag{var, sum} -> do
         repOf sum >>= \case
             Nothing -> pure ()

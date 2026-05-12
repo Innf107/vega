@@ -18,6 +18,7 @@ import Relude (
     Semigroup ((<>)),
     Seq,
     Text,
+    encodeUtf8,
     fromIntegral,
     fst,
     not,
@@ -473,7 +474,23 @@ compileValue block = \case
                 -- TODO: check the size properly etc.
                 block <- addInstruction block (MIR.LoadIntLiteral var (fromIntegral value) sizeInBits)
                 pure (block, var)
-            _ -> undefined
+            Core.DoubleLiteral{} -> undefined
+            Core.StringLiteral text -> do
+                let bytes = encodeUtf8 text
+                bytesVar <- newVar "bytes"
+                block <- addInstruction block (MIR.LoadByteArrayLiteral bytesVar bytes)
+                block <-
+                    addInstruction
+                        block
+                        ( MIR.CallDirect
+                            { var
+                            , functionName = Builtins.stringFromByteArrayFunction
+                            , representationArguments = []
+                            , arguments = [bytesVar]
+                            , returnRepresentation = Builtins.stringRepresentation
+                            }
+                        )
+                pure (block, var)
     Core.ProductConstructor arguments representation -> do
         (block, arguments) <- compileValues block arguments
         var <- newVar ""

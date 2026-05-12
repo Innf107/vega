@@ -113,6 +113,7 @@ monomorphizeInstruction instruction = case instruction of
     MIR.ArithmeticOperator _ _
     MIR.Box _ _
     MIR.LoadIntLiteral _ _ _
+    MIR.LoadByteArrayLiteral _ _
     MIR.LoadSumTag _ _ -> pure instruction
     MIR.AccessField{var, path, target, fieldRepresentation} ->
         pure (MIR.AccessField{var, path, target, fieldRepresentation = substituteRepresentation fieldRepresentation})

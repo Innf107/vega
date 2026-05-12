@@ -61,6 +61,8 @@ pub struct ArrayLayout {
 pub enum ObjectType {
     Boxed,
     Array,
+    // StaticArray also uses the regular ArrayLayout
+    StaticArray,
 }
 
 #[repr(C)]

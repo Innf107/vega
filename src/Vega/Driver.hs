@@ -42,6 +42,7 @@ import System.IO.Unsafe (unsafePerformIO)
 import System.OsPath (OsPath, osp, (</>))
 import System.OsPath qualified as OsPath
 import TextBuilder qualified
+import Vega.Builtins qualified as Builtins
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.Core.VegaToCore qualified as VegaToCore
 import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
@@ -310,7 +311,7 @@ compileBackend = do
                         debugEmit mir
                         pure mir
 
-            let reachableStream = GraphPersistence.reachableFrom entryPointDeclaration
+            let reachableStream = GraphPersistence.reachableFrom ([entryPointDeclaration] <> Builtins.wiredInDeclarations)
 
             traceEnabled Reachable >>= \case
                 False -> pure ()

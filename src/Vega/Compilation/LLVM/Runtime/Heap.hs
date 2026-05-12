@@ -1,4 +1,5 @@
 {-# OPTIONS_GHC -Wno-missing-export-lists #-}
+
 {- | These definitions follow runtime/src/heap.rs and are mostly necessary since we need to
 generate some runtime objects (in particular info tables) at compile time
 -}
@@ -19,6 +20,7 @@ data InfoTable = MkInfoTable
 data ObjectType
     = Boxed
     | Array
+    | StaticArray
     deriving stock (Generic)
     deriving (ToLLVMConstant) via CEnum ObjectType
 
@@ -45,6 +47,9 @@ data ArrayLayout = MkArrayLayout
     }
     deriving stock (Generic)
     deriving (ToLLVMConstant) via CStruct ArrayLayout
+
+arrayLengthOffset :: Int
+arrayLengthOffset = 0
 
 arrayContentOffset :: Int
 arrayContentOffset = 8

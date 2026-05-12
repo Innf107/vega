@@ -9,6 +9,7 @@ module Vega.Compilation.LLVM.Layout (
     rawPointerLayout,
     closureLayout,
     boolLayout,
+    byteArrayLayout,
 
     -- * Layout Properties
     sizeInBits,
@@ -172,6 +173,9 @@ representationLayout = \case
         -- This will probably change in the future so that we don't need to dereference the array to access its size
         pure boxedLayout
     rep@Core.ParameterRep{} -> panic $ "Non-monomorphized parameter representation in layout generation: " <> pretty rep
+
+byteArrayLayout :: (?context :: LLVM.Context) => Layout
+byteArrayLayout = boxedLayout
 
 productLayout :: (?context :: LLVM.Context) => Seq Layout -> Layout
 productLayout elementLayouts = do
