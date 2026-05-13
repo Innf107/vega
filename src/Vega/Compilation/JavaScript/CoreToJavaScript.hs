@@ -321,5 +321,26 @@ primopJSFunction = \case
     Builtins.CodePoints -> asJSFunction 1 "internal$codePoints"
     Builtins.Panic -> asJSFunction 1 "internal$panic"
     Builtins.DebugInt -> asJSFunction 1 "console.log"
+    -- TODO: make these conversions do truncations where applicable
+    Builtins.Int8ToInt -> identity
+    Builtins.UInt8ToInt -> identity
+    Builtins.Int16ToInt -> identity
+    Builtins.UInt16ToInt -> identity
+    Builtins.Int32ToInt -> identity
+    Builtins.UInt32ToInt -> identity
+    Builtins.UIntToInt -> identity
+    Builtins.IntToInt8 -> identity
+    Builtins.IntToUInt8 -> identity
+    Builtins.IntToInt16 -> identity
+    Builtins.IntToUInt16 -> identity
+    Builtins.IntToInt32 -> identity
+    Builtins.IntToUInt32 -> identity
+    Builtins.IntToUInt -> identity
   where
     asJSFunction arity name = (arity, \arguments -> pure ([], JS.Application (JS.Var name) arguments))
+    identity =
+        ( 1
+        , \case
+            [argument] -> pure ([], argument)
+            _ -> error "unreachable"
+        )

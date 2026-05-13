@@ -43,7 +43,8 @@ import Vega.Syntax hiding (forall_, stringRepresentation)
 import Vega.Syntax qualified as Vega hiding (stringRepresentation)
 
 data Primop
-    = ReplicateArray
+    = -- Array operations
+      ReplicateArray
     | UnsafeReadArray
     | UnsafeReadMutableArray
     | UnsafeWriteMutableArray
@@ -53,9 +54,27 @@ data Primop
     | UnsafeMutableArrayContents
     | UnsafeFreezeArray
     | UnsafeThawArray
-    | OffsetPointerBytes
-    | CodePoints
-    | Panic
+    | -- Pointer operations
+      OffsetPointerBytes
+    | -- JS specifics
+      CodePoints
+    | -- Numeric conversions
+      Int8ToInt
+    | UInt8ToInt
+    | Int16ToInt
+    | UInt16ToInt
+    | Int32ToInt
+    | UInt32ToInt
+    | UIntToInt
+    | IntToInt8
+    | IntToUInt8
+    | IntToInt16
+    | IntToUInt16
+    | IntToInt32
+    | IntToUInt32
+    | IntToUInt
+    | -- Debugging
+      Panic
     | DebugInt
     deriving (Show, Enum, Bounded)
 
@@ -78,6 +97,20 @@ primopVarName = \case
     UnsafeThawArray -> "unsafeThawArray"
     OffsetPointerBytes -> "offsetPointerBytes"
     CodePoints -> "codePoints"
+    Int8ToInt -> "int8ToInt"
+    UInt8ToInt -> "uInt8ToInt"
+    Int16ToInt -> "int16ToInt"
+    UInt16ToInt -> "uint16ToInt"
+    Int32ToInt -> "int32ToInt"
+    UInt32ToInt -> "uint32ToInt"
+    UIntToInt -> "uintToInt"
+    IntToInt8 -> "intToInt8"
+    IntToUInt8 -> "intToUInt8"
+    IntToInt16 -> "intToInt16"
+    IntToUInt16 -> "intToUInt16"
+    IntToInt32 -> "intToInt32"
+    IntToUInt32 -> "intToUInt32"
+    IntToUInt -> "intToUInt"
     Panic -> "panic"
     DebugInt -> "debugInt"
 
@@ -178,6 +211,20 @@ primopType = \case
     CodePoints -> [stringType] --> arrayType @@ [int32Type]
     Panic -> forall_ "a" \a -> [stringType] --> a
     DebugInt -> [intType] --> unitType
+    Int8ToInt -> [int8Type] --> intType
+    UInt8ToInt -> [uint8Type] --> intType
+    Int16ToInt -> [int16Type] --> intType
+    UInt16ToInt -> [uint16Type] --> intType
+    Int32ToInt -> [int32Type] --> intType
+    UInt32ToInt -> [uint32Type] --> intType
+    UIntToInt -> [uintType] --> intType
+    IntToInt8 -> [intType] --> int8Type
+    IntToUInt8 -> [intType] --> uint8Type
+    IntToInt16 -> [intType] --> int16Type
+    IntToUInt16 -> [intType] --> uint16Type
+    IntToInt32 -> [intType] --> int32Type
+    IntToUInt32 -> [intType] --> uint32Type
+    IntToUInt -> [intType] --> uintType
 
 -- This should really be determined by primopType but we can't currently do that without
 -- involving the type checker so we have to write it out manually for now.
@@ -197,6 +244,20 @@ primopRepresentation primop arguments = case primop of
     CodePoints -> ([Core.stringRepresentation], Core.ArrayRep (intRep 32))
     Panic -> ([Core.stringRepresentation], argument 0)
     DebugInt -> ([intRep 64], unitRep)
+    Int8ToInt -> ([intRep 8], intRep 64)
+    UInt8ToInt -> ([intRep 8], intRep 64)
+    Int16ToInt -> ([intRep 16], intRep 64)
+    UInt16ToInt -> ([intRep 16], intRep 64)
+    Int32ToInt -> ([intRep 32], intRep 64)
+    UInt32ToInt -> ([intRep 32], intRep 64)
+    UIntToInt -> ([intRep 64], intRep 64)
+    IntToInt8 -> ([intRep 64], intRep 8)
+    IntToUInt8 -> ([intRep 64], intRep 8)
+    IntToInt16 -> ([intRep 64], intRep 16)
+    IntToUInt16 -> ([intRep 64], intRep 16)
+    IntToInt32 -> ([intRep 64], intRep 32)
+    IntToUInt32 -> ([intRep 64], intRep 32)
+    IntToUInt -> ([intRep 64], intRep 64)
   where
     argument i = case Seq.lookup i arguments of
         Just representation -> representation

@@ -50,7 +50,7 @@ import Vega.Pretty (pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Syntax (renderPackageName)
 import Vega.Syntax qualified as Vega
-import Vega.Util (forIndexed_, viaList, type (?))
+import Vega.Util (Sign (..), forIndexed_, viaList, type (?))
 import Vega.Util qualified as Util
 import Witherable qualified
 
@@ -669,8 +669,23 @@ compilePrimopCall builder primop arguments returnRepresentation varName = do
         UnsafeMutableArrayContents -> compileUnsafeArrayContents builder arguments returnRepresentation varName
         OffsetPointerBytes -> compileOffsetPointerBytes builder arguments returnRepresentation varName
         CodePoints -> undefined
+        Int8ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
+        UInt8ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
+        Int16ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
+        UInt16ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
+        Int32ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
+        UInt32ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
+        UIntToInt -> identity
+        IntToInt8 -> compileIntConversion Signed 8 builder arguments returnRepresentation varName
+        IntToUInt8 -> compileIntConversion Unsigned 8 builder arguments returnRepresentation varName
+        IntToInt16 -> compileIntConversion Signed 16 builder arguments returnRepresentation varName
+        IntToUInt16 -> compileIntConversion Unsigned 16 builder arguments returnRepresentation varName
+        IntToInt32 -> compileIntConversion Signed 32 builder arguments returnRepresentation varName
+        IntToUInt32 -> compileIntConversion Unsigned 32 builder arguments returnRepresentation varName
+        IntToUInt -> identity
         Panic -> undefined
-
+  where
+    identity = undefined
 compileUnsafeReadArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
 compileUnsafeReadArray builder arguments returnRepresentation varName = case arguments of
     [array, index] -> do
@@ -756,6 +771,25 @@ compileUnsafeThawArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variabl
 compileUnsafeThawArray _builder arguments _returnRepresentation _varName = case arguments of
     [array] -> lookupVarValue array
     _ -> panic $ "unsafeThawArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
+
+compileIntConversion ::
+    (Compile es) =>
+    Sign ->
+    Int ->
+    LLVMBuilder.Builder ->
+    Seq MIR.Variable ->
+    Representation ->
+    Text ->
+    Eff es LLVM.Value
+compileIntConversion sign width builder arguments _returnRepresentation varName = case arguments of
+    [value] -> do
+        value <- lookupVarValue value
+        let isSigned = case sign of
+                Signed -> True
+                Unsigned -> False
+
+        LLVMBuilder.buildIntCast builder value (LLVM.intType width) isSigned varName
+    _ -> panic $ "integer conversion primop called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
 {- | Generate a call to a builtin function that is defined in the rust runtime rather than inline
 TODO: it might be nice to have out of line functions defined directly in LLVM IR with tailcc instead of
