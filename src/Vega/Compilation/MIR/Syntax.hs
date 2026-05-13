@@ -10,6 +10,7 @@ module Vega.Compilation.MIR.Syntax (
     Instruction (..),
     ArithmeticExpr (..),
     Terminator (..),
+    successors,
     representationAtPath,
     prettyBlock,
     prettyPath,
@@ -127,6 +128,15 @@ data Terminator
         }
     | TailCallClosure {closure :: Variable, arguments :: Seq Variable, returnRepresentation :: Representation}
     deriving (Generic)
+
+successors :: Terminator -> Seq BlockDescriptor
+successors = \case
+    Return _ -> mempty
+    Unreachable -> mempty
+    Jump block -> [block]
+    SwitchInt{cases, default_} -> (fmap snd cases) <> case default_ of Nothing -> []; Just block -> [block]
+    TailCallDirect{} -> mempty
+    TailCallClosure{} -> mempty
 
 representationAtPath :: Representation -> Path -> Representation
 representationAtPath baseRepresentation fullPath = go baseRepresentation fullPath

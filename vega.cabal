@@ -45,6 +45,7 @@ library
       Vega.Compilation.PatternMatching
       Vega.Debruijn
       Vega.Debug
+      Vega.DFS
       Vega.Diff
       Vega.Disambiguate
       Vega.Driver
