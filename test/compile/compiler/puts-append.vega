@@ -1,0 +1,17 @@
+-- type: print(abc123)
+
+import internal:Internal (debugInt)
+
+import std:String (append, withCString)
+
+external puts : Pointer(UInt8) -> ()
+
+id : forall a. a -> a
+id(x) = x
+
+main : () -> ()
+main() = {
+    let string = append("abc", "123")
+    withCString(string, \pointer -> puts(pointer))
+}
+

@@ -410,7 +410,10 @@ compileInstruction builder = \case
                 False
         LLVM.setInitializer global structValue
 
-        insertVarMapping var (LLVM.globalAsValue global) Layout.byteArrayLayout
+        -- The vega pointer should point after the header object
+        pointer <- buildGEPOffset builder (LLVM.globalAsValue global) Heap.headerSize ("string_" <> show (hashUnique unique))
+
+        insertVarMapping var pointer Layout.byteArrayLayout
     MIR.LoadSumTag{var, sum} -> do
         (sumValue, sumLayout) <- lookupVar sum
         let tagLayout = Layout.intLayoutInBytes (Layout.sumTagSizeInBytes sumLayout)
@@ -728,11 +731,11 @@ compileArrayLength builder arguments _returnRepresentation varName = case argume
     _ -> panic $ "arrayLength called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
 compileUnsafeArrayContents :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
-compileUnsafeArrayContents _builder arguments _returnRepresentation _varName = case arguments of
+compileUnsafeArrayContents builder arguments _returnRepresentation varName = case arguments of
     [array] -> do
-        -- Arrays are represented as pointers to their contents so unsafeArrayContents doesn't actually need to do anything
-        -- TODO: this might need to do a bitcast to turn this into an *unmanaged* pointer once we track GC roots though
-        lookupVarValue array
+        -- TODO: this might need to do a bitcast to turn this into an *unmanaged* pointer once we track GC roots
+        array <- lookupVarValue array
+        buildGEPOffset builder array (Heap.arrayContentOffset) varName
     _ -> panic $ "unsafeReadArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
 compileUnsafeFreezeArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value

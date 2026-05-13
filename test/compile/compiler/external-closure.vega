@@ -1,0 +1,12 @@
+-- type: print(A)
+-- KNOWN
+
+external putchar : Int32 -> ()
+
+apply : forall a b. (a -> b, a) -> b
+apply(f, x) = f(x)
+
+main : () -> ()
+main() = {
+    apply(putchar, 65i32)
+}

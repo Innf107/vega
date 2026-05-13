@@ -56,7 +56,7 @@ verifyDeclaration = \case
                     , returnRepresentation
                     }
 
-        (visited, finalState) <- runState state do
+        (_visited, _finalState) <- runState state do
             -- We need to traverse the blocks in topologically sorted order so we know all information about all
             -- variables defined earlier.
             -- Really we *should* also check that every variable dominates every use (i.e. is defined on every path to its use)
