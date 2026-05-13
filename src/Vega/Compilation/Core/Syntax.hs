@@ -287,16 +287,16 @@ functionRepresentation = ProductRep [PrimitiveRep Vega.PointerRep, PrimitiveRep 
 boolRepresentation :: Representation
 boolRepresentation = SumRep [ProductRep [], ProductRep []]
 
-trueValue :: Value
-trueValue =
+falseValue :: Value
+falseValue =
     SumConstructor
         { constructorIndex = 0
         , payload = unitValue
         , resultRepresentation = boolRepresentation
         }
 
-falseValue :: Value
-falseValue =
+trueValue :: Value
+trueValue =
     SumConstructor
         { constructorIndex = 1
         , payload = unitValue

@@ -1,9 +1,9 @@
 -- type: print(1)
 
-import internal:Internal (replicateArray, unsafeReadArray, debugInt)
+import internal:Internal (replicateArray, unsafeFreezeArray, unsafeReadArray, debugInt)
 
 main : () -> ()
 main() = {
-    let array = replicateArray(5, 1)
+    let array = unsafeFreezeArray(replicateArray(5, 1))
     debugInt(unsafeReadArray(array, 2))
 }

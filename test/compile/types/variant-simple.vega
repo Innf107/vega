@@ -1,8 +1,0 @@
--- type: compile
-data MyBool = True | False;
-
-f : MyBool -> ();
-f(_) = ();
-
-main : () -> ();
-main() = f(True);

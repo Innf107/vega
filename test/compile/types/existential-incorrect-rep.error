@@ -2,7 +2,7 @@ $FILE:6:14: ERROR:
 Type mismatch
   Unable to unify
     expected type IntRep
-      actual type Boxed
+      actual type (ArrayRep(Int8Rep) * IntRep * IntRep)
   ┃ 
 6 ┃ f() = (\_ -> "not of kind IntRep", \_ -> "a");
   ┃              ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔

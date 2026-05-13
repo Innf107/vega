@@ -2,7 +2,15 @@ $FILE:4:5: ERROR:
 Ambiguous type constructor Bool
   The following definitions are in scope:
     - builtin-ambiguity:Main:Bool
-    - internal:Internal:Bool
+    - std:Bool:Bool
   ┃ 
 4 ┃ f : Bool -> ();
   ┃     ▔▔▔▔
+$FILE:8:12: ERROR:
+Ambiguous data constructor True
+  The following definitions are in scope:
+    - std:Bool:True
+    - builtin-ambiguity:Main:True
+  ┃ 
+8 ┃ main() = f(True);
+  ┃            ▔▔▔▔

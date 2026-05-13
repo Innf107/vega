@@ -1,14 +1,16 @@
 -- type: print(1)
 
+import internal:Internal (debugInt)
+
 main : () -> ()
 main() = {
     let x = 1
-    let z = false
+    let z = False
     let f(y : Bool) = if y then {
         f(z)
     } else {
         debugInt(x)
     }
-    f(true)
+    f(True)
 }
 

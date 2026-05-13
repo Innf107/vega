@@ -145,7 +145,6 @@ primitiveTypeConstructors =
     , ("Int8", Type (PrimitiveRep (IntRep 8)))
     , ("UInt8", Type (PrimitiveRep (IntRep 8)))
     , ("Double", Type (PrimitiveRep DoubleRep))
-    , ("Bool", Type boolRepresentation)
     , ("Array", forallVisible Monomorphized "r" Rep \r -> [Type r] :-> Type (ArrayRep r))
     , -- TODO: we *might* eventually want a different representation for mutable arrays because
       -- they have different write barriers. we *might* be able to do that entirely dynamically though
@@ -217,7 +216,6 @@ defaultImportScope =
                         , "Int8"
                         , "UInt8"
                         , "Double"
-                        , "Bool"
                         , "Array"
                         , "MutableArray"
                         , "Box"
@@ -226,6 +224,20 @@ defaultImportScope =
                         , "box"
                         , "unbox"
                         ]
+                    }
+                )
+            ,
+                ( MkModuleName{package = (MkPackageName "std"), subModules = "String" :<|| []}
+                , MkImportedItems
+                    { qualifiedAliases = []
+                    , unqualifiedItems = ["String"]
+                    }
+                )
+            ,
+                ( MkModuleName{package = (MkPackageName "std"), subModules = "Bool" :<|| []}
+                , MkImportedItems
+                    { qualifiedAliases = []
+                    , unqualifiedItems = ["Bool", "True", "False"]
                     }
                 )
             ]
@@ -260,6 +272,9 @@ wiredInDeclarations = [stdDeclarationName ("String" :<|| []) "fromByteArray"]
 stringType :: Type
 stringType = TypeConstructor (Global (stdName ("String" :<|| []) "String"))
 
+boolType :: Type
+boolType = TypeConstructor (Global (stdName ("Bool" :<|| []) "Bool"))
+
 intType :: Type
 intType = TypeConstructor (Global (internalName "Int"))
 
@@ -286,9 +301,6 @@ uint8Type = TypeConstructor (Global (internalName "UInt8"))
 
 doubleType :: Type
 doubleType = TypeConstructor (Global (internalName "Double"))
-
-boolType :: Type
-boolType = TypeConstructor (Global (internalName "Bool"))
 
 arrayType :: Type
 arrayType = TypeConstructor (Global (internalName "Array"))

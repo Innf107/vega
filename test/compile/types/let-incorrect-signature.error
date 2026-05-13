@@ -1,7 +1,7 @@
 $FILE:7:22: ERROR:
 Type mismatch
   Unable to unify
-    expected type internal:Internal:String
+    expected type std:String:String
       actual type internal:Internal:Int
   ┃ 
 7 ┃     let y : String = x;
@@ -10,7 +10,7 @@ $FILE:8:5: ERROR:
 Type mismatch
   Unable to unify
     expected type internal:Internal:Int
-      actual type internal:Internal:String
+      actual type std:String:String
   ┃ 
 8 ┃     y
   ┃     ▔
