@@ -49,7 +49,7 @@ verify program = do
 
 verifyDeclaration :: (Reader FunctionSignatures :> es, Output (Doc Ann) :> es, IOE :> es) => MIR.Declaration -> Eff es ()
 verifyDeclaration = \case
-    MIR.DefineFunction{name, parameters, returnRepresentation, init, blocks} -> do
+    MIR.DefineFunction{parameters, returnRepresentation, init, blocks} -> do
         let state =
                 MkVerifyState
                     { representations = HashMap.fromList (toList parameters)
@@ -60,12 +60,13 @@ verifyDeclaration = \case
             -- We need to traverse the blocks in topologically sorted order so we know all information about all
             -- variables defined earlier.
             -- Really we *should* also check that every variable dominates every use (i.e. is defined on every path to its use)
-            dfs init \descriptor -> do
-                block <- case HashMap.lookup descriptor blocks of
-                    Just block -> pure block
-                    Nothing -> undefined
-                runReader descriptor (verifyBlock block)
-                pure (MIR.successors block.terminator)
+            dfs init \descriptor -> case HashMap.lookup descriptor blocks of
+                Nothing -> do
+                    verificationError $ "Invalid block descriptor: " <> pretty descriptor
+                    pure []
+                Just block -> do
+                    runReader descriptor (verifyBlock block)
+                    pure (MIR.successors block.terminator)
         pure ()
     -- We can't actually verify anything about external functions here
     MIR.DefineExternalFunction{} -> pure ()
