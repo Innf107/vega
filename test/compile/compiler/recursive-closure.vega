@@ -2,10 +2,13 @@
 
 import internal:Internal (debugInt)
 
+id : forall a. a -> a
+id(x) = x
+
 main : () -> ()
 main() = {
-    let x = 1
-    let z = False
+    let x = id(1)
+    let z = id(False)
     let f(y : Bool) = if y then {
         f(z)
     } else {
