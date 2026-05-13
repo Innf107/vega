@@ -656,7 +656,6 @@ compilePrimopCall ::
 compilePrimopCall builder primop arguments returnRepresentation varName = do
     argumentValues <- for arguments lookupVarValue
     case primop of
-        DebugInt -> outOfLineBuiltin builder "vega_debug_int" argumentValues returnRepresentation varName
         UnsafeReadArray -> compileUnsafeReadArray builder arguments returnRepresentation varName
         UnsafeReadMutableArray -> compileUnsafeReadArray builder arguments returnRepresentation varName
         UnsafeWriteMutableArray -> compileUnsafeWriteArray builder arguments returnRepresentation varName
@@ -667,6 +666,7 @@ compilePrimopCall builder primop arguments returnRepresentation varName = do
         UnsafeFreezeArray -> compileUnsafeFreezeArray builder arguments returnRepresentation varName
         UnsafeThawArray -> compileUnsafeThawArray builder arguments returnRepresentation varName
         UnsafeMutableArrayContents -> compileUnsafeArrayContents builder arguments returnRepresentation varName
+        NullPointer -> pure LLVM.constNullPointer
         OffsetPointerBytes -> compileOffsetPointerBytes builder arguments returnRepresentation varName
         CodePoints -> undefined
         Int8ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
@@ -683,9 +683,13 @@ compilePrimopCall builder primop arguments returnRepresentation varName = do
         IntToInt32 -> compileIntConversion Signed 32 builder arguments returnRepresentation varName
         IntToUInt32 -> compileIntConversion Unsigned 32 builder arguments returnRepresentation varName
         IntToUInt -> identity
+        DebugInt -> outOfLineBuiltin builder "vega_debug_int" argumentValues returnRepresentation varName
         Panic -> undefined
+        UnsafeCoerce -> identity
   where
-    identity = undefined
+    identity = case arguments of
+        [argument] -> lookupVarValue argument
+        _ -> panic $ "identity operation called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 compileUnsafeReadArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
 compileUnsafeReadArray builder arguments returnRepresentation varName = case arguments of
     [array, index] -> do

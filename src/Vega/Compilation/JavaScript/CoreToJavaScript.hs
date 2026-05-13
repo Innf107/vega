@@ -317,10 +317,9 @@ primopJSFunction = \case
             [array] -> pure ([], array)
             _ -> error "unreachable"
         )
-    Builtins.OffsetPointerBytes -> panic "OffsetPointerBytes is not available on the JS backend"
+    Builtins.NullPointer -> panic "nullPointer is not available on the JS backend"
+    Builtins.OffsetPointerBytes -> panic "offsetPointerBytes is not available on the JS backend"
     Builtins.CodePoints -> asJSFunction 1 "internal$codePoints"
-    Builtins.Panic -> asJSFunction 1 "internal$panic"
-    Builtins.DebugInt -> asJSFunction 1 "console.log"
     -- TODO: make these conversions do truncations where applicable
     Builtins.Int8ToInt -> identity
     Builtins.UInt8ToInt -> identity
@@ -336,6 +335,9 @@ primopJSFunction = \case
     Builtins.IntToInt32 -> identity
     Builtins.IntToUInt32 -> identity
     Builtins.IntToUInt -> identity
+    Builtins.Panic -> asJSFunction 1 "internal$panic"
+    Builtins.DebugInt -> asJSFunction 1 "console.log"
+    Builtins.UnsafeCoerce -> identity
   where
     asJSFunction arity name = (arity, \arguments -> pure ([], JS.Application (JS.Var name) arguments))
     identity =

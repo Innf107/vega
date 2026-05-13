@@ -55,7 +55,8 @@ data Primop
     | UnsafeFreezeArray
     | UnsafeThawArray
     | -- Pointer operations
-      OffsetPointerBytes
+      NullPointer
+    | OffsetPointerBytes
     | -- JS specifics
       CodePoints
     | -- Numeric conversions
@@ -76,6 +77,8 @@ data Primop
     | -- Debugging
       Panic
     | DebugInt
+    | -- Evil
+      UnsafeCoerce
     deriving (Show, Enum, Bounded)
 
 instance Pretty Primop where
@@ -95,6 +98,7 @@ primopVarName = \case
     UnsafeMutableArrayContents -> "unsafeMutableArrayContents"
     UnsafeFreezeArray -> "unsafeFreezeArray"
     UnsafeThawArray -> "unsafeThawArray"
+    NullPointer -> "nullPointer"
     OffsetPointerBytes -> "offsetPointerBytes"
     CodePoints -> "codePoints"
     Int8ToInt -> "int8ToInt"
@@ -113,6 +117,7 @@ primopVarName = \case
     IntToUInt -> "intToUInt"
     Panic -> "panic"
     DebugInt -> "debugInt"
+    UnsafeCoerce -> "unsafeCoerce"
 
 primops :: HashMap Text Primop
 primops = fromList [(primopVarName primop, primop) | primop <- [minBound .. maxBound]]
@@ -207,6 +212,7 @@ primopType = \case
     UnsafeMutableArrayContents -> forall_ "a" \a -> [mutableArrayType @@ [a]] --> pointerType @@ [a]
     UnsafeFreezeArray -> forall_ "a" \a -> [mutableArrayType @@ [a]] --> arrayType @@ [a]
     UnsafeThawArray -> forall_ "a" \a -> [arrayType @@ [a]] --> mutableArrayType @@ [a]
+    NullPointer -> [] --> pointerType @@ []
     OffsetPointerBytes -> forall_ "a" \a -> [pointerType @@ [a], intType] --> pointerType @@ [a]
     CodePoints -> [stringType] --> arrayType @@ [int32Type]
     Panic -> forall_ "a" \a -> [stringType] --> a
@@ -225,6 +231,10 @@ primopType = \case
     IntToInt32 -> [intType] --> int32Type
     IntToUInt32 -> [intType] --> uint32Type
     IntToUInt -> [intType] --> uintType
+    UnsafeCoerce -> forallInferred Monomorphized "r" Rep \r ->
+        forallVisible Parametric "a" r \a ->
+            forallVisible Parametric "b" r \b ->
+                [a] --> b
 
 -- This should really be determined by primopType but we can't currently do that without
 -- involving the type checker so we have to write it out manually for now.
@@ -240,6 +250,7 @@ primopRepresentation primop arguments = case primop of
     UnsafeMutableArrayContents -> ([Core.ArrayRep (argument 0)], pointerRep)
     UnsafeFreezeArray -> ([Core.ArrayRep (argument 0)], Core.ArrayRep (argument 0))
     UnsafeThawArray -> ([Core.ArrayRep (argument 0)], Core.ArrayRep (argument 0))
+    NullPointer -> ([], pointerRep)
     OffsetPointerBytes -> ([pointerRep, intRep 64], pointerRep)
     CodePoints -> ([Core.stringRepresentation], Core.ArrayRep (intRep 32))
     Panic -> ([Core.stringRepresentation], argument 0)
@@ -258,6 +269,7 @@ primopRepresentation primop arguments = case primop of
     IntToInt32 -> ([intRep 64], intRep 32)
     IntToUInt32 -> ([intRep 64], intRep 32)
     IntToUInt -> ([intRep 64], intRep 64)
+    UnsafeCoerce -> ([argument 0], argument 0)
   where
     argument i = case Seq.lookup i arguments of
         Just representation -> representation
