@@ -28,10 +28,12 @@ module Vega.Util (
     decodeOsPathUnchecked,
     smallestPowerOfTwoFitting,
     Sign (..),
+    allEqual,
 ) where
 
 import Control.Exception (throw)
 import Data.Bits qualified as Bits
+import Data.Foldable qualified as Foldable
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import Data.Traversable (for)
@@ -204,3 +206,8 @@ smallestPowerOfTwoFitting n = Bits.finiteBitSize n - Bits.countLeadingZeros (n -
 
 data Sign = Signed | Unsigned
     deriving (Show, Eq, Ord, Generic)
+
+allEqual :: (Foldable f, Eq a) => f a -> Bool
+allEqual f = case Foldable.toList f of
+    [] -> True
+    (x : rest) -> all (== x) rest

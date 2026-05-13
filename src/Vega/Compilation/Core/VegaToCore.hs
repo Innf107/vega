@@ -36,7 +36,7 @@ import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 import Vega.Effect.Meta.Static (BindMeta, ReadMeta, followMetasWithoutPathCompression, runMeta)
 import Vega.Effect.Meta.Static qualified as Meta
-import Vega.Effect.Trace (Category (CoreRep, Patterns), Trace, trace, withTrace)
+import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
 import Vega.Panic (panic)
 import Vega.Pretty (align, indent, intercalateDoc, keyword, number, pretty, (<+>))
@@ -101,9 +101,10 @@ compileDeclarationSyntax _declarationName = \case
 
             trace Patterns $ "compileDeclarationSyntax(" <> Vega.prettyGlobal Vega.VarKind name <> "):" <+> pretty caseTree
 
-            (caseStatements, caseExpr) <- compileCaseTree (\() -> compileExpr_ body) caseTree (fmap (\(local, _) -> Core.Var (Core.Local local)) coreParameters)
+            (caseStatements, caseExpr, representation) <- compileCaseTree (\() -> compileExpr body) caseTree (fmap (\(local, _) -> Core.Var (Core.Local local)) coreParameters)
 
             returnRepresentation <- convertRepresentation ext.returnRepresentation
+            assert (representation == returnRepresentation)
             pure
                 [ Core.DefineFunction
                     { name
@@ -222,8 +223,9 @@ compileExpr expr = do
                 local <- newLocal
                 representation <- convertRepresentation representation
                 pure (local, representation)
-            (bodyStatements, body) <- compileCaseTree (\() -> compileExpr_ body) caseTree (fmap (\(localName, _) -> Core.Var (Core.Local localName)) variables)
+            (bodyStatements, body, representation) <- compileCaseTree (\() -> compileExpr body) caseTree (fmap (\(localName, _) -> Core.Var (Core.Local localName)) variables)
             returnRepresentation <- convertRepresentation returnRepresentation
+            assert (representation == returnRepresentation)
             pure ([], Core.Lambda variables bodyStatements body returnRepresentation, Core.functionRepresentation)
         Vega.StringLiteral{} -> deferToValue
         Vega.IntLiteral{} -> deferToValue
@@ -456,12 +458,12 @@ compileStatements = \case
         (restStatements, result, finalRepresentation) <- compileStatements rest
         pure (statements <> [Core.Let local exprRepresentation coreExpr] <> restStatements, result, finalRepresentation)
     (Vega.Let _ pattern_ expr :<| rest) -> do
-        (scrutineeStatements, scrutineeValue, varRepresentation) <- compileExprToValue expr
+        (scrutineeStatements, scrutineeValue, _varRepresentation) <- compileExprToValue expr
 
         let caseTree = PatternMatching.serializeSubPatterns [pattern_] ()
 
-        (statements, finalExpr) <- compileCaseTree (\() -> compileStatements_ rest) caseTree [scrutineeValue]
-        pure (scrutineeStatements <> statements, finalExpr, varRepresentation)
+        (statements, finalExpr, representation) <- compileCaseTree (\() -> compileStatements rest) caseTree [scrutineeValue]
+        pure (scrutineeStatements <> statements, finalExpr, representation)
     (Vega.LetFunction{ext, name, parameters, typeSignature = _, body} :<| rest) -> do
         coreParameters <- for parameters \(_pattern, vegaRepresentation) -> do
             local <- newLocal
@@ -472,9 +474,9 @@ compileStatements = \case
 
         trace Patterns $ "LetFunction(" <> Vega.prettyLocal Vega.VarKind name <> "):" <+> pretty caseTree
 
-        (caseStatements, caseExpr) <-
+        (caseStatements, caseExpr, _representation) <-
             compileCaseTree
-                (\() -> compileExpr_ body)
+                (\() -> compileExpr body)
                 caseTree
                 (fmap (\(local, _) -> Core.Var (Core.Local local)) coreParameters)
 
@@ -504,31 +506,31 @@ compilePatternMatch scrutinee = \case
         let compileGoal goal =
                 case (NonEmpty.toSeq) cases Seq.!? goal of
                     Nothing -> error "tried to access a match RHS that doesn't exist"
-                    Just (_, body) -> compileExpr_ body
+                    Just (_, body) -> compileExpr body
         let caseTree = PatternMatching.compileMatch (NonEmpty.mapWithIndex (\i (pattern_, _) -> (pattern_, i)) cases)
         trace Patterns $
             "compilePatternMatch: ["
                 <> intercalateDoc (keyword ", ") (fmap (\(pattern_, _expr) -> showHeadConstructor pattern_) cases)
                 <> "]\n"
                 <> indent 2 ("~>" <> align (pretty caseTree))
-        (matchStatements, matchExpr) <- compileCaseTree compileGoal caseTree [scrutineeValue]
+        (matchStatements, matchExpr, _) <- compileCaseTree compileGoal caseTree [scrutineeValue]
 
         pure (scrutineeStatements <> matchStatements, matchExpr)
 
 compileCaseTree ::
     forall goal es.
     (Compile es, Hashable goal) =>
-    (goal -> Eff es (Seq Core.Statement, Core.Expr)) ->
+    (goal -> Eff es (Seq Core.Statement, Core.Expr, Core.Representation)) ->
     CaseTree goal ->
     Seq Core.Value ->
-    Eff es (Seq Core.Statement, Core.Expr)
+    Eff es (Seq Core.Statement, Core.Expr, Core.Representation)
 compileCaseTree compileGoal caseTree scrutinees = do
     let toJoinPoint = \case
             (_goal, (_, 1)) -> pure Nothing
             (goal, (boundVars, _count)) -> do
                 local <- newLocal
-                (bodyStatements, bodyExpr) <- compileGoal goal
-                pure (Just (goal, (local, Core.LetJoin local boundVars bodyStatements bodyExpr)))
+                (bodyStatements, bodyExpr, representation) <- compileGoal goal
+                pure (Just (goal, (local, Core.LetJoin local boundVars bodyStatements bodyExpr, representation)))
     joinPoints <- fmap HashMap.fromList $ wither toJoinPoint $ HashMap.toList (boundVarsAndFrequencies caseTree)
 
     let
@@ -540,14 +542,14 @@ compileCaseTree compileGoal caseTree scrutinees = do
             Seq Core.Value ->
             Seq Core.LocalCoreName ->
             CaseTree goal ->
-            Eff es (Seq Core.Statement, Core.Expr)
+            Eff es (Seq Core.Statement, Core.Expr, Core.Representation)
         go scrutinees boundValues = \case
             PatternMatching.Leaf goal ->
                 case scrutinees of
                     Empty -> case HashMap.lookup goal joinPoints of
                         Nothing -> compileGoal goal
-                        Just (joinPointName, _) ->
-                            pure ([], Core.JumpJoin joinPointName (fmap (\var -> Core.Var (Core.Local var)) boundValues))
+                        Just (joinPointName, _, representation) ->
+                            pure ([], Core.JumpJoin joinPointName (fmap (\var -> Core.Var (Core.Local var)) boundValues), representation)
                     _ -> panic $ "Not all scrutinees consumed. Remaining: [" <> intercalateDoc ", " (fmap pretty scrutinees) <> "]"
             PatternMatching.ConstructorCase{constructors, scrutineeRepresentation, default_} -> do
                 let (scrutinee, rest) = consume scrutinees
@@ -589,42 +591,59 @@ compileCaseTree compileGoal caseTree scrutinees = do
                                     else do
                                         pure ((local, representation), [])
 
-                        (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local . snd) locals <> rest) boundValues subTree
-                        pure (possiblyBoxedLocals, fold boxingStatements <> subTreeStatements, subTreeExpr)
+                        (subTreeStatements, subTreeExpr, representation) <- go (fmap (Core.Var . Core.Local . snd) locals <> rest) boundValues subTree
+                        pure (possiblyBoxedLocals, fold boxingStatements <> subTreeStatements, subTreeExpr, representation)
 
                 case onlyConstructor of
                     Just (constructor, representations, subTree) -> do
-                        (possiblyBoxedLocals, statements, expr) <- constructAutoBoxedPayload constructor representations subTree
+                        (possiblyBoxedLocals, statements, expr, representation) <- constructAutoBoxedPayload constructor representations subTree
                         assert (length possiblyBoxedLocals == length representations)
 
                         extractStatements <- case possiblyBoxedLocals of
                             [(onlyVar, representation)] -> pure [Core.Let onlyVar representation (Core.Value scrutinee)]
                             _ -> Util.forIndexed possiblyBoxedLocals \(name, representation) index -> do
                                 pure (Core.Let name representation (Core.ProductAccess scrutinee index representation))
-                        pure (extractStatements <> statements, expr)
+                        pure (extractStatements <> statements, expr, representation)
                     Nothing -> do
-                        cases <-
+                        casesWithRepresentations <-
                             fromList <$> for constructorList \(constructor, (argumentRepresentations, subTree)) -> do
                                 index <-
                                     GraphPersistence.getDataConstructorIndex constructor >>= \case
                                         GraphPersistence.OnlyConstructor -> undefined
                                         GraphPersistence.MultiConstructor index -> pure index
-                                (possiblyBoxedLocals, statements, expr) <- constructAutoBoxedPayload constructor argumentRepresentations subTree
-                                pure (index, (fmap fst possiblyBoxedLocals, statements, expr))
-                        default_ <- for default_ (go rest boundValues)
+                                (possiblyBoxedLocals, statements, expr, representation) <- constructAutoBoxedPayload constructor argumentRepresentations subTree
+                                pure (index, (fmap fst possiblyBoxedLocals, statements, expr, representation))
+                        let cases = fmap (\(boxed, statements, expr, _) -> (boxed, statements, expr)) casesWithRepresentations
+                        defaultWithRepresentation <- for default_ $ go rest boundValues
+                        let default_ = fmap (\(statements, expr, _) -> (statements, expr)) defaultWithRepresentation
+
+                        let representation = case HashMap.toList casesWithRepresentations of
+                                (_, (_, _, _, representation)) : _ -> representation
+                                [] -> case defaultWithRepresentation of
+                                    Just (_, _, representation) -> representation
+                                    Nothing -> panic "IntCase contains no cases and no default branch"
 
                         scrutineeRepresentation <- convertRepresentation scrutineeRepresentation
-                        pure ([], Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases, default_})
+                        pure ([], Core.ConstructorCase{scrutinee, scrutineeRepresentation, cases, default_}, representation)
             PatternMatching.IntCase{cases, default_} -> do
-                -- TODO: this currently drops the default
                 let (scrutinee, rest) = consume scrutinees
-                intCases <-
+                intCasesWithRepresentations <-
                     fromList <$> for (Map.toList cases) \(int, subTree) -> do
-                        (subTreeStatements, subTreeExpr) <- go rest boundValues subTree
-                        pure (int, (subTreeStatements, subTreeExpr))
-                default_ <- for default_ (go rest boundValues)
+                        (subTreeStatements, subTreeExpr, representation) <- go rest boundValues subTree
+                        pure (int, (subTreeStatements, subTreeExpr, representation))
+                let intCases = fmap (\(statements, expr, _) -> (statements, expr)) intCasesWithRepresentations
 
-                pure ([], Core.IntCase{scrutinee, intCases, default_})
+                assert (Util.allEqual $ fmap (\(_, _, rep) -> rep) intCasesWithRepresentations)
+                defaultWithRepresentation <- for default_ $ go rest boundValues
+                let default_ = fmap (\(statements, expr, _) -> (statements, expr)) defaultWithRepresentation
+
+                let representation = case HashMap.toList intCasesWithRepresentations of
+                        (_, (_, _, representation)) : _ -> representation
+                        [] -> case defaultWithRepresentation of
+                            Just (_, _, representation) -> representation
+                            Nothing -> panic "IntCase contains no cases and no default branch"
+
+                pure ([], Core.IntCase{scrutinee, intCases, default_}, representation)
             PatternMatching.TupleCase representations subTree -> do
                 let (scrutinee, rest) = consume scrutinees
                 localsWithReps <- for representations \representation -> do
@@ -633,21 +652,20 @@ compileCaseTree compileGoal caseTree scrutinees = do
                     pure (local, rep)
                 let accessStatements = Seq.mapWithIndex (\i (local, rep) -> Core.Let local rep (Core.ProductAccess scrutinee i rep)) localsWithReps
 
-                (subTreeStatements, subTreeExpr) <- go (fmap (Core.Var . Core.Local . fst) localsWithReps <> rest) boundValues subTree
-                pure (accessStatements <> subTreeStatements, subTreeExpr)
+                (subTreeStatements, subTreeExpr, representation) <- go (fmap (Core.Var . Core.Local . fst) localsWithReps <> rest) boundValues subTree
+                pure (accessStatements <> subTreeStatements, subTreeExpr, representation)
             PatternMatching.BindVar name vegaRepresentation subTree -> do
                 let (scrutinee, _) = consume scrutinees
-                (subStatements, subExpr) <- go scrutinees (boundValues :|> Core.UserProvided name) subTree
-                representation <- convertRepresentation vegaRepresentation
-                pure ([Core.Let (Core.UserProvided name) representation (Core.Value scrutinee)] <> subStatements, subExpr)
+                (subStatements, subExpr, representation) <- go scrutinees (boundValues :|> Core.UserProvided name) subTree
+                pure ([Core.Let (Core.UserProvided name) representation (Core.Value scrutinee)] <> subStatements, subExpr, representation)
             PatternMatching.Ignore subTree -> do
                 let (_, rest) = consume scrutinees
                 go rest boundValues subTree
 
-    (caseStatements, caseExpr) <- go scrutinees [] caseTree
+    (caseStatements, caseExpr, representation) <- go scrutinees [] caseTree
 
-    let joinPointDefinitions = fromList $ map (\(_, statement) -> statement) (toList joinPoints)
-    pure (joinPointDefinitions <> caseStatements, caseExpr)
+    let joinPointDefinitions = fromList $ map (\(_, statement, _) -> statement) (toList joinPoints)
+    pure (joinPointDefinitions <> caseStatements, caseExpr, representation)
 
 boundVarsAndFrequencies :: forall goal. (Hashable goal) => CaseTree goal -> HashMap goal (Seq (Core.LocalCoreName, Core.Representation), Int)
 boundVarsAndFrequencies tree = flip execState mempty $ do
