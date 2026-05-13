@@ -144,7 +144,6 @@ primitiveTypeConstructors =
     , ("UInt16", Type (PrimitiveRep (IntRep 16)))
     , ("Int8", Type (PrimitiveRep (IntRep 8)))
     , ("UInt8", Type (PrimitiveRep (IntRep 8)))
-    , ("String", Type (PrimitiveRep BoxedRep))
     , ("Double", Type (PrimitiveRep DoubleRep))
     , ("Bool", Type boolRepresentation)
     , ("Array", forallVisible Monomorphized "r" Rep \r -> [Type r] :-> Type (ArrayRep r))
@@ -164,7 +163,7 @@ builtinGlobals =
 
 primopType :: Primop -> Type
 primopType = \case
-    ReplicateArray -> forall_ "a" \a -> [intType, a] --> arrayType @@ [a]
+    ReplicateArray -> forall_ "a" \a -> [intType, a] --> mutableArrayType @@ [a]
     UnsafeReadArray -> forall_ "a" \a -> [arrayType @@ [a], intType] --> a
     UnsafeReadMutableArray -> forall_ "a" \a -> [mutableArrayType @@ [a], intType] --> a
     UnsafeWriteMutableArray -> forall_ "a" \a -> [mutableArrayType @@ [a], intType, a] --> unitType

@@ -1,35 +1,7 @@
 module Vega.Compilation.MIR.CoreToMIR (compileDeclaration) where
 
 import Effectful
-import Relude (
-    Applicative (pure),
-    Eq ((==)),
-    Foldable (toList),
-    Functor (fmap),
-    HasCallStack,
-    HashMap,
-    HashSet,
-    Int,
-    IsList (fromList),
-    Maybe (..),
-    Monad ((>>=)),
-    Monoid (mempty),
-    Num ((+)),
-    Semigroup ((<>)),
-    Seq,
-    Text,
-    encodeUtf8,
-    fromIntegral,
-    fst,
-    not,
-    otherwise,
-    show,
-    undefined,
-    ($),
-    (&),
-    (.),
-    (<$>),
- )
+import Relude hiding (State, execState, get, modify, put, runState, trace)
 
 import Effectful.State.Static.Local (State, execState, get, modify, put, runState)
 
@@ -37,6 +9,7 @@ import Control.Exception qualified as Assert
 import Control.Monad (when)
 import Control.Monad.ST.Strict (runST)
 import Data.Foldable (Foldable (foldl', foldr'), foldlM, foldrM, for_)
+import Data.Foldable qualified as Foldable
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashSet qualified as HashSet
 import Data.STRef.Strict (modifySTRef', newSTRef, readSTRef)
@@ -50,9 +23,10 @@ import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.MIR.Syntax (Phis (..), Terminator (..))
 import Vega.Compilation.MIR.Syntax qualified as MIR
+import Vega.Debruijn qualified as DeBruijn
 import Vega.Effect.GraphPersistence
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
-import Vega.Effect.Trace (Trace)
+import Vega.Effect.Trace (Category (..), Trace, trace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique)
 import Vega.Panic (panic)
 import Vega.Pretty (pretty)
@@ -68,6 +42,7 @@ type Compile es =
     , NewUnique :> es
     , State CurrentDeclarationState :> es
     , ?currentDeclarationName :: Vega.GlobalName
+    , ?currentRepresentationParameters :: DeBruijn.Limit
     )
 
 data CurrentDeclarationState = MkDeclarationState
@@ -105,20 +80,32 @@ registerAdditionalDeclarations declarations = modify (\state -> state{additional
 
 compileDeclaration :: (GraphPersistence :> es, Trace :> es, NewUnique :> es) => Core.Declaration -> Eff es (Seq MIR.Declaration)
 compileDeclaration = \case
-    Core.DefineFunction{name, representationParameters = _, parameters, returnRepresentation, statements, result} -> do
+    Core.DefineFunction{name, representationParameters, parameters, returnRepresentation, statements, result} -> do
+        let ?currentRepresentationParameters = representationParameters
         compileFunction name parameters returnRepresentation statements result []
     Core.DefineExternalFunction{name, externalName, parameterRepresentations, returnRepresentation} -> do
         pure [MIR.DefineExternalFunction{name, externalName, parameterRepresentations, returnRepresentation}]
 
-data ClosureEntry = MkClosureEntry
-    { variableName :: LocalCoreName
-    , variableRepresentation :: Representation
-    , closureParameter :: LocalCoreName
-    , closureIndex :: Int
-    }
+data ClosureEntry
+    = ClosedVariableEntry
+        { variableName :: LocalCoreName
+        , variableRepresentation :: Representation
+        , closureParameter :: LocalCoreName
+        , unboxedClosureRepresentation :: Representation
+        , closureIndex :: Int
+        }
+    | ClosedFunctionEntry
+        { variableName :: LocalCoreName
+        , globalFunctionName :: Vega.GlobalName
+        , closureParameter :: LocalCoreName
+        }
 
 compileFunction ::
-    (GraphPersistence :> es, Trace :> es, NewUnique :> es) =>
+    ( GraphPersistence :> es
+    , Trace :> es
+    , NewUnique :> es
+    , ?currentRepresentationParameters :: DeBruijn.Limit
+    ) =>
     Vega.GlobalName ->
     Seq (LocalCoreName, Core.Representation) ->
     Core.Representation ->
@@ -149,26 +136,58 @@ compileFunction functionName parameters returnRepresentation statements returnEx
     pure $ [declaration] <> finalDeclarationState.additionalDeclarations
 
 compileClosureAccesses :: (Compile es) => BlockBuilder -> Seq ClosureEntry -> Eff es BlockBuilder
-compileClosureAccesses block = \case
-    Empty -> pure block
-    (MkClosureEntry{variableName, variableRepresentation, closureParameter, closureIndex} :<| rest) -> do
-        var <- newVarFromName variableName
-        registerVariable variableName var variableRepresentation
+compileClosureAccesses block entries = go mempty block entries
+  where
+    go (unboxedClosuresSoFar :: HashMap LocalCoreName MIR.Variable) block = \case
+        Empty -> pure block
+        ( ClosedVariableEntry
+                { variableName
+                , variableRepresentation
+                , closureParameter
+                , unboxedClosureRepresentation
+                , closureIndex
+                }
+                :<| rest
+            ) -> do
+                var <- newVarFromName variableName
+                registerVariable variableName var variableRepresentation
 
-        (boxedClosure, closureRepresentation) <- getLocal closureParameter
-        closure <- newVar "closure"
-        block <- addInstruction block (MIR.Unbox closure boxedClosure closureRepresentation)
-        block <-
-            addInstruction
-                block
-                ( MIR.AccessField
-                    { var
-                    , target = closure
-                    , path = [MIR.ProductFieldPath closureIndex]
-                    , fieldRepresentation = variableRepresentation
-                    }
-                )
-        compileClosureAccesses block rest
+                (closure, block) <- case HashMap.lookup closureParameter unboxedClosuresSoFar of
+                    Just closure -> pure (closure, block)
+                    Nothing -> do
+                        (boxedClosure, _) <- getLocal closureParameter
+                        closure <- newVar "closure"
+                        block <- addInstruction block (MIR.Unbox closure boxedClosure unboxedClosureRepresentation)
+                        pure (closure, block)
+                block <-
+                    addInstruction
+                        block
+                        ( MIR.AccessField
+                            { var
+                            , target = closure
+                            , path = [MIR.ProductFieldPath closureIndex]
+                            , fieldRepresentation = variableRepresentation
+                            }
+                        )
+                go (HashMap.insert closureParameter closure unboxedClosuresSoFar) block rest
+        ClosedFunctionEntry{variableName, globalFunctionName, closureParameter} :<| rest -> do
+            (closure, closureRep) <- getLocal closureParameter
+            functionPointer <- newVar "fp"
+            let representationArguments = fmap Core.ParameterRep (DeBruijn.all ?currentRepresentationParameters)
+            block <- addInstruction block (MIR.LoadFunctionPointer functionPointer globalFunctionName representationArguments)
+            var <- newVarFromName variableName
+
+            let varRepresentation = Core.ProductRep [Core.PrimitiveRep Vega.PointerRep, closureRep]
+            registerVariable variableName var varRepresentation
+            block <-
+                addInstruction
+                    block
+                    ( MIR.ProductConstructor
+                        var
+                        [functionPointer, closure]
+                        varRepresentation
+                    )
+            go unboxedClosuresSoFar block rest
 
 compileBody :: (Compile es) => BlockBuilder -> Seq Core.Statement -> Core.Expr -> Eff es ()
 compileBody block statements returnExpr = compileBodyWith compileReturn block statements returnExpr
@@ -193,7 +212,11 @@ compileBodyWith onReturn block statements returnExpr = case statements of
     addJoinPoint name joinPointBlock.descriptor
     compileBody block rest returnExpr
     -}
-    Core.LetFunction{} :<| rest -> undefined
+    Core.LetFunction{name, parameters, returnRepresentation, statements, result} :<| rest -> do
+        var <- newVarFromName name
+        block <- compileLocalFunction block (Just name) var parameters returnRepresentation statements result
+        registerVariable name var Core.functionRepresentation
+        compileBodyWith onReturn block rest returnExpr
 
 compileLet :: (Compile es) => BlockBuilder -> MIR.Variable -> Representation -> Core.Expr -> Eff es BlockBuilder
 compileLet block local representation = \case
@@ -229,7 +252,7 @@ compileLet block local representation = \case
     Core.JumpJoin joinPoint _arguments -> do
         panic $ "JumpJoin for join point " <> pretty joinPoint <> " in non-tail position"
     Core.Lambda parameters statements returnExpr returnRepresentation -> do
-        compileLambda block local parameters returnRepresentation statements returnExpr
+        compileLocalFunction block Nothing local parameters returnRepresentation statements returnExpr
     Core.ProductAccess{product, index, resultRepresentation} -> do
         (block, product) <- compileValue block product
         addInstruction block $
@@ -407,7 +430,15 @@ compileReturn block expr = do
             finish block (MIR.SwitchInt{var = scrutinee, cases = fromList targets, default_ = defaultBlock})
         Core.Lambda parameters statements returnExpr returnRepresentation -> do
             closure <- newVar "closure"
-            block <- compileLambda block closure parameters returnRepresentation statements returnExpr
+            block <-
+                compileLocalFunction
+                    block
+                    Nothing
+                    closure
+                    parameters
+                    returnRepresentation
+                    statements
+                    returnExpr
             finish block (MIR.Return closure)
         Core.PureOperator pureOperator -> do
             (block, var) <- compilePureOperator block Nothing pureOperator
@@ -503,28 +534,58 @@ compileValue block = \case
         block <- addInstruction block (MIR.SumConstructor{var, tag = constructorIndex, payload, representation = resultRepresentation})
         pure (block, var)
 
-compileLambda :: (Compile es) => BlockBuilder -> MIR.Variable -> Seq (LocalCoreName, Core.Representation) -> Core.Representation -> Seq Core.Statement -> Core.Expr -> Eff es BlockBuilder
-compileLambda block var parameters returnRepresentation statements returnExpr = do
+compileLocalFunction ::
+    (Compile es) =>
+    BlockBuilder ->
+    Maybe LocalCoreName ->
+    MIR.Variable ->
+    Seq (LocalCoreName, Core.Representation) ->
+    Core.Representation ->
+    Seq Core.Statement ->
+    Core.Expr ->
+    Eff es BlockBuilder
+compileLocalFunction block functionName var parameters returnRepresentation statements returnExpr = do
     lambdaUnique <- newUnique
     -- TODO: make this more structured than this string manipulation
-    let lambdaName = Vega.MkGlobalName{moduleName = ?currentDeclarationName.moduleName, name = ?currentDeclarationName.name <> "$lambda" <> show (Unique.hashUnique lambdaUnique)}
-
-    let freeLocals :: Seq LocalCoreName = Util.viaList $ freeLocalVariables (Util.viaList (fmap fst parameters)) statements returnExpr
+    let lambdaName = case functionName of
+            Just (Core.UserProvided localName) -> Vega.MkGlobalName{moduleName = localName.parent.moduleName, name = localName.parent.name <> "$" <> localName.name <> show localName.count}
+            Just (Core.Generated _)
+            Nothing -> Vega.MkGlobalName{moduleName = ?currentDeclarationName.moduleName, name = ?currentDeclarationName.name <> "$lambda$" <> show (Unique.hashUnique lambdaUnique)}
 
     closureParameterIndex <- newUnique
     let closureParameter = Core.Generated closureParameterIndex
 
-    closureEntries <- forIndexed freeLocals \local closureIndex -> do
-        (_, variableRepresentation) <- getLocal local
+    let initialBoundVariables = Util.viaList (fmap fst (toList parameters) <> Foldable.toList functionName)
+    let freeLocals :: Seq LocalCoreName = Util.viaList $ freeLocalVariables initialBoundVariables statements returnExpr
+
+    localsWithRepresentations <- for freeLocals \local -> do
+        if local == closureParameter
+            then
+                pure (local, Core.PrimitiveRep Vega.BoxedRep)
+            else do
+                (_, representation) <- getLocal local
+                pure (local, representation)
+
+    let payloadRepresentation = Core.ProductRep (fmap snd localsWithRepresentations)
+
+    variableClosureEntries <- forIndexed localsWithRepresentations \(local, variableRepresentation) closureIndex -> do
         pure
-            MkClosureEntry
+            ClosedVariableEntry
                 { variableName = local
                 , variableRepresentation
                 , closureParameter
+                , unboxedClosureRepresentation = payloadRepresentation
                 , closureIndex
                 }
-
-    let payloadRepresentation = Core.ProductRep (fmap (\entry -> entry.variableRepresentation) closureEntries)
+    let recursiveEntry = case functionName of
+            Nothing -> []
+            Just functionName ->
+                [ ClosedFunctionEntry
+                    { variableName = functionName
+                    , globalFunctionName = lambdaName
+                    , closureParameter
+                    }
+                ]
 
     lambdaDeclarations <-
         compileFunction
@@ -533,7 +594,7 @@ compileLambda block var parameters returnRepresentation statements returnExpr = 
             returnRepresentation
             statements
             returnExpr
-            closureEntries
+            (variableClosureEntries <> recursiveEntry)
     registerAdditionalDeclarations lambdaDeclarations
 
     closedOverMIRVars <- for freeLocals \local -> do
@@ -547,7 +608,15 @@ compileLambda block var parameters returnRepresentation statements returnExpr = 
     block <- addInstruction block (MIR.Box boxedPayloadVar payloadVar)
 
     functionPointerVar <- newVar "function"
-    block <- addInstruction block (MIR.LoadFunctionPointer functionPointerVar lambdaName [])
+    block <-
+        addInstruction
+            block
+            ( MIR.LoadFunctionPointer
+                { var = functionPointerVar
+                , functionName = lambdaName
+                , representationArguments = (fmap Core.ParameterRep $ DeBruijn.all ?currentRepresentationParameters)
+                }
+            )
 
     block <- addInstruction block (MIR.ProductConstructor var [functionPointerVar, boxedPayloadVar] Core.functionRepresentation)
     pure block

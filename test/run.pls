@@ -63,7 +63,7 @@ let vega = !readlink "-f" "../${!stack "path" "--dist-dir"}/build/vega/vega"
 let compileTests = lines(!find "compile" "-name" "*.vega")
 
 
-let compileYmlFile(name, backend) = "name: ${name}\nsource-directory: \".\"\nbackend: ${backendToString(backend)}"
+let compileYmlFile(name, backend) = "name: ${name}\nsource-directory: \".\"\nbackend: ${backendToString(backend)}\ndependencies: [{type: local, src: \"../../std\"}]"
 
 let parseTestKind(testFile) = {
     let type_ = try { trim(!grep "-Po" "(?<=type:).+" testFile)} with {

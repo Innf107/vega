@@ -239,7 +239,7 @@ setCompiledJS name js = do
     data_ <- declarationData name
     writeIORef data_.compiledJS (Ok js)
 
-getCompiledCore :: (InMemory es) => DeclarationName -> Eff es (GraphData Void (Seq Core.Declaration))
+getCompiledCore :: (InMemory es, HasCallStack) => DeclarationName -> Eff es (GraphData Void (Seq Core.Declaration))
 getCompiledCore name = do
     data_ <- declarationData name
     readIORef data_.compiledCore

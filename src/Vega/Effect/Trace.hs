@@ -26,7 +26,8 @@ import Effectful.TH (makeEffect)
 import Vega.Pretty (Ann, Doc, PrettyANSIIConfig (includeUnique), defaultPrettyANSIIConfig, prettyANSII)
 
 data Category
-    = Driver
+    = Debug
+    | Driver
     | WorkItems
     | AssembleJS
     | Dependencies
@@ -57,7 +58,8 @@ whenTraceEnabled category cont = do
     when enabled cont
 
 data Traces = MkTraces
-    { driver :: Bool
+    { debug :: Bool
+    , driver :: Bool
     , workItems :: Bool
     , assembleJS :: Bool
     , dependencies :: Bool
@@ -78,7 +80,8 @@ data Traces = MkTraces
 defaultTraces :: Traces
 defaultTraces =
     MkTraces
-        { driver = False
+        { debug = False
+        , driver = False
         , workItems = False
         , assembleJS = False
         , dependencies = False
@@ -128,6 +131,7 @@ runTrace eff = do
 
 traceEnabledIn :: Category -> Traces -> Bool
 traceEnabledIn category enabledTraces = case category of
+    Debug -> enabledTraces.debug
     Driver -> enabledTraces.driver
     WorkItems -> enabledTraces.workItems
     AssembleJS -> enabledTraces.assembleJS
@@ -156,6 +160,7 @@ getTraces =
     go traces names = case names of
         [] -> pure traces
         ("" : rest) -> go traces rest
+        ("debug" : rest) -> go (traces{debug = True}) rest
         ("driver" : rest) -> go (traces{driver = True}) rest
         ("work-items" : rest) -> go (traces{workItems = True}) rest
         ("assemble-js" : rest) -> go (traces{assembleJS = True}) rest

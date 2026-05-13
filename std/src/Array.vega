@@ -14,6 +14,7 @@ copyArray({targetArray, targetOffset, sourceArray, sourceOffset, length}) = {
     let go(i) = {
         if i >= length then () else {
             unsafeWriteMutableArray(targetArray, targetOffset + i, unsafeReadArray(sourceArray, sourceOffset + i))
+            go(i + 1)
         }
     }
     go(0)

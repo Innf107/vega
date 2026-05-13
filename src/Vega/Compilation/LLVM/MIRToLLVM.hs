@@ -567,7 +567,64 @@ compileTerminator builder = \case
     MIR.Unreachable -> do
         _ <- LLVMBuilder.buildUnreachable builder
         pure ()
-    _ -> undefined
+    MIR.TailCallClosure{closure, arguments, returnRepresentation} -> do
+        (closureValue, closureLayout) <- lookupVar closure
+        let (functionPointerOffset, _functionPointerLayout) = Layout.productOffsetAndLayout 0 closureLayout
+        pointerToFunctionPointer <- buildGEPOffset builder closureValue functionPointerOffset ""
+        functionPointer <- LLVMBuilder.buildLoad builder LLVM.pointerType pointerToFunctionPointer ""
+
+        let (payloadOffset, payloadLayout) = Layout.productOffsetAndLayout 1 closureLayout
+        pointerToPayload <- buildGEPOffset builder closureValue payloadOffset ""
+        payload <- buildLoadOrKeepPointer builder payloadLayout pointerToPayload "payload"
+
+        let isNotZeroSized (_, layout) = case Layout.kind layout of
+                Layout.ZeroSized -> False
+                _ -> True
+        (argumentValuesWithoutPayload, argumentLayoutsWithoutPayload) <- Seq.unzip . Seq.filter isNotZeroSized <$> for arguments lookupVar
+
+        let argumentLayouts = viaList $ argumentLayoutsWithoutPayload <> [Layout.boxedLayout]
+
+        returnLayout <- Layout.representationLayout returnRepresentation
+
+        (closureFunctionType, _) <- functionLLVMType argumentLayouts returnLayout
+
+        callInstr <- case Layout.kind returnLayout of
+            Layout.ZeroSized -> do
+                callInstr <-
+                    buildCallWithAttributes
+                        builder
+                        closureFunctionType
+                        functionPointer
+                        (viaList $ argumentValuesWithoutPayload <> [payload])
+                        ""
+                _ <- LLVMBuilder.buildRetVoid builder
+                pure callInstr
+            Layout.LLVMScalar _ -> do
+                result <-
+                    buildCallWithAttributes
+                        builder
+                        closureFunctionType
+                        functionPointer
+                        (viaList $ argumentValuesWithoutPayload <> [payload])
+                        "ret"
+                _ <- LLVMBuilder.buildRet builder result
+                pure result
+            Layout.AggregatePointer -> do
+                let sretPointer = case ?functionEnv.sretVariable of
+                        Nothing -> panic "Trying to return AggregatePointer from function without sret variable"
+                        Just (variable, _) -> variable
+
+                callInstr <-
+                    buildCallWithAttributes
+                        builder
+                        closureFunctionType
+                        functionPointer
+                        (viaList $ [sretPointer] <> argumentValuesWithoutPayload <> [payload])
+                        ""
+                _ <- LLVMBuilder.buildRetVoid builder
+                pure callInstr
+        LLVM.setTailCallKind callInstr LLVM.TailCallKindTail
+        LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
 
 externalTypeForRepresentation :: (?context :: LLVM.Context) => Representation -> Eff es LLVM.Type
 externalTypeForRepresentation representation = case representation of

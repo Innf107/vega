@@ -1,0 +1,16 @@
+-- type: print(1)
+
+main : () -> ()
+main() = {
+    let x = 1
+    let g(y : Bool) = if y then {
+        let y = 2
+        let h() = {
+            g(false)
+        }
+    } else {
+        debugInt(x)
+    }
+    g(true)
+}
+

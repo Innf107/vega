@@ -2,13 +2,14 @@ module Vega.Debruijn (
     Index,
     lookup,
     Limit,
+    all,
     initial,
     new,
     size,
 ) where
 
 import Data.Sequence qualified as Seq
-import Relude
+import Relude hiding (all)
 import Vega.Pretty (Pretty)
 import Vega.Pretty qualified as Pretty
 
@@ -20,6 +21,9 @@ instance Pretty Index where
     pretty (MkIndex i) = Pretty.localIdentText ("$" <> show i)
 
 newtype Limit = MkLimit {nextIndex :: Int}
+
+all :: Limit -> Seq Index
+all (MkLimit{nextIndex}) = coerce @(Seq _) [0 .. nextIndex - 1]
 
 initial :: Limit
 initial = MkLimit 0

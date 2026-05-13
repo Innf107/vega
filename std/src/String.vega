@@ -1,7 +1,7 @@
 
 import std:Array (copyArray)
 
-import internal:Internal (replicateArray, arrayLength, unsafeFreezeArray, unsafeThawArray)
+import internal:Internal (replicateArray, arrayLength, unsafeFreezeArray, unsafeThawArray, unsafeMutableArrayContents)
 
 -- While String is not a primitive type itself, it is wired into the compiler
 -- to support string literals.
@@ -21,7 +21,7 @@ fromByteArray(array) = {
 
 replicateChar : (UInt8, Int) -> String
 replicateChar(char, length) = {
-    let array = replicateArray(length, char)
+    let array = unsafeFreezeArray(replicateArray(length, char))
     String({ content = array, offset = 0, length = length })
 }
 
@@ -35,7 +35,7 @@ append(string1, string2) = {
     let String({content = content1, offset = offset1, length = length1 }) = string1
     let String({content = content2, offset = offset2, length = length2 }) = string2
 
-    let combinedArray = unsafeThawArray(replicateArray(length1 + length2, 0u8))
+    let combinedArray = replicateArray(length1 + length2, 0u8)
     copyArray({
             targetArray = combinedArray, 
             targetOffset = 0,
@@ -53,4 +53,16 @@ append(string1, string2) = {
     String({ content = unsafeFreezeArray(combinedArray), offset = 0, length = length1 + length2 })
 }
 
-
+withCString : forall a. (String, (Pointer(UInt8) -> a)) -> a
+withCString(string, cont) = {
+    let String({content, offset, length}) = string
+    let arrayWithTrailingNull = replicateArray(length + 1, 0u8)
+    copyArray({
+        targetArray = arrayWithTrailingNull,
+        targetOffset = 0,
+        sourceArray = content,
+        sourceOffset = offset,
+        length = length
+    })
+    cont(unsafeMutableArrayContents(arrayWithTrailingNull))
+}

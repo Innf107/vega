@@ -1,0 +1,14 @@
+-- type: print(1)
+
+main : () -> ()
+main() = {
+    let x = 1
+    let z = false
+    let f(y : Bool) = if y then {
+        f(z)
+    } else {
+        debugInt(x)
+    }
+    f(true)
+}
+
