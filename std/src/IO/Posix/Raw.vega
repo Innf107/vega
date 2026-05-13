@@ -1,0 +1,3 @@
+
+
+external writeRaw : (Int32, Pointer(UInt8), Int) -> Int = "write"

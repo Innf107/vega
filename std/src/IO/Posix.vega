@@ -1,5 +1,35 @@
 
-import std:String (String)
+import internal:Internal (offsetPointerBytes)
 
+import std:String (String, append)
+import std:IO/Posix/Raw (writeRaw)
+import std:IO/Posix/FileDescriptor (FileDescriptor, stdout)
+import std:Array (unsafeWithPointerAtOffset)
 
+writeBytes : (FileDescriptor, Array(UInt8), Int, Int) -> ()
+writeBytes(FileDescriptor(fd), array, offset, length) = {
+    unsafeWithPointerAtOffset(array, offset, \pointer -> {
+        let go(shadow pointer, shadow length) = {
+            if (length <= 0) then {} else {
+                let written = writeRaw(fd, pointer, length)
+
+                let shadow pointer = offsetPointerBytes(pointer, written)
+                let shadow length = length - written
+                go(pointer, length)
+            }
+        }
+        go(pointer, length)
+    })
+}
+
+printFD : (FileDescriptor, String) -> ()
+printFD(fileDescriptor, message) = {
+    let String({content, offset, length}) = append(message, "\n")
+    writeBytes(fileDescriptor, content, offset, length)
+}
+
+print : String -> ()
+print(message) = {
+    printFD(stdout(), message)
+}
 

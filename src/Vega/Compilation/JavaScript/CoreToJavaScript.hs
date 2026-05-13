@@ -317,6 +317,7 @@ primopJSFunction = \case
             [array] -> pure ([], array)
             _ -> error "unreachable"
         )
+    Builtins.OffsetPointerBytes -> panic "OffsetPointerBytes is not available on the JS backend"
     Builtins.CodePoints -> asJSFunction 1 "internal$codePoints"
     Builtins.Panic -> asJSFunction 1 "internal$panic"
     Builtins.DebugInt -> asJSFunction 1 "console.log"

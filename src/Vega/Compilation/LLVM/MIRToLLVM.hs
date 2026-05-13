@@ -667,6 +667,7 @@ compilePrimopCall builder primop arguments returnRepresentation varName = do
         UnsafeFreezeArray -> compileUnsafeFreezeArray builder arguments returnRepresentation varName
         UnsafeThawArray -> compileUnsafeThawArray builder arguments returnRepresentation varName
         UnsafeMutableArrayContents -> compileUnsafeArrayContents builder arguments returnRepresentation varName
+        OffsetPointerBytes -> compileOffsetPointerBytes builder arguments returnRepresentation varName
         CodePoints -> undefined
         Panic -> undefined
 
@@ -737,6 +738,14 @@ compileUnsafeArrayContents builder arguments _returnRepresentation varName = cas
         array <- lookupVarValue array
         buildGEPOffset builder array (Heap.arrayContentOffset) varName
     _ -> panic $ "unsafeReadArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
+
+compileOffsetPointerBytes :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileOffsetPointerBytes builder arguments _returnRepresentation varName = case arguments of
+    [pointer, offset] -> do
+        pointer <- lookupVarValue pointer
+        offset <- lookupVarValue offset
+        LLVMBuilder.buildGetElementPtr builder LLVM.int8Type pointer [offset] varName
+    _ -> panic $ "offsetPointerBytes called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
 compileUnsafeFreezeArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
 compileUnsafeFreezeArray _builder arguments _returnRepresentation _varName = case arguments of

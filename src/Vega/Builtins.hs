@@ -53,6 +53,7 @@ data Primop
     | UnsafeMutableArrayContents
     | UnsafeFreezeArray
     | UnsafeThawArray
+    | OffsetPointerBytes
     | CodePoints
     | Panic
     | DebugInt
@@ -75,6 +76,7 @@ primopVarName = \case
     UnsafeMutableArrayContents -> "unsafeMutableArrayContents"
     UnsafeFreezeArray -> "unsafeFreezeArray"
     UnsafeThawArray -> "unsafeThawArray"
+    OffsetPointerBytes -> "offsetPointerBytes"
     CodePoints -> "codePoints"
     Panic -> "panic"
     DebugInt -> "debugInt"
@@ -172,6 +174,7 @@ primopType = \case
     UnsafeMutableArrayContents -> forall_ "a" \a -> [mutableArrayType @@ [a]] --> pointerType @@ [a]
     UnsafeFreezeArray -> forall_ "a" \a -> [mutableArrayType @@ [a]] --> arrayType @@ [a]
     UnsafeThawArray -> forall_ "a" \a -> [arrayType @@ [a]] --> mutableArrayType @@ [a]
+    OffsetPointerBytes -> forall_ "a" \a -> [pointerType @@ [a], intType] --> pointerType @@ [a]
     CodePoints -> [stringType] --> arrayType @@ [int32Type]
     Panic -> forall_ "a" \a -> [stringType] --> a
     DebugInt -> [intType] --> unitType
@@ -190,6 +193,7 @@ primopRepresentation primop arguments = case primop of
     UnsafeMutableArrayContents -> ([Core.ArrayRep (argument 0)], pointerRep)
     UnsafeFreezeArray -> ([Core.ArrayRep (argument 0)], Core.ArrayRep (argument 0))
     UnsafeThawArray -> ([Core.ArrayRep (argument 0)], Core.ArrayRep (argument 0))
+    OffsetPointerBytes -> ([pointerRep, intRep 64], pointerRep)
     CodePoints -> ([Core.stringRepresentation], Core.ArrayRep (intRep 32))
     Panic -> ([Core.stringRepresentation], argument 0)
     DebugInt -> ([intRep 64], unitRep)

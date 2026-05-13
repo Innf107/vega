@@ -1,4 +1,11 @@
 
 data FileDescriptor = FileDescriptor(Int32)
 
+stdin : () -> FileDescriptor
+stdin() = FileDescriptor(0i32)
 
+stdout : () -> FileDescriptor
+stdout() = FileDescriptor(1i32)
+
+stderr : () -> FileDescriptor
+stderr() = FileDescriptor(2i32)
