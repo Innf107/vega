@@ -683,6 +683,7 @@ compilePrimopCall builder primop arguments returnRepresentation varName = do
         IntToInt32 -> compileIntConversion Signed 32 builder arguments returnRepresentation varName
         IntToUInt32 -> compileIntConversion Unsigned 32 builder arguments returnRepresentation varName
         IntToUInt -> identity
+        Errno -> outOfLineBuiltin builder "vega_errno" argumentValues returnRepresentation varName
         DebugInt -> outOfLineBuiltin builder "vega_debug_int" argumentValues returnRepresentation varName
         Panic -> undefined
         UnsafeCoerce -> identity

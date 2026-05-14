@@ -98,12 +98,6 @@ pub unsafe extern "C" fn vega_allocate_boxed(info_table: *const InfoTable) -> *m
     HeapObject::data(object_pointer)
 }
 
-// We will probably replace this with some actual vega code at some point,
-// but for now this makes for a very easy way of writing tests
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn vega_debug_int(int: i64) {
-    println!("{}", int);
-}
 
 // SAFETY: This assumes that array_info_table points to a valid array info table (with object_type = Array)
 #[unsafe(no_mangle)]

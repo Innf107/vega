@@ -335,6 +335,7 @@ primopJSFunction = \case
     Builtins.IntToInt32 -> identity
     Builtins.IntToUInt32 -> identity
     Builtins.IntToUInt -> identity
+    Builtins.Errno -> panic "errno is not available on the JS backend"
     Builtins.Panic -> asJSFunction 1 "internal$panic"
     Builtins.DebugInt -> asJSFunction 1 "console.log"
     Builtins.UnsafeCoerce -> identity

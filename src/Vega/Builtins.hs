@@ -74,6 +74,8 @@ data Primop
     | IntToInt32
     | IntToUInt32
     | IntToUInt
+    | -- FFI
+      Errno
     | -- Debugging
       Panic
     | DebugInt
@@ -115,6 +117,7 @@ primopVarName = \case
     IntToInt32 -> "intToInt32"
     IntToUInt32 -> "intToUInt32"
     IntToUInt -> "intToUInt"
+    Errno -> "errno"
     Panic -> "panic"
     DebugInt -> "debugInt"
     UnsafeCoerce -> "unsafeCoerce"
@@ -212,7 +215,7 @@ primopType = \case
     UnsafeMutableArrayContents -> forall_ "a" \a -> [mutableArrayType @@ [a]] --> pointerType @@ [a]
     UnsafeFreezeArray -> forall_ "a" \a -> [mutableArrayType @@ [a]] --> arrayType @@ [a]
     UnsafeThawArray -> forall_ "a" \a -> [arrayType @@ [a]] --> mutableArrayType @@ [a]
-    NullPointer -> [] --> pointerType @@ []
+    NullPointer -> forall_ "a" \a -> [] --> pointerType @@ [a]
     OffsetPointerBytes -> forall_ "a" \a -> [pointerType @@ [a], intType] --> pointerType @@ [a]
     CodePoints -> [stringType] --> arrayType @@ [int32Type]
     Panic -> forall_ "a" \a -> [stringType] --> a
@@ -231,6 +234,7 @@ primopType = \case
     IntToInt32 -> [intType] --> int32Type
     IntToUInt32 -> [intType] --> uint32Type
     IntToUInt -> [intType] --> uintType
+    Errno -> [] --> int32Type
     UnsafeCoerce -> forallInferred Monomorphized "r" Rep \r ->
         forallVisible Parametric "a" r \a ->
             forallVisible Parametric "b" r \b ->
@@ -269,6 +273,7 @@ primopRepresentation primop arguments = case primop of
     IntToInt32 -> ([intRep 64], intRep 32)
     IntToUInt32 -> ([intRep 64], intRep 32)
     IntToUInt -> ([intRep 64], intRep 64)
+    Errno -> ([], intRep 32)
     UnsafeCoerce -> ([argument 0], argument 0)
   where
     argument i = case Seq.lookup i arguments of
