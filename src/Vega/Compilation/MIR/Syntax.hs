@@ -138,7 +138,7 @@ successors = \case
     TailCallDirect{} -> mempty
     TailCallClosure{} -> mempty
 
-representationAtPath :: Representation -> Path -> Representation
+representationAtPath :: HasCallStack => Representation -> Path -> Representation
 representationAtPath baseRepresentation fullPath = go baseRepresentation fullPath
   where
     go representation = \case

@@ -2,9 +2,6 @@
 {-# LANGUAGE ImplicitParams #-}
 {-# LANGUAGE RequiredTypeArguments #-}
 {-# LANGUAGE TypeAbstractions #-}
--- Workaround for https://gitlab.haskell.org/ghc/ghc/-/issues/20630 since we use
--- ImplicitParams with do blocks quite a lot here and we don't actually need ApplicativeDo
-{-# LANGUAGE NoApplicativeDo #-}
 
 module Vega.Compilation.LLVM.MIRToLLVM (compile, addMainFunction) where
 

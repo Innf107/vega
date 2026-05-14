@@ -99,7 +99,6 @@ library
       DefaultSignatures
       PatternSynonyms
       ViewPatterns
-      ApplicativeDo
       ImplicitParams
       RoleAnnotations
       LexicalNegation
@@ -158,7 +157,6 @@ executable vega
       DefaultSignatures
       PatternSynonyms
       ViewPatterns
-      ApplicativeDo
       ImplicitParams
       RoleAnnotations
       LexicalNegation
@@ -219,7 +217,6 @@ test-suite vega-test
       DefaultSignatures
       PatternSynonyms
       ViewPatterns
-      ApplicativeDo
       ImplicitParams
       RoleAnnotations
       LexicalNegation

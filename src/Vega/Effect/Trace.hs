@@ -43,6 +43,7 @@ data Category
     | CoreRep
     | Monomorphization
     | Tokens
+    | CoreToMIR
     deriving (Generic, Show, Enum, Bounded)
 
 data Trace :: Effect where
@@ -75,6 +76,7 @@ data Traces = MkTraces
     , coreRepresentations :: Bool
     , monomorphization :: Bool
     , tokens :: Bool
+    , coreToMIR :: Bool
     }
 
 defaultTraces :: Traces
@@ -97,6 +99,7 @@ defaultTraces =
         , coreRepresentations = False
         , monomorphization = False
         , tokens = False
+        , coreToMIR = False
         }
 
 categoryWidth :: Traces -> Int
@@ -148,6 +151,7 @@ traceEnabledIn category enabledTraces = case category of
     CoreRep -> enabledTraces.coreRepresentations
     Monomorphization -> enabledTraces.monomorphization
     Tokens -> enabledTraces.tokens
+    CoreToMIR -> enabledTraces.coreToMIR
 
 getTraces :: (MonadIO io) => io Traces
 getTraces =
@@ -177,6 +181,7 @@ getTraces =
         ("core-representations" : rest) -> go (traces{coreRepresentations = True}) rest
         ("monomorphization" : rest) -> go (traces{monomorphization = True}) rest
         ("tokens" : rest) -> go (traces{tokens = True}) rest
+        ("coreToMIR" : rest) -> go (traces{coreToMIR = True}) rest
         (trace_ : rest) -> do
             -- TODO: make the warning prettier
             putTextLn $ "WARNING: unrecognized trace category: " <> trace_

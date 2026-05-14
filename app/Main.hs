@@ -1,5 +1,6 @@
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE ApplicativeDo #-}
 
 module Main (main) where
 

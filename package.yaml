@@ -100,7 +100,6 @@ default-extensions:
 - DefaultSignatures
 - PatternSynonyms
 - ViewPatterns
-- ApplicativeDo
 - ImplicitParams
 - RoleAnnotations
 - LexicalNegation

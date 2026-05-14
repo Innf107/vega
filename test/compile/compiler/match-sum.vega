@@ -1,0 +1,20 @@
+-- type: print(5)
+
+import internal:Internal (debugInt)
+
+data Maybe(a) =
+    | Nothing
+    | Just(a)
+
+value : () -> Maybe(Int)
+value() = Just(5)
+
+main : () -> ()
+main() = {
+    match value() {
+        Nothing -> {}
+        Just(int) -> {
+            debugInt(int)
+        }
+    }
+}

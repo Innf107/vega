@@ -81,6 +81,7 @@ registerAdditionalDeclarations declarations = modify (\state -> state{additional
 compileDeclaration :: (GraphPersistence :> es, Trace :> es, NewUnique :> es) => Core.Declaration -> Eff es (Seq MIR.Declaration)
 compileDeclaration = \case
     Core.DefineFunction{name, representationParameters, parameters, returnRepresentation, statements, result} -> do
+        trace CoreToMIR $ "compileDeclaration " <> Vega.prettyGlobal Vega.VarKind name
         let ?currentRepresentationParameters = representationParameters
         compileFunction name parameters returnRepresentation statements result []
     Core.DefineExternalFunction{name, externalName, parameterRepresentations, returnRepresentation} -> do
@@ -389,7 +390,10 @@ compileReturn block expr = do
                     targetBlockBuilder <- get
                     parameterVariable <- newVarFromName name
 
-                    let path = [MIR.SumConstructorPath index, MIR.ProductFieldPath productIndex]
+                    let path = case parameters of
+                            -- If the constructor only has a single parameter, we don't have an internal product
+                            [_] -> [MIR.SumConstructorPath index]
+                            _ -> [MIR.SumConstructorPath index, MIR.ProductFieldPath productIndex]
                     let fieldRepresentation = MIR.representationAtPath scrutineeRepresentation path
                     registerVariable name parameterVariable fieldRepresentation
                     targetBlockBuilder <-

@@ -1,3 +1,5 @@
+{-# LANGUAGE ApplicativeDo #-}
+
 module Vega.VectorMap (
     VectorMap,
     fromList,

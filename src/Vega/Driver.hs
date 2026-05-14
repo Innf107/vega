@@ -1,6 +1,5 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE NoApplicativeDo #-}
 
 module Vega.Driver (
     rebuild,
