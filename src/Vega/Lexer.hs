@@ -99,6 +99,7 @@ pattern IsEOF <- (takeChar -> Nothing)
 
 {-# COMPLETE (:!), IsEOF #-}
 
+{-# SCC run #-}
 run :: OsPath -> Text -> Either LexicalError [(Token, Loc)]
 run fileName text = do
     let go state = case unLexer (lex state) of

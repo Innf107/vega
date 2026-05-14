@@ -54,6 +54,18 @@ data DeclarationName = MkDeclarationName {moduleName :: ModuleName, name :: Text
 instance Pretty DeclarationName where
     pretty (MkDeclarationName{moduleName, name}) = globalIdentText (renderModuleName moduleName <> ":" <> name)
 
+data ParsedName = MkParsedName
+    { moduleName :: Maybe Text
+    , name :: Text
+    }
+    deriving (Generic, Eq, Show, Ord)
+    deriving anyclass (Hashable)
+
+instance Pretty ParsedName where
+    pretty (MkParsedName{moduleName, name}) = case moduleName of
+        Nothing -> globalIdentText name
+        Just moduleName -> globalIdentText (moduleName <> "." <> name)
+
 data GlobalName = MkGlobalName {moduleName :: ModuleName, name :: Text}
     deriving stock (Generic, Eq, Show, Ord)
     deriving anyclass (Hashable)
@@ -93,7 +105,7 @@ isInternalName globalName = globalName.moduleName == internalModuleName
 data Pass = Parsed | Renamed | Typed
 
 type family XName (p :: Pass) where
-    XName Parsed = Text
+    XName Parsed = ParsedName
     XName Renamed = Name
     XName Typed = Name
 

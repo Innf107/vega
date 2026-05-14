@@ -39,6 +39,7 @@ data MonomorphizedDefinitions = MkMonomorphizedDeclarations
     , declarations :: HashMap Vega.GlobalName MIR.Declaration
     }
 
+{-# SCC monomorphize #-}
 monomorphize :: (Trace :> es) => MIR.Program -> Vega.GlobalName -> Eff es MIR.Program
 monomorphize program entryPoint = do
     let ?program = program

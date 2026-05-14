@@ -363,10 +363,10 @@ compileBackend = do
             LLVM.setTarget llvmModule triple
             LLVM.Target.setModuleDataLayout llvmModule dataLayout
 
-            LLVM.verifyModule llvmModule LLVM.ReturnStatusAction
+            {-#  SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule LLVM.ReturnStatusAction
 
             -- TODO: be smarter about where to put the output
-            LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile
+            {-#  SCC "LLVM.Target.targetMachineEmitToFile" #-} LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile
 
             MkDriverConfig{linker} <- ask
             linkerCommand <- case linker of
@@ -376,7 +376,7 @@ compileBackend = do
             -- TODO: put this somewhere more sensible
             writeFileBS "libvega_runtime.a" runtimeArchive
 
-            runProcess $ callProcess linkerCommand ["out.o", "libvega_runtime.a"]
+            {-# SCC "linker" #-} runProcess $ callProcess linkerCommand ["out.o", "libvega_runtime.a"]
             removeFile "out.o"
             removeFile "libvega_runtime.a"
         _ -> undefined

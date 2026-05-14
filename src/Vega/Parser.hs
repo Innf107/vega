@@ -96,24 +96,52 @@ doubleLit = MegaParsec.token match (fromList [Label (fromList "float literal")])
         (Lexer.FloatLiteral float, loc) -> Just (float, loc)
         _ -> Nothing
 
-identifierWithLoc :: Parser (Text, Loc)
-identifierWithLoc = token matchIdentifier (fromList [Label (fromList "identifier")])
+unqualifiedIdentifierWithLoc :: Parser (Text, Loc)
+unqualifiedIdentifierWithLoc = token matchIdentifier (fromList [Label (fromList "identifier")])
   where
     matchIdentifier = \case
         (Ident ident, loc) -> Just (ident, loc)
         _ -> Nothing
 
-identifier :: Parser Text
+unqualifiedIdentifier :: Parser Text
+unqualifiedIdentifier = fmap fst unqualifiedIdentifierWithLoc
+
+identifierWithLoc :: Parser (ParsedName, Loc)
+identifierWithLoc = do
+    maybeModuleName <- optional $ try do
+        (moduleName, startLoc) <- unqualifiedConstructorWithLoc
+        _ <- single Lexer.Period
+        pure (moduleName, startLoc)
+    (name, endLoc) <- unqualifiedIdentifierWithLoc
+    case maybeModuleName of
+        Nothing -> pure (MkParsedName{moduleName = Nothing, name}, endLoc)
+        Just (moduleName, startLoc) -> pure (MkParsedName{moduleName = Just moduleName, name}, startLoc <> endLoc)
+
+identifier :: Parser ParsedName
 identifier = fmap fst identifierWithLoc
 
-constructorWithLoc :: Parser (Text, Loc)
-constructorWithLoc = token matchConstructor (fromList [Label (fromList "constructor")])
+unqualifiedConstructorWithLoc :: Parser (Text, Loc)
+unqualifiedConstructorWithLoc = token matchConstructor (fromList [Label (fromList "constructor")])
   where
     matchConstructor = \case
         (Constructor ident, loc) -> Just (ident, loc)
         _ -> Nothing
 
-constructor :: Parser Text
+unqualifiedConstructor :: Parser Text
+unqualifiedConstructor = fmap fst unqualifiedConstructorWithLoc
+
+constructorWithLoc :: Parser (ParsedName, Loc)
+constructorWithLoc = do
+    (moduleNameOrConstructor, startLoc) <- unqualifiedConstructorWithLoc
+    choice
+        [ do
+            _ <- single Period
+            (constructor, endLoc) <- unqualifiedConstructorWithLoc
+            pure (MkParsedName{moduleName = Just moduleNameOrConstructor, name = constructor}, startLoc <> endLoc)
+        , pure (MkParsedName{moduleName = Nothing, name = moduleNameOrConstructor}, startLoc)
+        ]
+
+constructor :: Parser ParsedName
 constructor = fmap fst constructorWithLoc
 
 many :: (IsList l, Item l ~ a, MonadPlus m) => m a -> m l
@@ -158,6 +186,7 @@ chainr1 parser between = do
             , pure acc
             ]
 
+{-# SCC parse #-}
 parse :: ModuleName -> OsPath -> [(Token, Loc)] -> Either (ParseErrorBundle [(Token, Loc)] AdditionalParseError) ParsedModule
 parse moduleName filePath tokens = do
     let parserEnv = MkParserEnv{moduleName}
@@ -184,11 +213,11 @@ declaration = do
 
 defineFunction :: Parser (Declaration Parsed)
 defineFunction = do
-    (name, startLoc) <- identifierWithLoc
+    (name, startLoc) <- unqualifiedIdentifierWithLoc
     _ <- single Colon
     typeSignature <- type_
     _ <- semicolon
-    definitionName <- identifier
+    definitionName <- unqualifiedIdentifier
 
     when (name /= definitionName) do
         additionalParseError $
@@ -200,7 +229,7 @@ defineFunction = do
 
     declaredTypeParameters <- option Empty do
         _ <- single LBracket
-        parameters <- (swap <$> identifierWithLoc) `sepBy` comma
+        parameters <- (swap <$> unqualifiedIdentifierWithLoc) `sepBy` comma
         _ <- single RBracket
         pure parameters
 
@@ -230,7 +259,7 @@ defineFunction = do
 defineVariantType :: Parser (Declaration Parsed)
 defineVariantType = do
     startLoc <- single Data
-    (name, nameLoc) <- constructorWithLoc
+    (name, nameLoc) <- unqualifiedConstructorWithLoc
     (typeParameters, typeVarBinderLoc) <-
         choice
             [ do
@@ -266,7 +295,7 @@ defineVariantType = do
         )
   where
     constructorDefinition = do
-        (name, startLoc) <- constructorWithLoc
+        (name, startLoc) <- unqualifiedConstructorWithLoc
         (_, globalName) <- globalNamesForCurrentModule name
 
         (dataArguments, endLoc) <- option (fromList [], startLoc) (argumentsWithLoc type_)
@@ -275,7 +304,7 @@ defineVariantType = do
 defineExternalFunction :: Parser (Declaration Parsed)
 defineExternalFunction = do
     startLoc <- single External
-    literalName <- identifier
+    literalName <- unqualifiedIdentifier
     _ <- single Colon
     type_ <- type_
     externalNameWithLoc <- optional do
@@ -342,38 +371,45 @@ type_ =
                 (name, loc) <- constructorWithLoc
                 applications <- many @[_] (argumentsWithLoc type_)
                 case name of
-                    -- TODO: this doesn't allow using `Type` as a bare type constructor
-                    "Type" -> case applications of
-                        [(rep :<| Empty, appLoc)] -> pure (TypeS (loc <> appLoc) rep)
-                        _ -> undefined
-                    "ArrayRep" -> case applications of
-                        [(rep :<| Empty, appLoc)] -> pure (ArrayRepS (loc <> appLoc) rep)
-                        _ -> undefined
-                    "Closure" -> case applications of
-                        [(rep :<| Empty, appLoc)] -> pure (ClosureRepS (loc <> appLoc) rep)
-                        _ -> undefined
-                    _ -> do
-                        let constructor = case name of
-                                "Effect" -> EffectS loc
-                                "Rep" -> RepS loc
-                                "Unit" -> ProductRepS loc mempty
-                                "Empty" -> SumRepS loc mempty
-                                "Boxed" -> PrimitiveRepS loc BoxedRep
-                                "PointerRep" -> PrimitiveRepS loc PointerRep
-                                "IntRep" -> PrimitiveRepS loc (IntRep 64)
-                                "Int32Rep" -> PrimitiveRepS loc (IntRep 32)
-                                "Int16Rep" -> PrimitiveRepS loc (IntRep 16)
-                                "Int8Rep" -> PrimitiveRepS loc (IntRep 8)
-                                "Kind" -> KindS loc
-                                "Integer" -> IntegerS loc
-                                _ -> TypeConstructorS loc name
+                    MkParsedName{moduleName = Nothing, name = unqualifiedName} -> case unqualifiedName of
+                        -- TODO: this doesn't allow using `Type` as a bare type constructor
+                        "Type" -> case applications of
+                            [(rep :<| Empty, appLoc)] -> pure (TypeS (loc <> appLoc) rep)
+                            _ -> undefined
+                        "ArrayRep" -> case applications of
+                            [(rep :<| Empty, appLoc)] -> pure (ArrayRepS (loc <> appLoc) rep)
+                            _ -> undefined
+                        "Closure" -> case applications of
+                            [(rep :<| Empty, appLoc)] -> pure (ClosureRepS (loc <> appLoc) rep)
+                            _ -> undefined
+                        _ -> do
+                            let constructor = case unqualifiedName of
+                                    "Effect" -> EffectS loc
+                                    "Rep" -> RepS loc
+                                    "Unit" -> ProductRepS loc mempty
+                                    "Empty" -> SumRepS loc mempty
+                                    "Boxed" -> PrimitiveRepS loc BoxedRep
+                                    "PointerRep" -> PrimitiveRepS loc PointerRep
+                                    "IntRep" -> PrimitiveRepS loc (IntRep 64)
+                                    "Int32Rep" -> PrimitiveRepS loc (IntRep 32)
+                                    "Int16Rep" -> PrimitiveRepS loc (IntRep 16)
+                                    "Int8Rep" -> PrimitiveRepS loc (IntRep 8)
+                                    "Kind" -> KindS loc
+                                    "Integer" -> IntegerS loc
+                                    _ -> TypeConstructorS loc name
+                            pure $
+                                foldl'
+                                    (\constr (args, loc) -> TypeApplicationS (getLoc constr <> loc) constr args)
+                                    constructor
+                                    applications
+                    _ ->
                         pure $
                             foldl'
                                 (\constr (args, loc) -> TypeApplicationS (getLoc constr <> loc) constr args)
-                                constructor
+                                (TypeConstructorS loc name)
                                 applications
             , do
-                (name, loc) <- identifierWithLoc
+                (name, loc) <- unqualifiedIdentifierWithLoc
                 pure $ TypeVarS loc name
             , do
                 (literal, literalTypeInBits, loc) <- intLit
@@ -404,11 +440,11 @@ type_ =
             , do
                 startLoc <- single LBrace
                 let recordField = do
-                        key <- identifier
+                        key <- unqualifiedIdentifier
                         _ <- single Lexer.Colon
                         value <- type_
                         pure (key, value)
-                    
+
                 fields <- recordField `sepBy1` comma
                 -- We allow layout to insert a semicolon here
                 _ <- optional semicolon
@@ -460,18 +496,18 @@ typeVarBinder =
         monomorphization <- monomorphization
         choice
             [ do
-                (varName, loc) <- identifierWithLoc
+                (varName, loc) <- unqualifiedIdentifierWithLoc
                 pure (UnspecifiedBinderS{loc, varName, monomorphization})
             , do
                 startLoc <- single LParen
-                varName <- identifier
+                varName <- unqualifiedIdentifier
                 _ <- single Colon
                 varKind <- kind
                 endLoc <- single RParen
                 pure (TypeVarBinderS{loc = startLoc <> endLoc, monomorphization, varName, kind = varKind, visibility = Visible})
             , do
                 startLoc <- single LBrace
-                varName <- identifier
+                varName <- unqualifiedIdentifier
                 _ <- single Colon
                 varKind <- kind
                 endLoc <- single RBrace
@@ -501,7 +537,7 @@ pattern_ = do
         choice
             [ do
                 _ <- single As
-                (name, endLoc) <- identifierWithLoc
+                (name, endLoc) <- unqualifiedIdentifierWithLoc
                 pure (AsPattern (getLoc inner <> endLoc) () inner name)
             , do
                 _ <- single Colon
@@ -512,11 +548,11 @@ pattern_ = do
     pattern2 =
         choice
             [ do
-                (name, loc) <- identifierWithLoc
+                (name, loc) <- unqualifiedIdentifierWithLoc
                 pure (VarPattern{loc = loc, ext = (), name = name, isShadowed = False})
             , do
                 startLoc <- single Lexer.Shadow
-                (name, endLoc) <- identifierWithLoc
+                (name, endLoc) <- unqualifiedIdentifierWithLoc
                 pure (VarPattern{loc = startLoc <> endLoc, ext = (), name = name, isShadowed = True})
             , do
                 (name, startLoc) <- constructorWithLoc
@@ -564,7 +600,7 @@ pattern_ = do
             ]
       where
         recordField = do
-            (fieldName, loc) <- identifierWithLoc
+            (fieldName, loc) <- unqualifiedIdentifierWithLoc
             choice
                 [ do
                     _ <- single Equals
@@ -631,9 +667,9 @@ expr = label "expression" exprLogical
             , do
                 startLoc <- single Lexer.Lambda
                 typeParameters <- option Empty do
-                    single LBracket
-                    parameters <- (swap <$> identifierWithLoc) `sepBy` comma
-                    single RBracket
+                    _ <- single LBracket
+                    parameters <- (swap <$> unqualifiedIdentifierWithLoc) `sepBy` comma
+                    _ <- single RBracket
                     pure parameters
                 parameters <- many pattern_
                 _ <- single Arrow
@@ -697,7 +733,7 @@ blockOrRecord = do
   where
     recordField :: Parser (Text, Expr Parsed)
     recordField = do
-        key <- identifier
+        key <- unqualifiedIdentifier
         _ <- single Lexer.Equals
         value <- expr
         pure (key, value)
@@ -756,7 +792,7 @@ let_ = do
             typeSig <- type_
             _ <- semicolon
             _ <- single Lexer.Let
-            name <- identifier
+            name <- unqualifiedIdentifier
             parameters <- arguments pattern_
             _ <- single Lexer.Equals
             body <- expr
@@ -804,11 +840,11 @@ functionApplication = do
 import_ :: Parser Import
 import_ = do
     startLoc <- single Lexer.Import
-    (module_, _loc) <- moduleName
+    (module_, moduleNameLoc) <- moduleName
     choice
         [ do
             _ <- single As
-            (importedAs, endLoc) <- constructorWithLoc
+            (importedAs, endLoc) <- unqualifiedConstructorWithLoc
             pure
                 ( ImportQualified
                     { loc = startLoc <> endLoc
@@ -817,15 +853,19 @@ import_ = do
                     }
                 )
         , do
-            (identifiers, endLoc) <- argumentsWithLoc (identifier <|> constructor)
+            (identifiers, endLoc) <- argumentsWithLoc (unqualifiedIdentifier <|> unqualifiedConstructor)
             pure (ImportUnqualified (startLoc <> endLoc) module_ identifiers)
+        , do
+            -- `import std:Whatever/String` is equivalent to `import std:Whatever/String as String`
+            let importedAs = NonEmpty.last module_.subModules
+            pure (ImportQualified{loc = startLoc <> moduleNameLoc, moduleName = module_, importedAs})
         ]
 
 moduleName :: Parser (ParsedModuleName, Loc)
 moduleName = do
-    packageName <- optional $ try $ (identifierWithLoc <|> constructorWithLoc) <* single Colon
+    packageName <- optional $ try $ unqualifiedIdentifierWithLoc <* single Colon
 
-    subModules <- (identifierWithLoc <|> constructorWithLoc) `sepBy1` (single Slash)
+    subModules <- unqualifiedConstructorWithLoc `sepBy1` (single Slash)
 
     case packageName of
         Nothing ->

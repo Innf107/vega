@@ -25,7 +25,7 @@ import Vega.Syntax (
     PrimitiveRep,
     Statement,
     TypeOperator,
-    TypeSyntax,
+    TypeSyntax, ParsedName,
  )
 
 import Effectful
@@ -136,6 +136,7 @@ deriving via Generically PrimitiveRep instance Diff PrimitiveRep
 deriving via Generically (TypeSyntax Parsed) instance Diff (TypeSyntax Parsed)
 deriving via Generically (TypeSyntax Renamed) instance Diff (TypeSyntax Renamed)
 deriving via Generically LocalName instance Diff LocalName
+deriving via Generically ParsedName instance Diff ParsedName
 deriving via Generically GlobalName instance Diff GlobalName
 deriving via Generically DeclarationName instance Diff DeclarationName
 deriving via Generically Name instance Diff Name

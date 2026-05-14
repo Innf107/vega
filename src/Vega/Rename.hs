@@ -103,7 +103,7 @@ findGlobalUnregistered nameKind name = do
             Nothing -> []
             Just global -> [global]
 
-    importScope <- (defaultImportScope <>) <$> getModuleImportScope parent.moduleName
+    importScope <- ownImportScopeWithDefault
     userDefinedCandidates <- findMatchingNames name nameKind
 
     let candidates = builtinCandidates <> toList userDefinedCandidates
@@ -136,7 +136,7 @@ findGlobalOrDummy loc nameKind name =
     findGlobal nameKind name >>= \case
         Found globalName -> pure (Global globalName)
         NotFound -> do
-            Output.output (NameNotFound{loc, name, nameKind})
+            Output.output (NameNotFound{loc, parsedName = MkParsedName{moduleName = Nothing, name}, nameKind})
 
             parent <- ask @DeclarationName
             pure (Local (dummyLocalName parent name))
@@ -151,6 +151,21 @@ findGlobalOrDummy loc nameKind name =
             parent <- ask @DeclarationName
             pure (Local (dummyLocalName parent name))
 
+findGlobalInModule :: (Rename es) => Loc -> NameKind -> Text -> Text -> Eff es Name
+findGlobalInModule loc nameKind moduleName name = do
+    importScope <- ownImportScopeWithDefault
+    importedModule importScope moduleName >>= \case
+        Nothing -> do
+            parent <- ask @DeclarationName
+            pure  (Local (dummyLocalName parent name))
+        Just moduleName -> do
+            undefined
+    
+
+importedModule :: Rename es => ImportScope -> Text -> Eff es (Maybe ModuleName)
+importedModule importScope moduleName = do
+    undefined
+
 isInScope :: GlobalName -> ImportScope -> Bool
 isInScope name scope =
     case lookup name.moduleName scope.imports of
@@ -159,6 +174,7 @@ isInScope name scope =
             -- TODO: qualified
             HashSet.member name.name importedItems.unqualifiedItems
 
+{-# SCC rename #-}
 rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, RenameErrorSet, HashSet DeclarationName)
 rename (MkDeclaration loc name syntax) = runReader name do
     ((syntax, errors), dependencies) <-
@@ -168,20 +184,26 @@ rename (MkDeclaration loc name syntax) = runReader name do
                     renameDeclarationSyntax syntax
     pure (MkDeclaration loc name syntax, (MkRenameErrorSet errors), dependencies)
 
-findVarName :: (Rename es) => Env -> Loc -> Text -> Eff es Name
-findVarName env loc text = case lookup text env.localVariables of
-    Just localName -> pure (Local localName)
-    Nothing -> findGlobalOrDummy loc VarKind text
+findVarName :: (Rename es) => Env -> Loc -> ParsedName -> Eff es Name
+findVarName env loc parsedName = case parsedName.moduleName of
+    Just moduleName -> findGlobalInModule loc VarKind moduleName parsedName.name
+    Nothing -> case lookup parsedName.name env.localVariables of
+        Just localName -> pure (Local localName)
+        Nothing -> findGlobalOrDummy loc VarKind parsedName.name
 
-findTypeConstructorName :: (Rename es) => Env -> Loc -> Text -> Eff es Name
-findTypeConstructorName env loc text = case lookup text env.localTypeConstructors of
-    Just localName -> pure (Local localName)
-    Nothing -> findGlobalOrDummy loc TypeConstructorKind text
+findTypeConstructorName :: (Rename es) => Env -> Loc -> ParsedName -> Eff es Name
+findTypeConstructorName env loc parsedName = case parsedName.moduleName of
+    Just moduleName -> findGlobalInModule loc TypeConstructorKind moduleName parsedName.name
+    Nothing -> case lookup parsedName.name env.localTypeConstructors of
+        Just localName -> pure (Local localName)
+        Nothing -> findGlobalOrDummy loc TypeConstructorKind parsedName.name
 
-findDataConstructorName :: (Rename es) => Env -> Loc -> Text -> Eff es Name
-findDataConstructorName env loc text = case lookup text env.localDataConstructors of
-    Just localName -> pure (Local localName)
-    Nothing -> findGlobalOrDummy loc DataConstructorKind text
+findDataConstructorName :: (Rename es) => Env -> Loc -> ParsedName -> Eff es Name
+findDataConstructorName env loc parsedName = case parsedName.moduleName of
+    Just moduleName -> findGlobalInModule loc DataConstructorKind moduleName parsedName.name
+    Nothing -> case lookup parsedName.name env.localDataConstructors of
+        Just localName -> pure (Local localName)
+        Nothing -> findGlobalOrDummy loc DataConstructorKind parsedName.name
 
 {- | This is returned if we cannot find a local name during renaming.
 
@@ -455,3 +477,8 @@ renameMatchCase env (MkMatchCase{loc, pattern_, body}) = do
     (pattern_, envTrans) <- renamePattern env pattern_
     body <- renameExpr (envTrans env) body
     pure (MkMatchCase{loc, pattern_, body})
+
+ownImportScopeWithDefault :: (Rename es) => Eff es ImportScope
+ownImportScopeWithDefault = do
+    parent <- ask @DeclarationName
+    (defaultImportScope <>) <$> getModuleImportScope parent.moduleName

@@ -72,6 +72,7 @@ envAndLimitFromRepresentationVariables variables = go Debruijn.initial HashMap.e
         let (newLimit, index) = Debruijn.new oldLimit
         go newLimit (HashMap.insert var index mapping) rest
 
+{-# SCC compileDeclaration #-}
 compileDeclaration ::
     (GraphPersistence :> es, IOE :> es, Trace :> es) =>
     Vega.Declaration Typed ->

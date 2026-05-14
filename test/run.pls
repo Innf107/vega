@@ -60,7 +60,7 @@ chdir(testdir)
 
 let vega = !readlink "-f" "../${!stack "path" "--dist-dir"}/build/vega/vega"
 
-let compileTests = lines(!find "compile" "-name" "*.vega")
+let compileTests = lines(!find "categories" "-name" "*.vega")
 
 
 let compileYmlFile(name, backend) = "name: ${name}\nsource-directory: \".\"\nbackend: ${backendToString(backend)}\ndependencies: [{type: local, src: \"../../std\"}]"

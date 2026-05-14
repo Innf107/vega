@@ -106,6 +106,7 @@ type TypeCheck es =
     , NewUnique :> es
     )
 
+{-# SCC checkDeclaration #-}
 -- TODO: does it make sense to return the declaration anyway even if we have errors?
 -- We already have the *renamed* syntax so I'm not sure if this is really beneficial
 -- (in any case, we can't just compile it if it has type errors so there isn't that much

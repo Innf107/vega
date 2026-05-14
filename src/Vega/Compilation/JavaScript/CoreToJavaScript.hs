@@ -24,6 +24,7 @@ type Compile es =
     , IOE :> es
     )
 
+{-# SCC compileDeclaration #-}
 compileDeclaration :: (Trace :> es, IOE :> es) => Core.Declaration -> Eff es (Seq JS.Statement)
 compileDeclaration = \case
     Core.DefineFunction

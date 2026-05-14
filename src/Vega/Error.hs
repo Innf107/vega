@@ -38,7 +38,7 @@ import Vega.Panic qualified as Panic
 import Vega.Parser (AdditionalParseError (..))
 import Vega.Parser qualified as Parser
 import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, lparen, note, number, plain, quote, rparen, vsep, (<+>))
-import Vega.Syntax (BinderVisibility (..), ForallBinderS (..), GlobalName (..), IntSum, Kind, LocalName, MetaVar, Monomorphization (..), Name, NameKind (..), Type (..), prettyGlobal, prettyGlobalText, prettyLocal, prettyName)
+import Vega.Syntax (BinderVisibility (..), ForallBinderS (..), GlobalName (..), IntSum, Kind, LocalName, MetaVar, Monomorphization (..), Name, NameKind (..), Type (..), prettyGlobal, prettyGlobalText, prettyLocal, prettyName, ParsedName)
 import Vega.Util (viaList)
 import Vega.Util qualified as Util
 import Vega.VectorMap (VectorMap)
@@ -66,7 +66,7 @@ data LexicalError
 data RenameError
     = NameNotFound
         { loc :: Loc
-        , name :: Text
+        , parsedName :: ParsedName
         , nameKind :: NameKind
         }
     | AmbiguousGlobal
@@ -305,8 +305,8 @@ renderCompilationError = \case
             emphasis "More layout blocks have been closed than opened"
     ParseError error -> fmap ErrorWithLoc $ generateParseErrorMessages error
     RenameError error -> pure $ ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
-        NameNotFound{name, nameKind} -> align do
-            emphasis "Unbound" <+> prettyNameKind nameKind <+> prettyGlobalText nameKind name
+        NameNotFound{parsedName, nameKind} -> align do
+            emphasis "Unbound" <+> prettyNameKind nameKind <+> pretty parsedName
         AmbiguousGlobal{name, nameKind, candidates} ->
             align do
                 emphasis "Ambiguous" <+> prettyNameKind nameKind <+> prettyGlobalText nameKind name <> "\n"

@@ -37,6 +37,7 @@ type Verify es =
     , Reader MIR.BlockDescriptor :> es
     )
 
+{-# SCC verify #-}
 verify :: (IOE :> es) => MIR.Program -> Eff es (Seq (Doc Ann))
 verify program = do
     let functionSignatures = computeFunctionSignatures program

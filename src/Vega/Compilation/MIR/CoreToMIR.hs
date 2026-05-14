@@ -78,6 +78,7 @@ registerVariable local variable representation = do
 registerAdditionalDeclarations :: (Compile es) => Seq MIR.Declaration -> Eff es ()
 registerAdditionalDeclarations declarations = modify (\state -> state{additionalDeclarations = state.additionalDeclarations <> declarations})
 
+{-# SCC compileDeclaration #-}
 compileDeclaration :: (GraphPersistence :> es, Trace :> es, NewUnique :> es) => Core.Declaration -> Eff es (Seq MIR.Declaration)
 compileDeclaration = \case
     Core.DefineFunction{name, representationParameters, parameters, returnRepresentation, statements, result} -> do

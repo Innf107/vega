@@ -71,6 +71,7 @@ type Compile es =
     , State DeclarationState :> es
     )
 
+{-# SCC compile #-}
 compile :: (?context :: LLVM.Context, IOE :> es) => MIR.Program -> Eff es LLVM.Module
 compile program = do
     module_ <- LLVM.moduleCreateWithName "idkwhattoputhereyet"
