@@ -103,6 +103,7 @@ concatList(list) = {
             copyAll(currentOffset + length, rest)
         }
     }
+    copyAll(0, list)
     String({content = unsafeFreezeArray(combinedArray), length = size, offset = 0})
 }
 
