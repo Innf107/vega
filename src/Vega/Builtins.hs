@@ -104,7 +104,7 @@ primopVarName = \case
     OffsetPointerBytes -> "offsetPointerBytes"
     CodePoints -> "codePoints"
     Int8ToInt -> "int8ToInt"
-    UInt8ToInt -> "uInt8ToInt"
+    UInt8ToInt -> "uint8ToInt"
     Int16ToInt -> "int16ToInt"
     UInt16ToInt -> "uint16ToInt"
     Int32ToInt -> "int32ToInt"

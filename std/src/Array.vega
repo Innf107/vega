@@ -1,5 +1,12 @@
 
-import internal:Internal (replicateArray, unsafeWriteMutableArray, unsafeReadArray, offsetPointerBytes, unsafeArrayContents)
+import internal:Internal 
+    ( replicateArray
+    , unsafeWriteMutableArray
+    , unsafeReadArray
+    , unsafeReadMutableArray
+    , offsetPointerBytes
+    , unsafeArrayContents
+    )
 
 -- TODO: This should probably use some primop that compiles directly to a memmov
 -- TODO: bounds checks lol
@@ -20,6 +27,22 @@ copyArray({targetArray, targetOffset, sourceArray, sourceOffset, length}) = {
     go(0)
 }
 
+copyMutableArray : forall a. ({ 
+        targetArray : MutableArray(a),
+        targetOffset : Int,
+        sourceArray : MutableArray(a),
+        sourceOffset : Int,
+        length : Int
+    }) -> ()
+copyMutableArray({targetArray, targetOffset, sourceArray, sourceOffset, length}) = {
+    let go(i) = {
+        if i >= length then () else {
+            unsafeWriteMutableArray(targetArray, targetOffset + i, unsafeReadMutableArray(sourceArray, sourceOffset + i))
+            go(i + 1)
+        }
+    }
+    go(0)
+}
 
 unsafeWithPointerAtOffset : forall r. (Array(UInt8), Int, Pointer(UInt8) -> r) -> r
 unsafeWithPointerAtOffset(array, offset, cont) = {

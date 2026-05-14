@@ -13,3 +13,12 @@ map(list, f) = match list {
     Nil -> Nil
     Cons(x, xs) -> Cons(f(x), map(xs, f))
 }
+
+reverse : forall a. List(a) -> List(a)
+reverse(list) = {
+    let go(acc, shadow list) = match list {
+        Nil -> acc
+        Cons(x, xs) -> go(Cons(x, acc), xs)
+    }
+    go(Nil, list)
+}

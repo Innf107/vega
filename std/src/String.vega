@@ -1,7 +1,17 @@
 
 import std:Array (copyArray)
+import std:List (List, Nil, Cons)
+import std:Maybe (Maybe, Nothing, Just)
 
-import internal:Internal (replicateArray, arrayLength, unsafeFreezeArray, unsafeThawArray, unsafeMutableArrayContents)
+import internal:Internal 
+    ( replicateArray
+    , arrayLength
+    , unsafeFreezeArray
+    , unsafeThawArray
+    , unsafeMutableArrayContents
+    , unsafeReadArray
+    , uint8ToInt
+    )
 
 -- While String is not a primitive type itself, it is wired into the compiler
 -- to support string literals.
@@ -17,6 +27,9 @@ fromByteArray : Array(UInt8) -> String
 fromByteArray(array) = {
     String({ content = array, offset = 0, length = arrayLength(array) })
 }
+
+unsafeFromByteArraySlice : ({ content : Array(UInt8), offset : Int, length : Int }) -> String
+unsafeFromByteArraySlice(record) = String(record)
 
 
 replicateChar : (UInt8, Int) -> String
@@ -65,4 +78,69 @@ withCString(string, cont) = {
         length = length
     })
     cont(unsafeMutableArrayContents(arrayWithTrailingNull))
+}
+
+concatList : forall a. List(String) -> String
+concatList(list) = {
+    let totalSize(shadow list, acc) = match list {
+        Nil -> acc
+        Cons(string, rest) -> totalSize(rest, acc + length(string))
+    }
+    let size = totalSize(list, 0)
+
+    let combinedArray = replicateArray(size, 0u8)
+
+    let copyAll(currentOffset, shadow list) = match list {
+        Nil -> {}
+        Cons(String({content, offset, length}), rest) -> {
+            copyArray({
+                targetArray = combinedArray,
+                sourceArray = content,
+                sourceOffset = offset,
+                targetOffset = currentOffset,
+                length = length
+            })
+            copyAll(currentOffset + length, rest)
+        }
+    }
+    String({content = unsafeFreezeArray(combinedArray), length = size, offset = 0})
+}
+
+-- TODO: this could probably be some sort of crazy optimized SIMD magic
+
+findByteIndex : (UInt8, String) -> Maybe(Int)
+findByteIndex(byte, String({content, offset, length})) = {
+    let go(index) = {
+        if index >= length then {
+            Nothing
+        } else {
+            let currentByte = unsafeReadArray(content, index)
+            if (uint8ToInt(currentByte) == uint8ToInt(byte)) then {
+                -- we need to subtract offset since this is an index of the internal array,
+                -- not the string
+
+                Just(index - offset)
+            } else {
+                go(index + 1)
+            }
+        }
+    }
+    go(offset)
+}
+
+-- O(1)
+
+take : (String, Int) -> String
+take(string, takenLength) = {
+    let String({content, length, offset}) = string
+    if takenLength > length then {
+        string
+    } else if takenLength < 0 then {
+        -- TODO: it might be nice to have a dedicated singular empty string
+        -- but we can't define that currently since we can't have top-level value bindings
+
+        String({content = content, length = 0, offset = offset})
+    } else {
+        String({content = content, length = takenLength, offset = offset})
+    }
 }
