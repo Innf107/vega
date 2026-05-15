@@ -500,7 +500,7 @@ compileInstruction builder = \case
                         builder
                         closureFunctionType
                         functionPointer
-                        (viaList $ argumentValuesWithoutPayload <> [returnPointer, payload])
+                        (viaList $ [returnPointer] <> argumentValuesWithoutPayload <> [payload])
                         ""
                 LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
 

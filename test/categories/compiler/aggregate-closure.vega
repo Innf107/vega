@@ -1,0 +1,22 @@
+-- type: print(Cons)
+
+import std:IO/Posix (print)
+import internal:Internal (debugInt)
+import std:List (List, Nil, Cons)
+import std:Maybe (Maybe, Nothing, Just)
+
+
+main : () -> ()
+main() = {
+    let go(list) = Cons(1, Nil)
+    let result = go(Nil)
+    match result {
+        Nil -> print("NIL???")
+        Cons(_, _) -> print("Cons")
+    }
+}
+
+
+
+
+
