@@ -177,7 +177,13 @@ findGlobalInModule loc nameKind moduleVariable name = do
                             parent <- ask @DeclarationName
                             Output.output (NameNotFound{loc, parsedName = MkParsedName{moduleName = Just moduleVariable, name}, nameKind})
                             pure (Local (dummyLocalName parent name))
-                        [x] -> pure (Global x)
+                        [globalName] -> do
+                            dependencyDeclarationName <-
+                                getDefiningDeclaration globalName >>= \case
+                                    Nothing -> error $ "declaration of name not found: " <> show globalName
+                                    Just name -> pure name
+                            registerDependency dependencyDeclarationName
+                            pure (Global globalName)
                         results -> panic $ "conflicting definitions in qualified import: [" <> Pretty.intercalateDoc ", " (fmap (prettyGlobal nameKind) results) <> "]"
 
 importedModule :: ImportScope -> Text -> Maybe ModuleName
