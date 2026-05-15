@@ -26,7 +26,7 @@ import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Effectful.Reader.Static (Reader, ask, runReader)
 import Vega.Builtins qualified as Builtins
-import Vega.Compilation.Core.Syntax (nameToCoreName, stringRepresentation)
+import Vega.Compilation.Core.Syntax (nameToCoreName)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.PatternMatching (CaseTree)
 import Vega.Compilation.PatternMatching qualified as PatternMatching
@@ -364,7 +364,7 @@ compileExprToValue expr = do
                     representationArguments <- for representationArguments convertRepresentation
                     pure ([], Core.Instantiation{varName = nameToCoreName varName, representationArguments = representationArguments}, representation)
         Vega.Lambda{} -> deferToLet
-        Vega.StringLiteral _loc literal -> pure ([], Core.Literal (Core.StringLiteral literal), stringRepresentation)
+        Vega.StringLiteral _loc literal -> pure ([], Core.Literal (Core.StringLiteral literal), Builtins.stringRepresentation)
         Vega.IntLiteral _loc literal literalTypeInBits -> do
             let sizeInBits = case literalTypeInBits of
                     Nothing -> 64

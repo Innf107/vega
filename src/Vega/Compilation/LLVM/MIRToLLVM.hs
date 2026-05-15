@@ -397,22 +397,10 @@ compileInstruction builder = \case
             let sizeInBytes = sizeInBits `div` 8
             insertVarMapping var (LLVM.constInt (LLVM.intType sizeInBits) (fromIntegral literal) True) (Layout.intLayoutInBytes sizeInBytes)
     MIR.LoadByteArrayLiteral{var, bytes} -> do
-        infoTable <- getOrCreateArrayInfoTablePointer True (Layout.intLayoutInBytes 1)
-        unique <- liftIO newUnique
-
-        let arrayHeapType = LLVM.structType [LLVM.pointerType, LLVM.int64Type, LLVM.arrayType LLVM.int8Type (ByteString.length bytes)] False
-        global <- LLVM.addGlobal ?module_ arrayHeapType ("string_" <> show (hashUnique unique))
-        structValue <-
-            LLVM.constStructInContext
-                [ infoTable
-                , LLVM.constInt LLVM.int64Type (fromIntegral (ByteString.length bytes)) False
-                , LLVM.constDataArray LLVM.int8Type bytes
-                ]
-                False
-        LLVM.setInitializer global structValue
+        global <- createStaticByteArray bytes
 
         -- The vega pointer should point after the header object
-        pointer <- buildGEPOffset builder (LLVM.globalAsValue global) Heap.headerSize ("string_" <> show (hashUnique unique))
+        pointer <- buildGEPOffset builder (LLVM.globalAsValue global) Heap.headerSize "bytes"
 
         insertVarMapping var pointer Layout.byteArrayLayout
     MIR.LoadSumTag{var, sum} -> do
@@ -657,10 +645,13 @@ compilePrimopCall ::
 compilePrimopCall builder primop arguments returnRepresentation varName = do
     argumentValues <- for arguments lookupVarValue
     case primop of
+        ReplicateArray -> compileReplicateArray builder arguments returnRepresentation varName
+        EmptyArray -> do
+            global <- createStaticByteArray mempty
+            buildGEPOffset builder (LLVM.globalAsValue global) Heap.headerSize varName
         UnsafeReadArray -> compileUnsafeReadArray builder arguments returnRepresentation varName
         UnsafeReadMutableArray -> compileUnsafeReadArray builder arguments returnRepresentation varName
         UnsafeWriteMutableArray -> compileUnsafeWriteArray builder arguments returnRepresentation varName
-        ReplicateArray -> compileReplicateArray builder arguments returnRepresentation varName
         ArrayLength -> compileArrayLength builder arguments returnRepresentation varName
         MutableArrayLength -> compileArrayLength builder arguments returnRepresentation varName
         UnsafeArrayContents -> compileUnsafeArrayContents builder arguments returnRepresentation varName
@@ -684,6 +675,7 @@ compilePrimopCall builder primop arguments returnRepresentation varName = do
         IntToInt32 -> compileIntConversion Signed 32 builder arguments returnRepresentation varName
         IntToUInt32 -> compileIntConversion Unsigned 32 builder arguments returnRepresentation varName
         IntToUInt -> identity
+        UnsafeRem -> compileUnsafeRem builder arguments returnRepresentation varName
         Errno -> outOfLineBuiltin builder "vega_errno" argumentValues returnRepresentation varName
         DebugInt -> outOfLineBuiltin builder "vega_debug_int" argumentValues returnRepresentation varName
         Panic -> undefined
@@ -797,6 +789,14 @@ compileIntConversion sign width builder arguments _returnRepresentation varName 
         LLVMBuilder.buildIntCast builder value (LLVM.intType width) isSigned varName
     _ -> panic $ "integer conversion primop called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
+compileUnsafeRem :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeRem builder arguments _returnRepresentation varName = case arguments of
+    [dividend, divisor] -> do
+        dividend <- lookupVarValue dividend
+        divisor <- lookupVarValue divisor
+        LLVMBuilder.buildSRem builder dividend divisor varName
+    _ -> panic $ "unsafeRem called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
+
 {- | Generate a call to a builtin function that is defined in the rust runtime rather than inline
 TODO: it might be nice to have out of line functions defined directly in LLVM IR with tailcc instead of
 having to jump through ccc every time?
@@ -889,6 +889,27 @@ getOrCreateArrayInfoTablePointer static elementLayout = do
             llvmInfoTableGlobal <- LLVM.addGlobal ?module_ infoTableLLVMType identifier
             LLVM.setInitializer llvmInfoTableGlobal infoTableConstant
             pure (LLVM.globalAsValue llvmInfoTableGlobal)
+
+{- | Create a static byte array object from a statically known constant.
+This returns a pointer to the object header.
+Uses as a boxed vega pointer need to offset it by 'Heap.headerSize'.
+-}
+createStaticByteArray :: (Compile es) => ByteString -> Eff es LLVM.Global
+createStaticByteArray bytes = do
+    infoTable <- getOrCreateArrayInfoTablePointer True (Layout.intLayoutInBytes 1)
+    unique <- liftIO newUnique
+
+    let arrayHeapType = LLVM.structType [LLVM.pointerType, LLVM.int64Type, LLVM.arrayType LLVM.int8Type (ByteString.length bytes)] False
+    global <- LLVM.addGlobal ?module_ arrayHeapType ("string_" <> show (hashUnique unique))
+    structValue <-
+        LLVM.constStructInContext
+            [ infoTable
+            , LLVM.constInt LLVM.int64Type (fromIntegral (ByteString.length bytes)) False
+            , LLVM.constDataArray LLVM.int8Type bytes
+            ]
+            False
+    LLVM.setInitializer global structValue
+    pure global
 
 buildRuntimeCall ::
     (Compile es) =>

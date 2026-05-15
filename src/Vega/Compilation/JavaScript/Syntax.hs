@@ -64,6 +64,7 @@ data BinaryOperator
     | Subtract
     | Multiply
     | Divide
+    | Remainder
     | And
     | Or
     | Less
@@ -161,6 +162,7 @@ renderBinaryOperator = \case
     Subtract -> "-"
     Multiply -> "*"
     Divide -> "/"
+    Remainder -> "%"
     And -> "&&"
     Or -> "||"
     Less -> "<"

@@ -1,0 +1,46 @@
+import internal:Internal(uint8ToInt, debugInt, unsafeRem, replicateArray, unsafeWriteMutableArray, unsafeFreezeArray, arrayLength, mutableArrayLength, intToUInt8)
+import std:String (unsafeFromByteArraySlice)
+
+toString : Int -> String
+toString(x) = {
+    if x == 0 then {
+        "0"
+    } else {
+        -- This includes space for the leading - if necessary
+
+        let maxNumberOfDigits = 20
+        -- We pre-fill the buffer with - so that we only need to use a different offset for negative numbers
+
+        let buffer = replicateArray(maxNumberOfDigits, 45u8)
+
+        let go(i, number) = {
+            if number == 0 then {
+                i
+            } else {
+                let digit = intToUInt8(unsafeRem(number, 10) + 48)
+                unsafeWriteMutableArray(buffer, mutableArrayLength(buffer) - (i + 1), digit)
+                go(i + 1, number /  10)
+            }
+        }
+        let numberOfActualDigits = go(0, abs(x))
+
+        let stringLength = if x < 0 then {
+            numberOfActualDigits + 1
+        } else {
+            numberOfActualDigits
+        }
+
+        -- We end up wasting a small amount of space here (up to 19 bytes) if the actual number has much fewer than 20 digits,
+        -- but that's fine since this is realistically going to be immediately copied into some other string anyway
+
+        unsafeFromByteArraySlice({ 
+                content = unsafeFreezeArray(buffer), 
+                offset = mutableArrayLength(buffer) - stringLength,
+                length = stringLength
+            })
+    }
+}
+
+abs : Int -> Int
+abs(x) = if x < 0 then 0 - x else x
+

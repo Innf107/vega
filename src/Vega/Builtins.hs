@@ -45,6 +45,7 @@ import Vega.Syntax qualified as Vega hiding (stringRepresentation)
 data Primop
     = -- Array operations
       ReplicateArray
+    | EmptyArray
     | UnsafeReadArray
     | UnsafeReadMutableArray
     | UnsafeWriteMutableArray
@@ -74,6 +75,8 @@ data Primop
     | IntToInt32
     | IntToUInt32
     | IntToUInt
+    | -- | Numeric operations
+      UnsafeRem
     | -- FFI
       Errno
     | -- Debugging
@@ -91,6 +94,7 @@ instance Pretty Primop where
 primopVarName :: Primop -> Text
 primopVarName = \case
     ReplicateArray -> "replicateArray"
+    EmptyArray -> "emptyArray"
     UnsafeReadArray -> "unsafeReadArray"
     UnsafeReadMutableArray -> "unsafeReadMutableArray"
     UnsafeWriteMutableArray -> "unsafeWriteMutableArray"
@@ -117,6 +121,7 @@ primopVarName = \case
     IntToInt32 -> "intToInt32"
     IntToUInt32 -> "intToUInt32"
     IntToUInt -> "intToUInt"
+    UnsafeRem -> "unsafeRem"
     Errno -> "errno"
     Panic -> "panic"
     DebugInt -> "debugInt"
@@ -206,6 +211,7 @@ builtinGlobals =
 primopType :: Primop -> Type
 primopType = \case
     ReplicateArray -> forall_ "a" \a -> [intType, a] --> mutableArrayType @@ [a]
+    EmptyArray -> forall_ "a" \a -> [] --> arrayType @@ [a]
     UnsafeReadArray -> forall_ "a" \a -> [arrayType @@ [a], intType] --> a
     UnsafeReadMutableArray -> forall_ "a" \a -> [mutableArrayType @@ [a], intType] --> a
     UnsafeWriteMutableArray -> forall_ "a" \a -> [mutableArrayType @@ [a], intType, a] --> unitType
@@ -234,6 +240,7 @@ primopType = \case
     IntToInt32 -> [intType] --> int32Type
     IntToUInt32 -> [intType] --> uint32Type
     IntToUInt -> [intType] --> uintType
+    UnsafeRem -> [intType, intType] --> intType
     Errno -> [] --> int32Type
     UnsafeCoerce -> forallInferred Monomorphized "r" Rep \r ->
         forallVisible Parametric "a" r \a ->
@@ -245,6 +252,7 @@ primopType = \case
 primopRepresentation :: (HasCallStack) => Primop -> Seq Core.Representation -> (Seq Core.Representation, Core.Representation)
 primopRepresentation primop arguments = case primop of
     ReplicateArray -> ([intRep 64, argument 0], Core.ArrayRep (argument 0))
+    EmptyArray -> ([], Core.ArrayRep (argument 0))
     UnsafeReadArray -> ([Core.ArrayRep (argument 0), intRep 64], argument 0)
     UnsafeReadMutableArray -> ([Core.ArrayRep (argument 0), intRep 64], argument 0)
     UnsafeWriteMutableArray -> ([Core.ArrayRep (argument 0), intRep 64, argument 0], unitRep)
@@ -256,8 +264,8 @@ primopRepresentation primop arguments = case primop of
     UnsafeThawArray -> ([Core.ArrayRep (argument 0)], Core.ArrayRep (argument 0))
     NullPointer -> ([], pointerRep)
     OffsetPointerBytes -> ([pointerRep, intRep 64], pointerRep)
-    CodePoints -> ([Core.stringRepresentation], Core.ArrayRep (intRep 32))
-    Panic -> ([Core.stringRepresentation], argument 0)
+    CodePoints -> ([stringRepresentation], Core.ArrayRep (intRep 32))
+    Panic -> ([stringRepresentation], argument 0)
     DebugInt -> ([intRep 64], unitRep)
     Int8ToInt -> ([intRep 8], intRep 64)
     UInt8ToInt -> ([intRep 8], intRep 64)
@@ -273,6 +281,7 @@ primopRepresentation primop arguments = case primop of
     IntToInt32 -> ([intRep 64], intRep 32)
     IntToUInt32 -> ([intRep 64], intRep 32)
     IntToUInt -> ([intRep 64], intRep 64)
+    UnsafeRem -> ([intRep 64, intRep 64], intRep 64)
     Errno -> ([], intRep 32)
     UnsafeCoerce -> ([argument 0], argument 0)
   where

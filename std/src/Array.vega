@@ -1,12 +1,16 @@
 
 import internal:Internal 
     ( replicateArray
+    , emptyArray
     , unsafeWriteMutableArray
     , unsafeReadArray
     , unsafeReadMutableArray
     , offsetPointerBytes
     , unsafeArrayContents
+    , unsafeFreezeArray
+    , unsafeCoerce
     )
+import std:List (length, List, Cons, Nil)
 
 -- TODO: This should probably use some primop that compiles directly to a memmov
 -- TODO: bounds checks lol
@@ -47,4 +51,23 @@ copyMutableArray({targetArray, targetOffset, sourceArray, sourceOffset, length})
 unsafeWithPointerAtOffset : forall r. (Array(UInt8), Int, Pointer(UInt8) -> r) -> r
 unsafeWithPointerAtOffset(array, offset, cont) = {
     cont(offsetPointerBytes(unsafeArrayContents(array), offset))
+}
+
+fromList : forall a. List(a) -> Array(a)
+fromList(list) = match list {
+    Nil -> emptyArray()
+    Cons(first, rest) -> {
+        let remainingLength = length(rest)
+        let array = replicateArray(remainingLength + 1, first)
+        
+        let go(i, toCopy) = match toCopy {
+            Nil -> ()
+            Cons(x, shadow rest) -> {
+                unsafeWriteMutableArray(array, i, x)
+                go(i + 1, rest)
+            }
+        }
+        go(1, rest)
+        unsafeFreezeArray(array)
+    }
 }

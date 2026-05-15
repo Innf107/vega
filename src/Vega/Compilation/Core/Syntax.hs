@@ -275,9 +275,6 @@ instance Pretty CoreName where
         Global global -> prettyGlobal VarKind global
         Local local -> pretty local
 
--- | The representation of string literals (and in particular string literals)
-stringRepresentation :: Representation
-stringRepresentation = PrimitiveRep Vega.BoxedRep
 
 -- The representation of functions. This *will* probably change in the future so code
 -- should treat it abstractly instead of depending on its concrete value

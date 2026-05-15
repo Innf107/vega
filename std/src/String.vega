@@ -129,6 +129,26 @@ findByteIndex(byte, String({content, offset, length})) = {
     go(offset)
 }
 
+findByteIndexWhere : (String, UInt8 -> Bool) -> Maybe(Int)
+findByteIndexWhere(String({content, offset, length}), condition) = {
+    let go(index) = {
+        if index >= length then {
+            Nothing
+        } else {
+            let currentByte = unsafeReadArray(content, index)
+            if (condition(currentByte)) then {
+                -- we need to subtract offset since this is an index of the internal array,
+                -- not the string
+
+                Just(index - offset)
+            } else {
+                go(index + 1)
+            }
+        }
+    }
+    go(offset)
+}
+
 -- O(1)
 
 take : (String, Int) -> String
@@ -145,3 +165,18 @@ take(string, takenLength) = {
         String({content = content, length = takenLength, offset = offset})
     }
 }
+
+-- O(1)
+
+drop : (String, Int) -> String
+drop(string, droppedLength) = {
+    let String({content, length, offset}) = string
+    if droppedLength > length then {
+        String({content = content, length = 0, offset = offset})
+    } else if droppedLength < 0 then {
+        string
+    } else {
+        String({content = content, length = length - droppedLength, offset = offset + droppedLength})
+    }
+}
+
