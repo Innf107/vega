@@ -301,7 +301,10 @@ compilePhis builder (MIR.MkPhis phis) = do
                 block <- lookupBlock block
                 pure (value, block)
         layout <- Layout.representationLayout representation
-        asVar_ targetVar layout $ LLVMBuilder.buildPhi builder (Layout.llvmType layout) incomingValues
+        case Layout.kind layout of
+            Layout.ZeroSized -> pure ()
+            Layout.LLVMScalar _; Layout.AggregatePointer -> do
+                asVar_ targetVar layout $ LLVMBuilder.buildPhi builder (Layout.llvmType layout) incomingValues
 
 compileInstruction :: (Compile es) => LLVMBuilder.Builder -> MIR.Instruction -> Eff es ()
 compileInstruction builder = \case

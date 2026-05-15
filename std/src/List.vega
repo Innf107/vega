@@ -22,3 +22,12 @@ reverse(list) = {
     }
     go(Nil, list)
 }
+
+for : forall a (e : Effect). (List(a), a -{e}> ()) -> ()
+for(list, f) = match list {
+    Nil -> ()
+    Cons(x, xs) -> {
+        f(x)
+        for(xs, f)
+    }
+}

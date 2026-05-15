@@ -1,0 +1,16 @@
+-- type: print(5)
+
+import internal:Internal (debugInt)
+import std:List (List, Nil, Cons)
+
+main : () -> ()
+main() = {
+    match Cons(1, Nil) {
+        Nil -> ()
+        Cons(_, _) -> ()
+    }
+    debugInt(5)
+}
+
+
+
