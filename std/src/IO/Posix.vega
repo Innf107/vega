@@ -22,6 +22,9 @@ writeBytes(FileDescriptor(fd), array, offset, length) = {
     })
 }
 
+writeString : (FileDescriptor, String) -> ()
+writeString(fileDescriptor, String({content, offset, length})) = writeBytes(fileDescriptor, content, offset, length)
+
 printFD : (FileDescriptor, String) -> ()
 printFD(fileDescriptor, message) = {
     let String({content, offset, length}) = append(message, "\n")

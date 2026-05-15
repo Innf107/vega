@@ -9,6 +9,7 @@ import internal:Internal
     , unsafeArrayContents
     , unsafeFreezeArray
     , unsafeCoerce
+    , arrayLength
     )
 import std:List (length, List, Cons, Nil)
 
@@ -70,4 +71,14 @@ fromList(list) = match list {
         go(1, rest)
         unsafeFreezeArray(array)
     }
+}
+
+
+for : forall a. (Array(a), a -> ()) -> ()
+for(array, f) = {
+    let go(i) = if i < arrayLength(array) then {
+        f(unsafeReadArray(array, i))
+        go(i + 1)
+    } else {}
+    go(0)
 }
