@@ -82,3 +82,19 @@ for(array, f) = {
     } else {}
     go(0)
 }
+
+generate : forall a.(Int, Int -> a) -> Array(a)
+generate(length, makeElement) = if length <= 0 then {
+    emptyArray()
+} else {
+    let firstElement = makeElement(0)
+    let array = replicateArray(length, firstElement)
+    let go(i) = if i < length then {
+        unsafeWriteMutableArray(array, i, makeElement(i))
+        go(i + 1)
+    } else {}
+    -- We already set the first element (everywhere) so we start at 1
+    
+    go(1)
+    unsafeFreezeArray(array)
+}

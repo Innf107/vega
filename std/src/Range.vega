@@ -1,4 +1,6 @@
--- TODO: nominal record, etc.
+import internal:Internal (emptyArray, unsafeWriteMutableArray, replicateArray, unsafeFreezeArray)
+import std:Array
+
 data Range = Range({fromInclusive : Int, toInclusive : Int})
 
 for : (Range, Int -> ()) -> ()
@@ -13,4 +15,7 @@ for(Range({fromInclusive, toInclusive}), f) = {
     go(fromInclusive)
 }
 
-
+toArray : Range -> Array(Int)
+toArray(Range({fromInclusive, toInclusive}) as range) = {
+    Array.generate(toInclusive - fromInclusive + 1, \i -> fromInclusive + i)
+}
