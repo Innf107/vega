@@ -554,24 +554,23 @@ instance Hashable Skolem where
 
 type Effect = Type
 
-newtype ImportScope
+data ImportScope
     = MkImportScope
-    { imports :: HashMap ModuleName ImportedItems
+    { unqualifiedImports :: HashMap ModuleName (HashSet Text)
+    , qualifiedImports :: HashMap Text ModuleName
     }
     deriving stock (Show, Eq, Generic)
 
 instance Semigroup ImportScope where
-    scope1 <> scope2 = MkImportScope{imports = HashMap.unionWith (<>) scope1.imports scope2.imports}
+    scope1 <> scope2 =
+        MkImportScope
+            { -- TODO: HashMaps/HashSets actually make this quite inefficient (quadratic)
+              unqualifiedImports = HashMap.unionWith (<>) scope1.unqualifiedImports scope2.unqualifiedImports
+            , -- TODO: detect duplicate module names and throw an error
+              qualifiedImports = HashMap.union scope1.qualifiedImports scope2.qualifiedImports
+            }
 instance Monoid ImportScope where
-    mempty = MkImportScope mempty
-
--- TODO: if we use a hash map here this is actually quite inefficient
-data ImportedItems = MkImportedItems
-    { qualifiedAliases :: HashSet Text
-    , unqualifiedItems :: HashSet Text
-    }
-    deriving (Show, Eq, Generic)
-    deriving (Semigroup, Monoid) via Generically ImportedItems
+    mempty = MkImportScope mempty mempty
 
 instance Pretty Type where
     pretty = \case

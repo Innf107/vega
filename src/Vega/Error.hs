@@ -38,7 +38,8 @@ import Vega.Panic qualified as Panic
 import Vega.Parser (AdditionalParseError (..))
 import Vega.Parser qualified as Parser
 import Vega.Pretty (Ann, Doc, Pretty (pretty), align, emphasis, errorText, globalIdentText, intercalateDoc, keyword, localIdentText, lparen, note, number, plain, quote, rparen, vsep, (<+>))
-import Vega.Syntax (BinderVisibility (..), ForallBinderS (..), GlobalName (..), IntSum, Kind, LocalName, MetaVar, Monomorphization (..), Name, NameKind (..), Type (..), prettyGlobal, prettyGlobalText, prettyLocal, prettyName, ParsedName)
+import Vega.Syntax (BinderVisibility (..), ForallBinderS (..), GlobalName (..), IntSum, Kind, LocalName, MetaVar, Monomorphization (..), Name, NameKind (..), ParsedName, Type (..), prettyGlobal, prettyGlobalText, prettyLocal, prettyName)
+import Vega.Syntax qualified as Vega
 import Vega.Util (viaList)
 import Vega.Util qualified as Util
 import Vega.VectorMap (VectorMap)
@@ -68,6 +69,10 @@ data RenameError
         { loc :: Loc
         , parsedName :: ParsedName
         , nameKind :: NameKind
+        }
+    | ModuleNotFound
+        { loc :: Loc
+        , name :: Text
         }
     | AmbiguousGlobal
         { loc :: Loc
@@ -307,6 +312,8 @@ renderCompilationError = \case
     RenameError error -> pure $ ErrorWithLoc $ MkErrorMessageWithLoc (getLoc error) $ case error of
         NameNotFound{parsedName, nameKind} -> align do
             emphasis "Unbound" <+> prettyNameKind nameKind <+> pretty parsedName
+        ModuleNotFound{name} -> align do
+            emphasis "Unbound module" <+> prettyGlobalText Vega.TypeConstructorKind name
         AmbiguousGlobal{name, nameKind, candidates} ->
             align do
                 emphasis "Ambiguous" <+> prettyNameKind nameKind <+> prettyGlobalText nameKind name <> "\n"
@@ -513,9 +520,11 @@ renderCompilationError = \case
                     <> pretty type_
                     <> "\n    is not a valid type for external declarations"
         InvalidExternalType{loc = _, type_} -> do
-            align $ emphasis "Invalid type in external declaration" <>
-                "\n  " <> pretty type_
-                <> "    cannot be used in external declarations"
+            align $
+                emphasis "Invalid type in external declaration"
+                    <> "\n  "
+                    <> pretty type_
+                    <> "    cannot be used in external declarations"
     DriverError error -> pure $ case error of
         EntryPointNotFound entryPoint ->
             PlainError $

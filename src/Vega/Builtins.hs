@@ -292,46 +292,38 @@ primopRepresentation primop arguments = case primop of
 defaultImportScope :: ImportScope
 defaultImportScope =
     MkImportScope
-        { imports =
+        { unqualifiedImports =
             [
                 ( internalModuleName
-                , MkImportedItems
-                    { qualifiedAliases = []
-                    , unqualifiedItems =
-                        [ "Int"
-                        , "UInt"
-                        , "Int32"
-                        , "UInt32"
-                        , "Int16"
-                        , "UInt16"
-                        , "Int8"
-                        , "UInt8"
-                        , "Double"
-                        , "Array"
-                        , "MutableArray"
-                        , "Box"
-                        , "Pointer"
-                        , "panic"
-                        , "box"
-                        , "unbox"
-                        ]
-                    }
+                ,
+                    [ "Int"
+                    , "UInt"
+                    , "Int32"
+                    , "UInt32"
+                    , "Int16"
+                    , "UInt16"
+                    , "Int8"
+                    , "UInt8"
+                    , "Double"
+                    , "Array"
+                    , "MutableArray"
+                    , "Box"
+                    , "Pointer"
+                    , "panic"
+                    , "box"
+                    , "unbox"
+                    ]
                 )
             ,
                 ( MkModuleName{package = (MkPackageName "std"), subModules = "String" :<|| []}
-                , MkImportedItems
-                    { qualifiedAliases = []
-                    , unqualifiedItems = ["String"]
-                    }
+                , ["String"]
                 )
             ,
                 ( MkModuleName{package = (MkPackageName "std"), subModules = "Bool" :<|| []}
-                , MkImportedItems
-                    { qualifiedAliases = []
-                    , unqualifiedItems = ["Bool", "True", "False"]
-                    }
+                , ["Bool", "True", "False"]
                 )
             ]
+        , qualifiedImports = []
         }
 
 -- | Refer to a type defined in the 'std' package

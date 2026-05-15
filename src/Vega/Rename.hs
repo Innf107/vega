@@ -16,10 +16,13 @@ import Effectful.State.Static.Local
 import GHC.List (List)
 import Vega.Builtins (builtinGlobals, defaultImportScope)
 import Vega.Effect.GraphPersistence (DataConstructorIndex (..), GraphPersistence, findMatchingNames, getDefiningDeclaration, getModuleImportScope, setDataConstructorIndex)
+import Vega.Effect.GraphPersistence qualified as GraphPersistence
 import Vega.Effect.Output.Static.Local qualified as Output
 import Vega.Effect.Output.Static.Local.HashSet qualified as Output.HashSet
 import Vega.Error (RenameError (..), RenameErrorSet (..))
 import Vega.Loc (Loc)
+import Vega.Panic (panic)
+import Vega.Pretty qualified as Pretty
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Util (mapAccumLM)
 import Vega.Util qualified as Util
@@ -104,7 +107,7 @@ findGlobalUnregistered nameKind name = do
             Just global -> [global]
 
     importScope <- ownImportScopeWithDefault
-    userDefinedCandidates <- findMatchingNames name nameKind
+    userDefinedCandidates <- GraphPersistence.findMatchingNames name nameKind
 
     let candidates = builtinCandidates <> toList userDefinedCandidates
 
@@ -152,27 +155,41 @@ findGlobalOrDummy loc nameKind name =
             pure (Local (dummyLocalName parent name))
 
 findGlobalInModule :: (Rename es) => Loc -> NameKind -> Text -> Text -> Eff es Name
-findGlobalInModule loc nameKind moduleName name = do
+findGlobalInModule loc nameKind moduleVariable name = do
     importScope <- ownImportScopeWithDefault
-    importedModule importScope moduleName >>= \case
+    case importedModule importScope moduleVariable of
         Nothing -> do
+            Output.output (ModuleNotFound loc moduleVariable)
             parent <- ask @DeclarationName
-            pure  (Local (dummyLocalName parent name))
+            pure (Local (dummyLocalName parent name))
         Just moduleName -> do
-            undefined
-    
+            if moduleName == internalModuleName
+                then case lookup (name, nameKind) builtinGlobals of
+                    Nothing -> do
+                        parent <- ask @DeclarationName
+                        Output.output (NameNotFound{loc, parsedName = MkParsedName{moduleName = Just moduleVariable, name}, nameKind})
+                        pure (Local (dummyLocalName parent name))
+                    Just name -> pure (Global name)
+                else do
+                    candidates <- GraphPersistence.findMatchingNames name nameKind
+                    case filter (\name -> name.moduleName == moduleName) (toList candidates) of
+                        [] -> do
+                            parent <- ask @DeclarationName
+                            Output.output (NameNotFound{loc, parsedName = MkParsedName{moduleName = Just moduleVariable, name}, nameKind})
+                            pure (Local (dummyLocalName parent name))
+                        [x] -> pure (Global x)
+                        results -> panic $ "conflicting definitions in qualified import: [" <> Pretty.intercalateDoc ", " (fmap (prettyGlobal nameKind) results) <> "]"
 
-importedModule :: Rename es => ImportScope -> Text -> Eff es (Maybe ModuleName)
-importedModule importScope moduleName = do
-    undefined
+importedModule :: ImportScope -> Text -> Maybe ModuleName
+importedModule importScope moduleName = lookup moduleName importScope.qualifiedImports
 
 isInScope :: GlobalName -> ImportScope -> Bool
 isInScope name scope =
-    case lookup name.moduleName scope.imports of
+    case lookup name.moduleName scope.unqualifiedImports of
         Nothing -> False
         Just importedItems ->
             -- TODO: qualified
-            HashSet.member name.name importedItems.unqualifiedItems
+            HashSet.member name.name importedItems
 
 {-# SCC rename #-}
 rename :: (GraphPersistence :> es) => Declaration Parsed -> Eff es (Declaration Renamed, RenameErrorSet, HashSet DeclarationName)

@@ -134,30 +134,23 @@ computeImportScope imports = do
             moduleName <- resolveModuleName moduleName
             pure $
                 MkImportScope
-                    { imports =
+                    { unqualifiedImports =
                         fromList
                             [
                                 ( moduleName
-                                , MkImportedItems
-                                    { qualifiedAliases = mempty
-                                    , unqualifiedItems = viaList importedDeclarations
-                                    }
+                                , viaList importedDeclarations
                                 )
                             ]
+                    , qualifiedImports = []
                     }
         ImportQualified{moduleName, importedAs} -> do
             moduleName <- resolveModuleName moduleName
             pure $
                 MkImportScope
-                    { imports =
+                    { unqualifiedImports = []
+                    , qualifiedImports =
                         fromList
-                            [
-                                ( moduleName
-                                , MkImportedItems
-                                    { qualifiedAliases = [importedAs]
-                                    , unqualifiedItems = mempty
-                                    }
-                                )
+                            [ (importedAs, moduleName)
                             ]
                     }
 
@@ -363,10 +356,10 @@ compileBackend = do
             LLVM.setTarget llvmModule triple
             LLVM.Target.setModuleDataLayout llvmModule dataLayout
 
-            {-#  SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule LLVM.ReturnStatusAction
+            {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule LLVM.ReturnStatusAction
 
             -- TODO: be smarter about where to put the output
-            {-#  SCC "LLVM.Target.targetMachineEmitToFile" #-} LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile
+            {-# SCC "LLVM.Target.targetMachineEmitToFile" #-} LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile
 
             MkDriverConfig{linker} <- ask
             linkerCommand <- case linker of
