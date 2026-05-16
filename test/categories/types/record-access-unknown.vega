@@ -1,0 +1,10 @@
+-- type: print(1)
+
+import internal:Internal (debugInt)
+
+main : () -> ()
+main() = {
+    let f(record) = debugInt(record.x)
+    
+    f({ x = 1, y = 2 })
+}

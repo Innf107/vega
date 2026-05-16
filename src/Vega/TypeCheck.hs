@@ -55,6 +55,13 @@ data Env = MkEnv
 
 data DeferredConstraint
     = AssertMonomorphized Loc Env Type
+    | HasField
+        { loc :: Loc
+        , env :: Env
+        , recordType :: MetaVar
+        , field :: Text
+        , fieldType :: Type
+        }
 
 emptyEnv :: Env
 emptyEnv =
@@ -96,13 +103,9 @@ type TypeCheckCore es =
     )
 
 type TypeCheck es =
-    ( GraphPersistence :> es
+    ( TypeCheckCore es
+    , GraphPersistence :> es
     , Output DeferredConstraint :> es
-    , Output TypeError :> es
-    , Error TypeError :> es
-    , Trace :> es
-    , ReadMeta :> es
-    , BindMeta :> es
     , NewUnique :> es
     )
 
@@ -122,7 +125,8 @@ checkDeclaration (MkDeclaration{loc, name, syntax}) = withTrace TypeCheck ("Decl
             & runOutputSeq @TypeError
 
     (fatalSolverError, nonFatalSolverErrors) <-
-        solveConstraints deferredConstraints
+        solveAllConstraints deferredConstraints
+            & runNewUnique
             & runMeta
             & runErrorNoCallStack @TypeError
             & runOutputSeq @TypeError
@@ -658,6 +662,7 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
                 fieldExpr <- check env ambientEffect type_ fieldExpr
                 pure (fieldName, fieldExpr)
             pure (RecordLiteral loc fields)
+        RecordFieldAccess{} -> deferToInference
         PartialApplication{} -> deferToInference
         BinaryOperator{} -> deferToInference
         Match{loc, scrutinee, cases} -> do
@@ -792,6 +797,33 @@ infer env ambientEffect expr = do
             let syntax = RecordLiteral loc (fmap (\(fieldName, _, fieldExpr) -> (fieldName, fieldExpr)) fieldsWithTypes)
 
             pure (type_, syntax)
+        RecordFieldAccess{loc, record, field} -> do
+            (recordType, record) <- infer env ambientEffect record
+            fieldType <-
+                followMetas recordType >>= \case
+                    Record fields -> do
+                        -- We need to do this special case to support records containing polymorphic fields.
+                        -- If we know the exact type at this point, we can just continue with it,
+                        -- but if we need to infer it, we need to involve unification to extract its type
+                        -- and that doesn't work with polytypes!
+                        case VectorMap.lookup field fields of
+                            Nothing -> do
+                                typeError (MissingRecordFieldInAccess{loc, field, recordType})
+                                dummyTypeMeta
+                            Just possiblyPolymorphicFieldType -> do
+                                -- Any type variables in this polytype cannot be monomorphizable so we can safely ignore
+                                -- the instantiated arguments here
+                                (fieldType, _instantiatedArguments) <- instantiate loc env possiblyPolymorphicFieldType
+                                pure fieldType
+                    MetaVar meta -> do
+                        fieldType <- MetaVar <$> freshTypeMeta field
+                        emitHasFieldConstraint loc env meta field fieldType
+                        pure fieldType
+                    nonRecordType -> do
+                        typeError (NonRecordTypeInFieldAccess{loc, nonRecordType, field})
+                        dummyTypeMeta
+            fieldRepresentation <- representationOfType loc env fieldType
+            pure (fieldType, RecordFieldAccess{loc, record, field, ext = (fieldRepresentation, recordType)})
         Match{loc, scrutinee, cases} -> do
             (scrutineeType, scrutinee) <- infer env ambientEffect scrutinee
             resultType <- MetaVar <$> freshTypeMeta "a"
@@ -1242,7 +1274,7 @@ representationOfType loc env type_ =
             unify loc env kind (Type representationMeta)
             pure representationMeta
 
-substituteTypeVariables :: (TypeCheck es) => (HashMap LocalName Type) -> Type -> Eff es Type
+substituteTypeVariables :: (TypeCheckCore es) => (HashMap LocalName Type) -> Type -> Eff es Type
 substituteTypeVariables substitution type_ =
     followMetas type_ >>= \case
         type_@TypeConstructor{} -> pure type_
@@ -1385,7 +1417,7 @@ data GenericInstantiation es = MkGenericInstantiation
 
 instantiateGeneric ::
     forall es.
-    (TypeCheck es) =>
+    (TypeCheckCore es) =>
     GenericInstantiation es ->
     Loc ->
     Env ->
@@ -1800,6 +1832,10 @@ monomorphized loc env type_ = do
     trace TypeCheck $ emphasis "mono" <+> pretty type_
     solveMonomorphized (\meta -> output (AssertMonomorphized loc env (MetaVar meta))) loc env type_
 
+emitHasFieldConstraint :: (TypeCheck es) => Loc -> Env -> MetaVar -> Text -> Type -> Eff es ()
+emitHasFieldConstraint loc env recordType field fieldType = do
+    output (HasField{loc, env, recordType, field, fieldType})
+
 solveIntSum :: (TypeCheck es) => Loc -> Env -> IntSum -> Eff es ()
 solveIntSum loc env sum = do
     shouldBeZero <- IntSum.reduceZero sum
@@ -1888,9 +1924,19 @@ solveMonomorphized onMetaVar loc env type_ =
             Integer -> pure ()
             Kind -> pure ()
 
-type SolveConstraints es = (Error TypeError :> es, Output TypeError :> es, Trace :> es, ReadMeta :> es, BindMeta :> es)
+solveAllConstraints :: (TypeCheckCore es, GraphPersistence :> es, NewUnique :> es) => List DeferredConstraint -> Eff es ()
+solveAllConstraints constraints = do
+    ((), newConstraints) <- runOutputList $ solveConstraints constraints
+    case newConstraints of
+        [] -> pure ()
+        _ -> solveAllConstraints newConstraints
 
-solveConstraints :: (SolveConstraints es) => List DeferredConstraint -> Eff es ()
+-- TODO: we currently only do one iteration of the constraint solver.
+-- This means that we may not be able to solve a constraint if it depends on another constraint that we process after it.
+-- We should really run the constraint solver until it either solves all constraints or fails to make progress
+-- (Although *ideally* we would have something event based where constraints are unblocked if the unification variables they
+--  depend on are bound)
+solveConstraints :: (TypeCheck es) => List DeferredConstraint -> Eff es ()
 solveConstraints = \case
     [] -> pure ()
     (AssertMonomorphized loc env type_ : rest) -> do
@@ -1907,6 +1953,26 @@ solveConstraints = \case
             env
             type_
         solveConstraints rest
+    (HasField{loc, env, recordType, field, fieldType} : rest) -> do
+        solveHasField loc env recordType field fieldType
+        solveConstraints rest
+
+solveHasField :: (TypeCheck es) => Loc -> Env -> MetaVar -> Text -> Type -> Eff es ()
+solveHasField loc env recordType field expectedFieldType = do
+    followMetas (MetaVar recordType) >>= \case
+        recordType@(Record fields) -> do
+            case VectorMap.lookup field fields of
+                Nothing -> do
+                    typeError (MissingRecordFieldInAccess{loc, field, recordType = recordType})
+                Just possiblyPolymorphicFieldType -> do
+                    -- Any type variables in this polytype cannot be monomorphizable so we can safely ignore
+                    -- the instantiated arguments here
+                    (actualFieldType, _instantiatedArguments) <- instantiate loc env possiblyPolymorphicFieldType
+                    subsumes loc env expectedFieldType actualFieldType
+        MetaVar meta -> do
+            undefined
+        nonRecordType -> do
+            typeError (NonRecordTypeInFieldAccess{loc, nonRecordType, field})
 
 {- NOTE [Kinds of foralls]:
 ------------------------------

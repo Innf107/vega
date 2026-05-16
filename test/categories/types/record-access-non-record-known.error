@@ -1,0 +1,6 @@
+$FILE:9:14: ERROR:
+Non-record type in access to field x:
+  internal:Internal:Int
+  ┃ 
+9 ┃     debugInt(record.x)
+  ┃              ▔▔▔▔▔▔▔▔

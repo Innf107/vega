@@ -448,6 +448,9 @@ renameExpr env = \case
             expr <- renameExpr env expr
             pure (name, expr)
         pure (RecordLiteral loc elements)
+    RecordFieldAccess{loc, record, field, ext} -> do
+        record <- renameExpr env record
+        pure (RecordFieldAccess{loc, record, field, ext})
     BinaryOperator loc arg1 operator arg2 -> do
         arg1 <- renameExpr env arg1
         arg2 <- renameExpr env arg2

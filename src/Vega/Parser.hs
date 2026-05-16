@@ -646,9 +646,26 @@ expr = label "expression" exprLogical
                 , single Lexer.Slash *> pure (makeBinOp Syntax.Divide)
                 ]
     exprFun = do
-        funExpr <- exprLeaf
+        funExpr <- exprRecordAccess
         applications <- many @[_] functionApplication
         pure $ foldl' (\expr application -> application expr) funExpr applications
+    exprRecordAccess = do
+        recordExpr <- exprLeaf
+        fieldAccesses <- many @[_] do
+            _ <- single Lexer.Period
+            unqualifiedIdentifierWithLoc
+        pure $
+            foldl'
+                ( \expr (field, endLoc) ->
+                    RecordFieldAccess
+                        { loc = getLoc expr <> endLoc
+                        , record = expr
+                        , field
+                        , ext = ()
+                        }
+                )
+                recordExpr
+                fieldAccesses
     exprLeaf =
         choice
             [ do

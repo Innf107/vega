@@ -1,0 +1,10 @@
+-- type: error
+
+import internal:Internal (debugInt)
+
+main : () -> ()
+main() = {
+    let record = { y = 5, z = 3 }
+
+    debugInt(record.x)
+}

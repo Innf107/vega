@@ -231,6 +231,12 @@ data Expr p
     | DoubleLiteral Loc Rational
     | TupleLiteral Loc (Seq (Expr p))
     | RecordLiteral Loc (NonEmpty (Text, Expr p))
+    | RecordFieldAccess
+        { loc :: Loc
+        , record :: Expr p
+        , field :: Text
+        , ext :: XTypedOnly p (Representation, Type)
+        }
     | BinaryOperator Loc (Expr p) BinaryOperator (Expr p)
     | If
         { loc :: Loc

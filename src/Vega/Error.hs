@@ -145,6 +145,16 @@ data TypeError
         , expectedFields :: VectorMap Text Type
         , actualFields :: Seq Text
         }
+    | MissingRecordFieldInAccess
+        { loc :: Loc
+        , field :: Text
+        , recordType :: Type
+        }
+    | NonRecordTypeInFieldAccess
+        { loc :: Loc
+        , field :: Text
+        , nonRecordType :: Type
+        }
     | ConstructorPatternOfIncorrectNumberOfArgs
         { loc :: Loc
         , actual :: Int
@@ -426,6 +436,16 @@ renderCompilationError = \case
                     <> missingFieldsMessage
                     <> excessiveFieldsMessage
                     <> "\n    This record is expected to have type" <+> pretty (Record expectedFields)
+        MissingRecordFieldInAccess{loc = _, field, recordType} -> do
+            align $ emphasis "Missing field " <> prettyGlobalText VarKind field <> emphasis " in record access.\n"
+                <> "  The type " <> pretty recordType
+                <> "\n    does not contain a field named " <> prettyGlobalText VarKind field
+        NonRecordTypeInFieldAccess{loc = _, field, nonRecordType} -> do
+            align $
+                emphasis "Non-record type in access to field "
+                    <> prettyGlobalText VarKind field
+                    <> ":\n  "
+                    <> pretty nonRecordType
         ConstructorPatternOfIncorrectNumberOfArgs{loc = _, actual, expectedTypes} ->
             align $
                 emphasis "Constructor pattern binds" <+> pluralNumber emphasis actual "parameter" <+> emphasis "but its type expects it to bind" <+> number (length expectedTypes)

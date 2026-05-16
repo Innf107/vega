@@ -1,0 +1,7 @@
+$FILE:9:14: ERROR:
+Missing field x in record access.
+  The type { y : internal:Internal:Int, z : internal:Internal:Int }
+    does not contain a field named x
+  ┃ 
+9 ┃     debugInt(record.x)
+  ┃              ▔▔▔▔▔▔▔▔

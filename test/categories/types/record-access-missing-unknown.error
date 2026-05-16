@@ -1,0 +1,7 @@
+$FILE:7:30: ERROR:
+Missing field x in record access.
+  The type { y : internal:Internal:Int, z : internal:Internal:Int }
+    does not contain a field named x
+  ┃ 
+7 ┃     let f(record) = debugInt(record.x)
+  ┃                              ▔▔▔▔▔▔▔▔

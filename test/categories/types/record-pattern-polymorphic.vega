@@ -1,0 +1,7 @@
+-- type: compile
+
+f : { g : forall (a : Type(Boxed)). a -> a } -> forall (a : Type(Boxed)). a -> a
+f({g}) = g
+
+main : () -> ()
+main() = {}

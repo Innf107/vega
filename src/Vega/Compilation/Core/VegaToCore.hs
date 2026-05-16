@@ -233,6 +233,22 @@ compileExpr expr = do
         Vega.DoubleLiteral{} -> deferToValue
         Vega.TupleLiteral{} -> deferToValue
         Vega.RecordLiteral{} -> deferToValue
+        Vega.RecordFieldAccess{loc=_, record, field, ext = (fieldRepresentation, recordType)} -> do
+            (recordStatements, recordValue, _) <- compileExprToValue record
+
+            index <- followMetasWithoutPathCompression recordType >>= \case
+                    Vega.Record fields -> case VectorMap.lookupIndex field fields of
+                        Just fieldIndex -> pure fieldIndex
+                        Nothing -> panic $ "Record in field access for " <> Vega.prettyGlobalText Vega.VarKind field <> " did not contain it. Record type: " <> pretty recordType
+                    _ -> panic $ "Non-record type in record field access: " <> pretty recordType
+
+
+            fieldRepresentation <- convertRepresentation fieldRepresentation
+            pure
+                ( recordStatements
+                , Core.ProductAccess{product = recordValue, index = index, resultRepresentation = fieldRepresentation}
+                , fieldRepresentation
+                )
         Vega.BinaryOperator _loc left operator right -> case operator of
             -- Short-circuiting operators
             Vega.And
@@ -388,6 +404,7 @@ compileExprToValue expr = do
                 , Core.ProductConstructor (fromList elementValues) representation
                 , representation
                 )
+        Vega.RecordFieldAccess{loc, record, field, ext = (fieldRepresentation, productIndex)} -> deferToLet
         Vega.BinaryOperator{} -> deferToLet
         Vega.If{} -> deferToLet
         Vega.SequenceBlock{} -> deferToLet
