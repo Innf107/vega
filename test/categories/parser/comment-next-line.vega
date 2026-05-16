@@ -1,0 +1,8 @@
+-- type: compile
+
+main : () -> ()
+main() = {
+    let _ = ()
+    -- this is a comment
+    let _ = ()
+}

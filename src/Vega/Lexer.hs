@@ -176,7 +176,7 @@ lexStartOfLine state = case state of
 
 lexLineComment :: LexState -> Lexer (Token, LexState)
 lexLineComment state = case state of
-    '\n' :! state -> lex (skipSpaces state)
+    '\n' :! state -> lexStartOfLine state
     _ :! state -> lexLineComment state
     IsEOF -> pure (EOF, state)
 
