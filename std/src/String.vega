@@ -22,7 +22,6 @@ data String = String({ content : Array(UInt8), length : Int, offset : Int })
 
 -- This function is wired into the compiler. If you change anything about its signature or name,
 -- update stringFromByteArrayFunction in Vega.Builtins in the compiler.
-
 fromByteArray : Array(UInt8) -> String
 fromByteArray(array) = {
     String({ content = array, offset = 0, length = arrayLength(array) })
@@ -108,7 +107,7 @@ concatList(list) = {
 }
 
 -- TODO: this could probably be some sort of crazy optimized SIMD magic
-
+-- (would be very cool if we could do that in vega itself)
 findByteIndex : (UInt8, String) -> Maybe(Int)
 findByteIndex(byte, String({content, offset, length})) = {
     let go(index) = {
@@ -119,7 +118,6 @@ findByteIndex(byte, String({content, offset, length})) = {
             if (uint8ToInt(currentByte) == uint8ToInt(byte)) then {
                 -- we need to subtract offset since this is an index of the internal array,
                 -- not the string
-
                 Just(index - offset)
             } else {
                 go(index + 1)
@@ -139,7 +137,6 @@ findByteIndexWhere(String({content, offset, length}), condition) = {
             if (condition(currentByte)) then {
                 -- we need to subtract offset since this is an index of the internal array,
                 -- not the string
-
                 Just(index - offset)
             } else {
                 go(index + 1)
@@ -150,7 +147,6 @@ findByteIndexWhere(String({content, offset, length}), condition) = {
 }
 
 -- O(1)
-
 take : (String, Int) -> String
 take(string, takenLength) = {
     let String({content, length, offset}) = string
@@ -159,7 +155,6 @@ take(string, takenLength) = {
     } else if takenLength < 0 then {
         -- TODO: it might be nice to have a dedicated singular empty string
         -- but we can't define that currently since we can't have top-level value bindings
-
         String({content = content, length = 0, offset = offset})
     } else {
         String({content = content, length = takenLength, offset = offset})
@@ -167,7 +162,6 @@ take(string, takenLength) = {
 }
 
 -- O(1)
-
 drop : (String, Int) -> String
 drop(string, droppedLength) = {
     let String({content, length, offset}) = string

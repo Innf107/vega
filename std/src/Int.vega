@@ -7,10 +7,9 @@ toString(x) = {
         "0"
     } else {
         -- This includes space for the leading - if necessary
-
         let maxNumberOfDigits = 20
-        -- We pre-fill the buffer with - so that we only need to use a different offset for negative numbers
 
+        -- We pre-fill the buffer with - so that we only need to use a different offset for negative numbers
         let buffer = replicateArray(maxNumberOfDigits, 45u8)
 
         let go(i, number) = {
@@ -32,7 +31,6 @@ toString(x) = {
 
         -- We end up wasting a small amount of space here (up to 19 bytes) if the actual number has much fewer than 20 digits,
         -- but that's fine since this is realistically going to be immediately copied into some other string anyway
-
         unsafeFromByteArraySlice({ 
                 content = unsafeFreezeArray(buffer), 
                 offset = mutableArrayLength(buffer) - stringLength,

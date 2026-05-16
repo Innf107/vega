@@ -94,7 +94,6 @@ generate(length, makeElement) = if length <= 0 then {
         go(i + 1)
     } else {}
     -- We already set the first element (everywhere) so we start at 1
-    
     go(1)
     unsafeFreezeArray(array)
 }
