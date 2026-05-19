@@ -5,7 +5,7 @@
 
 module Vega.Compilation.LLVM.MIRToLLVM (compile, addMainFunction) where
 
-import Relude hiding (State, evalState, get, modify, put)
+import Relude hiding (State, evalState, get, modify, prettyCallStack, put, trace)
 
 import Data.ByteString qualified as ByteString
 import Data.HashMap.Strict qualified as HashMap
@@ -34,6 +34,7 @@ import Vega.Builtins qualified as Builtins
 import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, addFunctionWithAttributes, attributeFunctionType, buildCallWithAttributes, parametersWithAttributes, rawFunctionType, returnTypeWithAttributes)
+import Vega.Compilation.LLVM.AttributeFunctionType qualified as AttributeFunctionType
 import Vega.Compilation.LLVM.Layout (Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
 import Vega.Compilation.LLVM.Runtime (RuntimeDefinitions (..), declareRuntimeDefinitions)
@@ -42,7 +43,8 @@ import Vega.Compilation.LLVM.Runtime.ToLLVMConstant (ToLLVMConstant (toLLVMConst
 import Vega.Compilation.LLVM.Runtime.ToLLVMConstant qualified as ToLLVMConstant
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Debug (showHeadConstructor)
-import Vega.Panic (panic)
+import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
+import Vega.Panic (panic, prettyCallStack)
 import Vega.Pretty (pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Syntax (renderPackageName)
@@ -69,10 +71,11 @@ type Compile es =
     , ?function :: LLVM.Value
     , ?functionEnv :: FunctionEnv
     , State DeclarationState :> es
+    , Trace :> es
     )
 
 {-# SCC compile #-}
-compile :: (?context :: LLVM.Context, IOE :> es) => MIR.Program -> Eff es LLVM.Module
+compile :: (?context :: LLVM.Context, IOE :> es, Trace :> es) => MIR.Program -> Eff es LLVM.Module
 compile program = do
     module_ <- LLVM.moduleCreateWithName "idkwhattoputhereyet"
     runtimeDefinitions <- declareRuntimeDefinitions module_
@@ -215,6 +218,7 @@ compileDeclaration ::
     , ?module_ :: LLVM.Module
     , ?runtimeDefinitions :: RuntimeDefinitions
     , IOE :> es
+    , Trace :> es
     , State DeclarationState :> es
     ) =>
     MIR.Declaration -> Eff es ()
@@ -226,7 +230,6 @@ compileDeclaration = \case
         , init
         , blocks
         } -> do
-            -- TODO: we don't actually need to re-compute this twice now
             parameterLayouts <- for parameters \(_, representation) -> Layout.representationLayout representation
             returnLayout <- Layout.representationLayout returnRepresentation
             (_functionType, sretParameter) <- functionLLVMType parameterLayouts returnLayout
@@ -244,8 +247,13 @@ compileDeclaration = \case
                                 Nothing -> Nothing
                         }
 
-            forIndexed_ parameters \(variable, representation) index -> do
-                layout <- Layout.representationLayout representation
+            let isZeroSized layout = case Layout.kind layout of
+                    Layout.ZeroSized -> True
+                    _ -> False
+            let (zeroSizedParameters, realParameters) = Seq.partition (isZeroSized . snd) (Seq.zip parameters parameterLayouts)
+            for_ zeroSizedParameters \((variable, _), layout) -> do
+                insertVarMapping variable zeroSizedDummyValue layout
+            forIndexed_ realParameters \((variable, _representation), layout) index -> do
                 let llvmValue = case sretParameter of
                         Nothing -> LLVM.getParam function index
                         -- The sret parameter is always the first one so we need to skip it

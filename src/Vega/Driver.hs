@@ -356,7 +356,7 @@ compileBackend = do
             LLVM.setTarget llvmModule triple
             LLVM.Target.setModuleDataLayout llvmModule dataLayout
 
-            {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule LLVM.ReturnStatusAction
+            {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
 
             -- TODO: be smarter about where to put the output
             {-# SCC "LLVM.Target.targetMachineEmitToFile" #-} LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile
