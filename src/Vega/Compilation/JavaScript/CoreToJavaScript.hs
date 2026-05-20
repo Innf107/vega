@@ -273,7 +273,10 @@ isUnitRepresentation = \case
 
 primopJSFunction :: Builtins.Primop -> (Int, Seq JS.Expr -> Eff es (Seq JS.Statement, JS.Expr))
 primopJSFunction = \case
-    Builtins.ReplicateArray -> asJSFunction 2 "internal$replicateArray"
+    Builtins.ReplicateMutableArray -> asJSFunction 2 "internal$replicateArray"
+    Builtins.UnsafeUninitializedMutableArray -> (1, \arguments -> case arguments of 
+        [size] -> pure ([], JS.Application (JS.Var "internal$replicateArray") [size, JS.Undefined])
+        _ -> error "unreachable")
     Builtins.EmptyArray -> (0, \_ -> pure ([], JS.ArrayLiteral []))
     Builtins.UnsafeReadArray ->
         ( 2

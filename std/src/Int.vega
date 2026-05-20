@@ -1,4 +1,4 @@
-import internal:Internal(uint8ToInt, debugInt, unsafeRem, replicateArray, unsafeWriteMutableArray, unsafeFreezeArray, arrayLength, mutableArrayLength, intToUInt8)
+import internal:Internal(uint8ToInt, debugInt, unsafeRem, replicateMutableArray, unsafeWriteMutableArray, unsafeFreezeArray, arrayLength, mutableArrayLength, intToUInt8)
 import std:String (unsafeFromByteArraySlice)
 
 toString : Int -> String
@@ -10,7 +10,7 @@ toString(x) = {
         let maxNumberOfDigits = 20
 
         -- We pre-fill the buffer with - so that we only need to use a different offset for negative numbers
-        let buffer = replicateArray(maxNumberOfDigits, 45u8)
+        let buffer = replicateMutableArray(maxNumberOfDigits, 45u8)
 
         let go(i, number) = {
             if number == 0 then {

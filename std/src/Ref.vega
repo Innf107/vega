@@ -1,0 +1,24 @@
+
+import internal:Internal (replicateMutableArray, unsafeWriteMutableArray, unsafeReadMutableArray)
+
+-- TODO: this should be parameterized over a lifetime and compatible with both ST and IO.
+-- It should also probably be primitive so it doesn't need to carry the redundant length field
+-- (that is currently the only overhead of using an array though)
+
+data Ref(a) = Ref(MutableArray(a))
+
+new : forall a. a -> Ref(a)
+new(x) = {
+    let array = replicateMutableArray(1, x)
+    Ref(array)
+}
+
+write : forall a. (Ref(a), a) -> ()
+write(Ref(array), x) = {
+    unsafeWriteMutableArray(array, 0, x)
+}
+
+read : forall a. Ref(a) -> a
+read(Ref(array)) = {
+    unsafeReadMutableArray(array, 0)
+}

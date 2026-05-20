@@ -1,0 +1,68 @@
+import std:Ref (Ref)
+import std:Ref
+import internal:Internal (unsafeWriteMutableArray, unsafeUninitializedMutableArray)
+import std:Panic (panic)
+import std:Int
+import std:String
+import std:Array
+
+-- TODO: this should be abstract
+data OutArray(a) = OutArray({
+        buffer : MutableArray(a),
+        offset : Int,
+        size : Int,
+        nextIndex : Ref(Int)
+    })
+
+remainingCapacity : forall a. OutArray(a) -> Int
+remainingCapacity(OutArray(outArray)) = {
+    outArray.size - Ref.read(outArray.nextIndex)
+}
+
+write : forall a. (OutArray(a), a) -> ()
+write(OutArray(impl) as outArray, value) = {
+    if remainingCapacity(outArray) > 0 then {
+        let index = Ref.read(impl.nextIndex)
+        unsafeWriteMutableArray(impl.buffer, index, value)
+        Ref.write(impl.nextIndex, index + 1)
+    } else {
+        panic("std:OutArray:write: trying to write to a filled OutArray")
+    }
+}
+
+writeArraySlice : forall a. (OutArray(a), { array : Array(a), offset : Int, length : Int }) -> ()
+writeArraySlice(OutArray(impl) as outArray, { array, offset, length }) = {
+    if remainingCapacity(outArray) < length then {
+        panic(String.append(String.append
+            (String.append
+                (String.append
+                    ("std:OutArray:writeArraySlice: trying to write an array of size ", Int.toString(length))
+                    , " to an OutArray with ")
+                , Int.toString(length))
+            , "remaining capacity"))
+    } else {
+        let nextIndex = Ref.read(impl.nextIndex)
+        Array.copyArray({
+                targetArray = impl.buffer, 
+                targetOffset = impl.offset + nextIndex, 
+                sourceArray = array,
+                sourceOffset = offset,
+                length = length
+            })
+        Ref.write(impl.nextIndex, nextIndex + length)
+    }
+}
+
+-- TODO: this really needs a lifetime on the out array (and the ST effect) to be safe
+withOutArray : forall a. (Int, OutArray(a) -> ()) -> Array(a)
+withOutArray(capacity, fillOutArray) = {
+    let buffer = unsafeUninitializedMutableArray(capacity)
+    let nextIndex = Ref.new(0)
+    let outArray = OutArray({ buffer = buffer, offset = 0, size = capacity, nextIndex = nextIndex })
+    fillOutArray(outArray)
+    
+    let sizeFilled = Ref.read(nextIndex)
+
+    Array.unsafeFreezeSlice({ array = buffer, offset = 0, length = sizeFilled})
+}
+

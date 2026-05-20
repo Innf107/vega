@@ -1,6 +1,6 @@
 
 import internal:Internal 
-    ( replicateArray
+    ( replicateMutableArray
     , emptyArray
     , unsafeWriteMutableArray
     , unsafeReadArray
@@ -10,6 +10,8 @@ import internal:Internal
     , unsafeFreezeArray
     , unsafeCoerce
     , arrayLength
+    , mutableArrayLength
+    , unsafeUninitializedMutableArray
     )
 import std:List (length, List, Cons, Nil)
 
@@ -59,7 +61,7 @@ fromList(list) = match list {
     Nil -> emptyArray()
     Cons(first, rest) -> {
         let remainingLength = length(rest)
-        let array = replicateArray(remainingLength + 1, first)
+        let array = replicateMutableArray(remainingLength + 1, first)
         
         let go(i, toCopy) = match toCopy {
             Nil -> ()
@@ -88,7 +90,7 @@ generate(length, makeElement) = if length <= 0 then {
     emptyArray()
 } else {
     let firstElement = makeElement(0)
-    let array = replicateArray(length, firstElement)
+    let array = replicateMutableArray(length, firstElement)
     let go(i) = if i < length then {
         unsafeWriteMutableArray(array, i, makeElement(i))
         go(i + 1)
@@ -96,4 +98,24 @@ generate(length, makeElement) = if length <= 0 then {
     -- We already set the first element (everywhere) so we start at 1
     go(1)
     unsafeFreezeArray(array)
+}
+
+-- Freeze a slice of an MutableArray under the assumption that it will not be used afterwards.
+-- If the slice consists of the entire array, the array will be reused in place, otherwise
+-- the sub-array will be copied out
+unsafeFreezeSlice : forall a. { array : MutableArray(a), offset : Int, length : Int } -> Array(a)
+unsafeFreezeSlice({array, offset, length}) = {
+    if offset == 0 && length == mutableArrayLength(array) then {
+        unsafeFreezeArray(array)
+    } else {
+        let targetArray = unsafeUninitializedMutableArray(length)
+        copyMutableArray({ 
+                targetArray = targetArray, 
+                targetOffset = 0, 
+                sourceArray = array,
+                sourceOffset = 0,
+                length = length 
+            })
+        unsafeFreezeArray(targetArray)
+    }
 }

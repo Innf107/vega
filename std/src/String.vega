@@ -4,7 +4,7 @@ import std:List (List, Nil, Cons)
 import std:Maybe (Maybe, Nothing, Just)
 
 import internal:Internal 
-    ( replicateArray
+    ( replicateMutableArray
     , arrayLength
     , unsafeFreezeArray
     , unsafeThawArray
@@ -33,7 +33,7 @@ unsafeFromByteArraySlice(record) = String(record)
 
 replicateChar : (UInt8, Int) -> String
 replicateChar(char, length) = {
-    let array = unsafeFreezeArray(replicateArray(length, char))
+    let array = unsafeFreezeArray(replicateMutableArray(length, char))
     String({ content = array, offset = 0, length = length })
 }
 
@@ -47,7 +47,7 @@ append(string1, string2) = {
     let String({content = content1, offset = offset1, length = length1 }) = string1
     let String({content = content2, offset = offset2, length = length2 }) = string2
 
-    let combinedArray = replicateArray(length1 + length2, 0u8)
+    let combinedArray = replicateMutableArray(length1 + length2, 0u8)
     copyArray({
             targetArray = combinedArray, 
             targetOffset = 0,
@@ -68,7 +68,7 @@ append(string1, string2) = {
 withCString : forall a. (String, (Pointer(UInt8) -> a)) -> a
 withCString(string, cont) = {
     let String({content, offset, length}) = string
-    let arrayWithTrailingNull = replicateArray(length + 1, 0u8)
+    let arrayWithTrailingNull = replicateMutableArray(length + 1, 0u8)
     copyArray({
         targetArray = arrayWithTrailingNull,
         targetOffset = 0,
@@ -87,7 +87,7 @@ concatList(list) = {
     }
     let size = totalSize(list, 0)
 
-    let combinedArray = replicateArray(size, 0u8)
+    let combinedArray = replicateMutableArray(size, 0u8)
 
     let copyAll(currentOffset, shadow list) = match list {
         Nil -> {}

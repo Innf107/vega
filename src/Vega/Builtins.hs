@@ -44,7 +44,8 @@ import Vega.Syntax qualified as Vega hiding (stringRepresentation)
 
 data Primop
     = -- Array operations
-      ReplicateArray
+      ReplicateMutableArray
+    | UnsafeUninitializedMutableArray
     | EmptyArray
     | UnsafeReadArray
     | UnsafeReadMutableArray
@@ -93,7 +94,8 @@ instance Pretty Primop where
 
 primopVarName :: Primop -> Text
 primopVarName = \case
-    ReplicateArray -> "replicateArray"
+    ReplicateMutableArray -> "replicateMutableArray"
+    UnsafeUninitializedMutableArray -> "unsafeUninitializedMutableArray"
     EmptyArray -> "emptyArray"
     UnsafeReadArray -> "unsafeReadArray"
     UnsafeReadMutableArray -> "unsafeReadMutableArray"
@@ -210,7 +212,8 @@ builtinGlobals =
 
 primopType :: Primop -> Type
 primopType = \case
-    ReplicateArray -> forall_ "a" \a -> [intType, a] --> mutableArrayType @@ [a]
+    ReplicateMutableArray -> forall_ "a" \a -> [intType, a] --> mutableArrayType @@ [a]
+    UnsafeUninitializedMutableArray -> forall_ "a" \a -> [intType] --> mutableArrayType @@ [a]
     EmptyArray -> forall_ "a" \a -> [] --> arrayType @@ [a]
     UnsafeReadArray -> forall_ "a" \a -> [arrayType @@ [a], intType] --> a
     UnsafeReadMutableArray -> forall_ "a" \a -> [mutableArrayType @@ [a], intType] --> a
@@ -251,7 +254,8 @@ primopType = \case
 -- involving the type checker so we have to write it out manually for now.
 primopRepresentation :: (HasCallStack) => Primop -> Seq Core.Representation -> (Seq Core.Representation, Core.Representation)
 primopRepresentation primop arguments = case primop of
-    ReplicateArray -> ([intRep 64, argument 0], Core.ArrayRep (argument 0))
+    ReplicateMutableArray -> ([intRep 64, argument 0], Core.ArrayRep (argument 0))
+    UnsafeUninitializedMutableArray -> ([intRep 64], Core.ArrayRep (argument 0))
     EmptyArray -> ([], Core.ArrayRep (argument 0))
     UnsafeReadArray -> ([Core.ArrayRep (argument 0), intRep 64], argument 0)
     UnsafeReadMutableArray -> ([Core.ArrayRep (argument 0), intRep 64], argument 0)
@@ -309,7 +313,6 @@ defaultImportScope =
                     , "MutableArray"
                     , "Box"
                     , "Pointer"
-                    , "panic"
                     , "box"
                     , "unbox"
                     ]

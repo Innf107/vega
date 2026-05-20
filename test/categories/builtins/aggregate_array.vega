@@ -1,6 +1,6 @@
 -- type: print(3)
 
-import internal:Internal (replicateArray, unsafeReadArray, unsafeFreezeArray, debugInt)
+import internal:Internal (replicateMutableArray, unsafeReadArray, unsafeFreezeArray, debugInt)
 
 data Complex =
     | A(Int, Int, Int)
@@ -8,7 +8,7 @@ data Complex =
 
 main : () -> ()
 main() = {
-    let array = unsafeFreezeArray(replicateArray(5, B(1, 2)))
+    let array = unsafeFreezeArray(replicateMutableArray(5, B(1, 2)))
     match unsafeReadArray(array, 3) {
         A(_, _, _) -> {}
         B(x, y) -> {

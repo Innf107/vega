@@ -419,10 +419,10 @@ compileInstruction builder = \case
                 tagPointer <- buildGEPOffset builder sumValue offset "tagptr"
                 asVar_ var tagLayout $ LLVMBuilder.buildLoad builder (Layout.llvmType tagLayout) tagPointer
             Nothing -> insertVarMapping var sumValue sumLayout
-    MIR.CallDirect{var, functionName, arguments, returnRepresentation}
+    MIR.CallDirect{var, functionName, arguments, representationArguments, returnRepresentation}
         | Just primop <- Builtins.asPrimop functionName -> do
             returnLayout <- Layout.representationLayout returnRepresentation
-            asVar_ var returnLayout $ compilePrimopCall builder primop arguments returnRepresentation
+            asVar_ var returnLayout $ compilePrimopCall builder primop arguments representationArguments returnRepresentation
         | otherwise -> do
             let isNotZeroSized (_, layout) = case Layout.kind layout of
                     Layout.ZeroSized -> False
@@ -521,10 +521,10 @@ compileTerminator builder = \case
 
         _ <- LLVMBuilder.buildSwitch builder scrutineeValue cases defaultBlock
         pure ()
-    MIR.TailCallDirect{functionName, arguments, returnRepresentation}
+    MIR.TailCallDirect{functionName, arguments, representationArguments, returnRepresentation}
         | Just primop <- Builtins.asPrimop functionName -> do
             resultLayout <- Layout.representationLayout returnRepresentation
-            result <- compilePrimopCall builder primop arguments returnRepresentation "ret"
+            result <- compilePrimopCall builder primop arguments representationArguments returnRepresentation "ret"
             buildComplexReturn builder resultLayout result
         | otherwise -> do
             let isNotZeroSized (_, layout) = case Layout.kind layout of
@@ -647,13 +647,15 @@ compilePrimopCall ::
     LLVMBuilder.Builder ->
     Primop ->
     Seq MIR.Variable ->
+    Seq Representation ->
     Representation ->
     Text ->
     Eff es LLVM.Value
-compilePrimopCall builder primop arguments returnRepresentation varName = do
+compilePrimopCall builder primop arguments representationArguments returnRepresentation varName = do
     argumentValues <- for arguments lookupVarValue
     case primop of
-        ReplicateArray -> compileReplicateArray builder arguments returnRepresentation varName
+        ReplicateMutableArray -> compileReplicateArray builder arguments returnRepresentation varName
+        UnsafeUninitializedMutableArray -> compileUnsafeUninitializedMutableArray builder arguments representationArguments returnRepresentation varName
         EmptyArray -> do
             global <- createStaticByteArray mempty
             buildGEPOffset builder (LLVM.globalAsValue global) Heap.headerSize varName
@@ -743,6 +745,21 @@ compileReplicateArray builder arguments returnRepresentation varName = case argu
         LLVMBuilder.positionBuilderAtEnd builder completedBlock
         pure array
     _ -> panic $ "replicateArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
+
+compileUnsafeUninitializedMutableArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Seq Representation -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeUninitializedMutableArray builder arguments representationArguments returnRepresentation varName = case arguments of
+    [size] -> do
+        sizeValue <- lookupVarValue size
+        elementRepresentation <- case representationArguments of
+            [elementRepresentation] -> pure elementRepresentation
+            _ -> panic $ "compileUnsafeUninitializedMutableArray called with incorrect number of representation arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty representationArguments) <> "]"
+        elementLayout <- Layout.representationLayout elementRepresentation
+
+        infoTable <- getOrCreateArrayInfoTablePointer False elementLayout
+
+        array <- outOfLineBuiltin builder "vega_allocate_zero_initialized_array" [infoTable, sizeValue] returnRepresentation varName
+        pure array
+    _ -> panic $ "unsafeUninitializedMutableArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
 compileArrayLength :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
 compileArrayLength builder arguments _returnRepresentation varName = case arguments of

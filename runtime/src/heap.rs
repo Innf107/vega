@@ -1,3 +1,5 @@
+use std::ffi::c_void;
+
 /// The type of Vega heap objects.
 /// The fields of this type only contain the heap header
 #[repr(C)]
@@ -7,7 +9,7 @@ pub struct HeapObject {
 impl HeapObject {
     pub const HEADER_SIZE_IN_BYTES: usize = size_of::<HeapObject>();
 
-    pub fn from_data(object: *const u8) -> *const HeapObject {
+    pub unsafe fn from_data(object: *const u8) -> *const HeapObject {
         unsafe { object.byte_sub(HeapObject::HEADER_SIZE_IN_BYTES) as *const HeapObject }
     }
 
@@ -15,7 +17,7 @@ impl HeapObject {
         unsafe { object.byte_add(HeapObject::HEADER_SIZE_IN_BYTES) as *mut u8 }
     }
 
-    pub fn as_arry_object_unchecked(object: *const HeapObject) -> *const ArrayHeapObject {
+    pub unsafe fn as_arry_object_unchecked(object: *const HeapObject) -> *const ArrayHeapObject {
         object as *const ArrayHeapObject
     }
 }
@@ -98,13 +100,15 @@ pub unsafe extern "C" fn vega_allocate_boxed(info_table: *const InfoTable) -> *m
     HeapObject::data(object_pointer)
 }
 
-
-// SAFETY: This assumes that array_info_table points to a valid array info table (with object_type = Array)
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn vega_allocate_uninitialized_array(
+/// SAFETY: This assumes that array_info_table points to a valid array info table (with object_type = Array)
+/// If the element type of this array constains boxed pointers, ALL the elements of the array must be written to
+/// before the next garbage collection. Otherwise the GC will try to follow uninitialized pointers.
+///
+/// If you need an array that can survive across a garbage collection, try [allocate_zero_initialized_array]
+pub unsafe fn allocate_uninitialized_array(
     array_info_table: *const InfoTable,
     size_in_elements: usize,
-) -> *mut u8 {
+) -> *mut ArrayHeapObject {
     let stride_in_bytes = unsafe { (*array_info_table).layout.array.element_stride_in_bytes };
     let size_in_bytes = size_in_elements * stride_in_bytes;
 
@@ -118,6 +122,49 @@ pub unsafe extern "C" fn vega_allocate_uninitialized_array(
     };
 
     unsafe { (*object_pointer).size = size_in_elements };
+    object_pointer
+}
 
+/// See [allocate_uninitialized_array]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vega_allocate_uninitialized_array(
+    array_info_table: *const InfoTable,
+    size_in_elements: usize,
+) -> *mut u8 {
+    let object_pointer =
+        unsafe { allocate_uninitialized_array(array_info_table, size_in_elements) };
     HeapObject::data(ArrayHeapObject::as_base(object_pointer))
+}
+
+/// SAFETY: The resulting array is safe insofar that the garbage collector can safely traverse it, even if it contains boxed
+/// pointers and in that there will not be any real uninitialized memory in it. (unlike vega_allocate_uninitialized_array)
+/// However, the resulting bit pattern might not map onto a legal value for the actual vega type of the elements,
+/// so *accessing* any of the elements of this array is generally *NOT* safe.
+///
+/// Also, this assumes that array_info_table points to a valid array info table (with object_type = Array)
+pub unsafe fn allocate_zero_initialized_array(
+    array_info_table: *const InfoTable,
+    size_in_elements: usize,
+) -> *mut ArrayHeapObject {
+    let array = unsafe { allocate_uninitialized_array(array_info_table, size_in_elements) };
+    let size_in_bytes =
+        size_in_elements * unsafe { (*array_info_table).layout.array.element_stride_in_bytes };
+    unsafe {
+        libc::memset(
+            ArrayHeapObject::contents(array) as *mut c_void,
+            0,
+            size_in_bytes,
+        )
+    };
+    array
+}
+
+/// See [allocate_zero_initialized_array]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn vega_allocate_zero_initialized_array(
+    array_info_table: *const InfoTable,
+    size_in_elements: usize,
+) -> *mut u8 {
+    let array = unsafe { allocate_zero_initialized_array(array_info_table, size_in_elements) };
+    HeapObject::data(ArrayHeapObject::as_base(array))
 }
