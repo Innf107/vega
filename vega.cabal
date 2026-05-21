@@ -43,6 +43,7 @@ library
       Vega.Compilation.MIR.Syntax
       Vega.Compilation.MIR.Verify
       Vega.Compilation.PatternMatching
+      Vega.Constraint
       Vega.Debruijn
       Vega.Debug
       Vega.DFS
@@ -60,6 +61,7 @@ library
       Vega.Error
       Vega.Lexer
       Vega.Lexer.Token
+      Vega.ListBuilder
       Vega.Loc
       Vega.MultiSet
       Vega.Package
