@@ -70,13 +70,13 @@ instance (Zonkable a) => Zonkable (Maybe a)
 instance (Zonkable a, Zonkable b) => Zonkable (a, b)
 
 instance Zonkable MetaVar where
-    zonk (MkMetaVar{kind, identity, underlying, name}) = do
+    zonk (MkMetaVar{kind, identity, underlying, name, blockedConstraints}) = do
         -- We do *not* zonk the underlying type this is bound to
         -- since that case is already handled by Zonkable Type.
         -- In fact, if we even get to this case, that means
         -- that underlying is set to Nothing
         kind <- zonk kind
-        pure MkMetaVar{kind, identity, underlying, name}
+        pure MkMetaVar{kind, identity, underlying, name, blockedConstraints}
 
 instance Zonkable ForallBinder
 instance Zonkable Skolem

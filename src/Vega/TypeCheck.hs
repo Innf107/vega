@@ -1,8 +1,10 @@
 {-# LANGUAGE MagicHash #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Vega.TypeCheck (checkDeclaration) where
 
-import Vega.Syntax
+import Vega.Syntax hiding (DeferredConstraint)
+import Vega.Syntax qualified as Vega
 
 import Effectful hiding (Effect)
 import Relude hiding (NonEmpty, State, Type, evalState, get, mapMaybe, put, runState, trace)
@@ -27,6 +29,8 @@ import GHC.Exts (isTrue#, reallyUnsafePtrEquality)
 import GHC.List (List)
 import Vega.Builtins (boolType, intType)
 import Vega.Builtins qualified as Builtins
+import Vega.Constraint (ConstraintSet, ManageConstraints, runManageConstraints)
+import Vega.Constraint qualified as Constraint
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.Meta.Static (BindMeta, ReadMeta, bindMetaUnchecked, followMetas, freshMeta, readMeta, runMeta)
 import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
@@ -54,7 +58,7 @@ data Env = MkEnv
     }
 
 data DeferredConstraint
-    = AssertMonomorphized Loc Env Type
+    = AssertMonomorphized Loc Env MetaVar
     | HasField
         { loc :: Loc
         , env :: Env
@@ -62,6 +66,8 @@ data DeferredConstraint
         , field :: Text
         , fieldType :: Type
         }
+    deriving (Generic)
+type instance Vega.DeferredConstraint = DeferredConstraint
 
 emptyEnv :: Env
 emptyEnv =
@@ -105,8 +111,9 @@ type TypeCheckCore es =
 type TypeCheck es =
     ( TypeCheckCore es
     , GraphPersistence :> es
-    , Output DeferredConstraint :> es
     , NewUnique :> es
+    , ManageConstraints :> es
+    , ?constraintSet :: ConstraintSet DeferredConstraint
     )
 
 {-# SCC checkDeclaration #-}
@@ -115,17 +122,18 @@ type TypeCheck es =
 -- (in any case, we can't just compile it if it has type errors so there isn't that much
 -- we could do with it anyway. it might help the LSP though)
 checkDeclaration :: (GraphPersistence :> es, Trace :> es, IOE :> es) => Declaration Renamed -> Eff es (Either TypeErrorSet (Declaration Typed))
-checkDeclaration (MkDeclaration{loc, name, syntax}) = withTrace TypeCheck ("Declaration: " <> pretty name) do
-    ((syntaxOrFatalError, deferredConstraints), nonFatalDirectErrors) <-
+checkDeclaration (MkDeclaration{loc, name, syntax}) = withTrace TypeCheck ("Declaration: " <> pretty name) $ runManageConstraints do
+    constraintSet <- Constraint.newConstraintSet
+    let ?constraintSet = constraintSet
+    (syntaxOrFatalError, nonFatalDirectErrors) <-
         checkDeclarationSyntax loc syntax
             & runNewUnique
             & runMeta
             & runErrorNoCallStack @TypeError
-            & runOutputList @DeferredConstraint
             & runOutputSeq @TypeError
 
     (fatalSolverError, nonFatalSolverErrors) <-
-        solveAllConstraints deferredConstraints
+        solveResidualConstraints
             & runNewUnique
             & runMeta
             & runErrorNoCallStack @TypeError
@@ -1713,6 +1721,10 @@ bindMeta loc env meta boundType = withTrace Unify (pretty meta <+> keyword ":=" 
                     -- ?a ~ ?a constraints are technically harmless but cause problems for the type checker
                     -- so we need to handle them separately
                     | meta == meta2 -> pure ()
+                    | otherwise -> do
+                        checkEvaluatedType loc env meta.kind (MetaVar meta2)
+                        Constraint.mergeInto meta.blockedConstraints meta2.blockedConstraints
+                        bindMetaUnchecked meta (MetaVar meta2)
                 boundType -> do
                     -- TODO: include some sort of note to make it clear where the kind came from
                     checkEvaluatedType loc env meta.kind boundType
@@ -1721,7 +1733,10 @@ bindMeta loc env meta boundType = withTrace Unify (pretty meta <+> keyword ":=" 
                             -- This will make more sense once we have more context to the unification
                             -- TODO: until then, the order doesn't really make sense here
                             typeError OccursCheckViolation{loc, actualType = boundType, expectedType = MetaVar meta, meta}
-                        False -> bindMetaUnchecked meta boundType
+                        False -> do
+                            bindMetaUnchecked meta boundType
+                            unblockedConstraints <- Constraint.dequeueAll meta.blockedConstraints
+                            for_ unblockedConstraints solveUnblockedConstraint
         _ -> error $ "Trying to bind unbound meta variable"
 
 occursAndAdjust :: (TypeCheck es) => MetaVar -> Type -> Eff es Bool
@@ -1830,11 +1845,15 @@ assertMonomorphizability loc env type_ = \case
 monomorphized :: (TypeCheck es) => Loc -> Env -> Type -> Eff es ()
 monomorphized loc env type_ = do
     trace TypeCheck $ emphasis "mono" <+> pretty type_
-    solveMonomorphized (\meta -> output (AssertMonomorphized loc env (MetaVar meta))) loc env type_
+    solveMonomorphized
+        loc
+        env
+        type_
+        (\meta -> Constraint.enqueue meta.blockedConstraints (AssertMonomorphized loc env meta))
 
 emitHasFieldConstraint :: (TypeCheck es) => Loc -> Env -> MetaVar -> Text -> Type -> Eff es ()
 emitHasFieldConstraint loc env recordType field fieldType = do
-    output (HasField{loc, env, recordType, field, fieldType})
+    Constraint.enqueue recordType.blockedConstraints (HasField{loc, env, recordType, field, fieldType})
 
 solveIntSum :: (TypeCheck es) => Loc -> Env -> IntSum -> Eff es ()
 solveIntSum loc env sum = do
@@ -1867,8 +1886,36 @@ solveIntSum loc env sum = do
                         -- This might still be solvable but it depends on the interplay of several unification variables
                         undefined
 
-solveMonomorphized :: (TypeCheckCore es) => (MetaVar -> Eff es ()) -> Loc -> Env -> Type -> Eff es ()
-solveMonomorphized onMetaVar loc env type_ =
+solveResidualConstraints :: (TypeCheck es) => Eff es ()
+solveResidualConstraints = do
+    residualConstraints <- Constraint.currentConstraints ?constraintSet
+    for_ residualConstraints solveResidualConstraint
+
+solveResidualConstraint :: (TypeCheck es) => DeferredConstraint -> Eff es ()
+solveResidualConstraint constraint = withTrace Constraints ("solveResidualConstraint " <> showHeadConstructor constraint) $ case constraint of
+    -- If we hit a meta variable here, we know that it will never be bound to anything, so we can choose what to bind it to.
+    -- The decision we make is that we pretend to bind it to () since that 1) leads to very efficient code and 2) is monomorphizable!
+    -- We don't *actually* bind it though since we don't want to mess up existing error messages.
+    -- Instead, we just ignore mono constraints for it, which has the same effect as if it were already bound to ()
+    AssertMonomorphized loc env meta -> solveMonomorphized loc env (MetaVar meta) (\_meta -> pure ())
+    HasField loc env recordType field expectedFieldType ->
+        solveHasField loc env (MetaVar recordType) field expectedFieldType (\ambiguousMeta -> typeError (AmbiguousRecordTypeInFieldAccess{loc, field, ambiguousMeta}))
+
+solveUnblockedConstraint :: (TypeCheck es) => DeferredConstraint -> Eff es ()
+solveUnblockedConstraint constraint = withTrace Constraints ("solveUnblockedConstraint " <> showHeadConstructor constraint) $ case constraint of
+    AssertMonomorphized loc env meta ->
+        solveMonomorphized loc env (MetaVar meta) (\meta -> Constraint.enqueue meta.blockedConstraints (AssertMonomorphized loc env meta))
+    HasField loc env recordType field expectedFieldType ->
+        solveHasField
+            loc
+            env
+            (MetaVar recordType)
+            field
+            expectedFieldType
+            (\meta -> panic $ "Unblocked HasField constraint for hit another meta variable " <> pretty meta <> ". The constraints should have been merged instead")
+
+solveMonomorphized :: (TypeCheckCore es) => Loc -> Env -> Type -> (MetaVar -> Eff es ()) -> Eff es ()
+solveMonomorphized loc env type_ onMetaVar =
     go type_
   where
     go type_ =
@@ -1924,42 +1971,9 @@ solveMonomorphized onMetaVar loc env type_ =
             Integer -> pure ()
             Kind -> pure ()
 
-solveAllConstraints :: (TypeCheckCore es, GraphPersistence :> es, NewUnique :> es) => List DeferredConstraint -> Eff es ()
-solveAllConstraints constraints = do
-    ((), newConstraints) <- runOutputList $ solveConstraints constraints
-    case newConstraints of
-        [] -> pure ()
-        _ -> solveAllConstraints newConstraints
-
--- TODO: we currently only do one iteration of the constraint solver.
--- This means that we may not be able to solve a constraint if it depends on another constraint that we process after it.
--- We should really run the constraint solver until it either solves all constraints or fails to make progress
--- (Although *ideally* we would have something event based where constraints are unblocked if the unification variables they
---  depend on are bound)
-solveConstraints :: (TypeCheck es) => List DeferredConstraint -> Eff es ()
-solveConstraints = \case
-    [] -> pure ()
-    (AssertMonomorphized loc env type_ : rest) -> do
-        solveMonomorphized
-            ( \_meta ->
-                -- If this gets called, we know that the meta variable was definitely unused and so we could default it to
-                -- whatever we want, including () which is monomorphizable and satisfies this constraint.
-                -- (Note that we don't *literally* assign the meta variable since we don't want to mess up error messages.
-                -- Instead, Core generation gives unbound unification variables a `Unit` representation, which accomplishes
-                -- the same goal.)
-                pure ()
-            )
-            loc
-            env
-            type_
-        solveConstraints rest
-    (HasField{loc, env, recordType, field, fieldType} : rest) -> do
-        solveHasField loc env recordType field fieldType
-        solveConstraints rest
-
-solveHasField :: (TypeCheck es) => Loc -> Env -> MetaVar -> Text -> Type -> Eff es ()
-solveHasField loc env recordType field expectedFieldType = do
-    followMetas (MetaVar recordType) >>= \case
+solveHasField :: (TypeCheck es) => Loc -> Env -> Type -> Text -> Type -> (MetaVar -> Eff es ()) -> Eff es ()
+solveHasField loc env recordType field expectedFieldType onMeta = do
+    followMetas recordType >>= \case
         recordType@(Record fields) -> do
             case VectorMap.lookup field fields of
                 Nothing -> do
@@ -1969,8 +1983,7 @@ solveHasField loc env recordType field expectedFieldType = do
                     -- the instantiated arguments here
                     (actualFieldType, _instantiatedArguments) <- instantiate loc env possiblyPolymorphicFieldType
                     subsumes loc env expectedFieldType actualFieldType
-        MetaVar meta -> do
-            undefined
+        MetaVar meta -> onMeta meta
         nonRecordType -> do
             typeError (NonRecordTypeInFieldAccess{loc, nonRecordType, field})
 

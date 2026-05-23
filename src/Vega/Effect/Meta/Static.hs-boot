@@ -15,6 +15,7 @@ import Relude hiding (trace)
 import Effectful (Dispatch (Static), DispatchOf, Eff, Effect, IOE, (:>))
 
 import Effectful.Dispatch.Static (SideEffects (NoSideEffects, WithSideEffects), StaticRep, evalStaticRep, unsafeEff_)
+import Vega.Constraint (ConstraintSet, ManageConstraints)
 import Vega.Effect.Trace (Category (MetaVars), Trace, trace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique)
 import Vega.Pretty (Pretty (pretty), align, keyword, note, (<+>))
@@ -28,7 +29,15 @@ type role BindMeta phantom phantom
 
 readMeta :: (ReadMeta :> es) => Vega.MetaVar -> Eff es (Maybe Vega.Type)
 bindMetaUnchecked :: (BindMeta :> es) => Vega.MetaVar -> Vega.Type -> Eff es ()
-freshMeta :: (BindMeta :> es, NewUnique :> es, Trace :> es, HasCallStack) => Text -> Vega.Kind -> Eff es Vega.MetaVar
+freshMeta ::
+    ( BindMeta :> es
+    , NewUnique :> es
+    , Trace :> es
+    , ManageConstraints :> es
+    , ?constraintSet :: ConstraintSet Vega.DeferredConstraint
+    , HasCallStack
+    ) =>
+    Text -> Vega.Kind -> Eff es Vega.MetaVar
 runMeta :: (IOE :> es) => Eff (ReadMeta : BindMeta : es) a -> Eff es a
 runReadMetaPure :: Eff (ReadMeta : es) a -> Eff es a
 followMetas :: (ReadMeta :> es, BindMeta :> es) => Vega.Type -> Eff es Vega.Type

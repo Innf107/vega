@@ -1,0 +1,7 @@
+$FILE:6:9: ERROR:
+Ambigous record type ?a
+  in access to field x
+    Try adding a type signature
+  ┃ 
+6 ┃         r.x
+  ┃         ▔▔▔

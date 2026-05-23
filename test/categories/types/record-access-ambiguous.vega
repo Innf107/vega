@@ -1,0 +1,9 @@
+-- type: error
+
+main : () -> ();
+main() = {
+    let f(r) = {
+        r.x
+    }
+}
+

@@ -17,6 +17,7 @@ import Relude hiding (trace)
 import Effectful (Dispatch (Static), DispatchOf, Eff, Effect, IOE, (:>))
 
 import Effectful.Dispatch.Static (SideEffects (NoSideEffects, WithSideEffects), StaticRep, evalStaticRep, unsafeEff_)
+import Vega.Constraint (ConstraintSet, ManageConstraints, newConstraintQueue)
 import Vega.Effect.Trace (Category (MetaVars), Trace, trace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique)
 import Vega.Pretty (Pretty (pretty), align, keyword, note, (<+>))
@@ -36,11 +37,20 @@ readMeta metavar = unsafeEff_ $ readIORef metavar.underlying
 bindMetaUnchecked :: (BindMeta :> es) => Vega.MetaVar -> Vega.Type -> Eff es ()
 bindMetaUnchecked metavar type_ = unsafeEff_ $ writeIORef metavar.underlying (Just type_)
 
-freshMeta :: (BindMeta :> es, NewUnique :> es, Trace :> es, HasCallStack) => Text -> Vega.Kind -> Eff es Vega.MetaVar
+freshMeta ::
+    ( BindMeta :> es
+    , NewUnique :> es
+    , Trace :> es
+    , ManageConstraints :> es
+    , ?constraintSet :: ConstraintSet Vega.DeferredConstraint
+    , HasCallStack
+    ) =>
+    Text -> Vega.Kind -> Eff es Vega.MetaVar
 freshMeta name kind = do
     identity <- newUnique
     underlying <- unsafeEff_ $ newIORef Nothing
-    let meta = Vega.MkMetaVar{underlying, identity, name, kind}
+    blockedConstraints <- newConstraintQueue ?constraintSet
+    let meta = Vega.MkMetaVar{underlying, identity, name, kind, blockedConstraints}
     trace MetaVars ("freshMeta" <+> align (keyword "~>" <+> pretty meta <+> keyword ":" <+> pretty kind <> "\n" <> note (toText $ prettyCallStack callStack)))
     pure meta
 

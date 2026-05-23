@@ -23,6 +23,7 @@ import {-# SOURCE #-} Vega.TypeCheck.IntSum qualified as IntSum
 import Vega.Util (Sign)
 import Vega.VectorMap (VectorMap)
 import Vega.VectorMap qualified as VectorMap
+import Vega.Constraint (ConstraintQueue)
 
 newtype PackageName = MkPackageName Text
     deriving stock (Generic, Eq, Show, Ord)
@@ -517,12 +518,21 @@ instance Pretty PrimitiveRep where
 type Kind = Type
 type Representation = Type
 
+-- This is a massive hack to avoid import cycles with the type checker.
+-- We define an open nullary type family for 'DeferredConstraint' and
+-- implement an oprhan instance that sets it to the actual DeferredConstraint
+-- definition in the type checker.
+-- Since the type checker is the only place that cares about these constraints,
+-- this doesn't cause any issues.
+type family DeferredConstraint :: Relude.Type
+
 -- TODO: levels
 data MetaVar = MkMetaVar
     { underlying :: IORef (Maybe Type)
     , identity :: Unique
     , name :: Text
     , kind :: Kind
+    , blockedConstraints :: ConstraintQueue DeferredConstraint
     }
 
 data IntSum = MkIntSum

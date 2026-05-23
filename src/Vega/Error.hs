@@ -155,6 +155,11 @@ data TypeError
         , field :: Text
         , nonRecordType :: Type
         }
+    | AmbiguousRecordTypeInFieldAccess
+        { loc :: Loc
+        , field :: Text
+        , ambiguousMeta :: MetaVar
+        }
     | ConstructorPatternOfIncorrectNumberOfArgs
         { loc :: Loc
         , actual :: Int
@@ -437,15 +442,27 @@ renderCompilationError = \case
                     <> excessiveFieldsMessage
                     <> "\n    This record is expected to have type" <+> pretty (Record expectedFields)
         MissingRecordFieldInAccess{loc = _, field, recordType} -> do
-            align $ emphasis "Missing field " <> prettyGlobalText VarKind field <> emphasis " in record access.\n"
-                <> "  The type " <> pretty recordType
-                <> "\n    does not contain a field named " <> prettyGlobalText VarKind field
+            align $
+                emphasis "Missing field "
+                    <> prettyGlobalText VarKind field
+                    <> emphasis " in record access.\n"
+                    <> "  The type "
+                    <> pretty recordType
+                    <> "\n    does not contain a field named "
+                    <> prettyGlobalText VarKind field
         NonRecordTypeInFieldAccess{loc = _, field, nonRecordType} -> do
             align $
                 emphasis "Non-record type in access to field "
                     <> prettyGlobalText VarKind field
                     <> ":\n  "
                     <> pretty nonRecordType
+        AmbiguousRecordTypeInFieldAccess{loc = _, field, ambiguousMeta} -> do
+            align $
+                emphasis "Ambigous record type "
+                    <> pretty ambiguousMeta
+                    <> "\n  in access to field "
+                    <> prettyGlobalText VarKind field
+                    <> note "\n    Try adding a type signature"
         ConstructorPatternOfIncorrectNumberOfArgs{loc = _, actual, expectedTypes} ->
             align $
                 emphasis "Constructor pattern binds" <+> pluralNumber emphasis actual "parameter" <+> emphasis "but its type expects it to bind" <+> number (length expectedTypes)

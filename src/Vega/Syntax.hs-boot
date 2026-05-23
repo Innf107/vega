@@ -3,6 +3,7 @@
 module Vega.Syntax where
 
 import Relude hiding (NonEmpty, Type)
+import Relude qualified
 import Vega.MultiSet (MultiSet)
 import Vega.Seq.NonEmpty (NonEmpty)
 import Vega.VectorMap (VectorMap)
@@ -34,6 +35,7 @@ data Type
   | ClosureRep Type
   | PrimitiveRep PrimitiveRep
 
+type family DeferredConstraint :: Relude.Type
 data MetaVar
 data Skolem
 type Kind = Type

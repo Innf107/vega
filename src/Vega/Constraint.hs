@@ -1,6 +1,8 @@
 {-# LANGUAGE RecursiveDo #-}
 
 module Vega.Constraint (
+    ManageConstraints,
+    runManageConstraints,
     ConstraintSet,
     newConstraintSet,
     addToSet,
@@ -14,10 +16,19 @@ module Vega.Constraint (
 
 import Control.Monad.Fix (MonadFix)
 import Data.Traversable (for)
+import Effectful (DispatchOf, Eff, Effect, IOE, (:>), pattern Static)
+import Effectful.Dispatch.Static (StaticRep, evalStaticRep, unsafeEff_, pattern WithSideEffects)
 import Relude
 import Vega.ListBuilder (ListBuilder)
 import Vega.ListBuilder qualified as ListBuilder
 import Vega.Panic (panic)
+
+data ManageConstraints :: Effect
+type instance DispatchOf ManageConstraints = Static WithSideEffects
+data instance StaticRep ManageConstraints = ManageConstraintsRep
+
+runManageConstraints :: (IOE :> es) => Eff (ManageConstraints : es) a -> Eff es a
+runManageConstraints eff = evalStaticRep ManageConstraintsRep eff
 
 newtype ConstraintSet constraint = MkConstraintSet
     { start :: IORef (Maybe (ConstraintNode constraint))
@@ -33,16 +44,17 @@ data ConstraintNode constraint = MkConstraintNode
 instance Eq (ConstraintNode constraint) where
     -- We can rely on every node having unique previous/next IORefs
     -- to provide the identity for our mutable objects
+    (==) :: ConstraintNode constraint -> ConstraintNode constraint -> Bool
     node1 == node2 = node1.previous == node2.previous
 
-newConstraintSet :: (MonadIO io) => io (ConstraintSet constraint)
-newConstraintSet = do
+newConstraintSet :: (ManageConstraints :> es) => Eff es (ConstraintSet constraint)
+newConstraintSet = unsafeEff_ do
     start <- newIORef Nothing
     pure (MkConstraintSet{start})
 
 -- | O(1)
-addToSetWithReference :: (MonadIO io, MonadFix io) => ConstraintSet constraint -> constraint -> io (ConstraintNode constraint)
-addToSetWithReference set constraint = do
+addToSetWithReference :: (ManageConstraints :> es) => ConstraintSet constraint -> constraint -> Eff es (ConstraintNode constraint)
+addToSetWithReference set constraint = unsafeEff_ do
     readIORef set.start >>= \case
         Nothing -> do
             rec previous <- newIORef node
@@ -68,16 +80,18 @@ addToSetWithReference set constraint = do
                         , next
                         }
             writeIORef start.next node
+            when (start == nextNode) do
+                writeIORef start.previous node
             pure node
 
 -- | O(1)
-addToSet :: (MonadIO io, MonadFix io) => ConstraintSet constraint -> constraint -> io ()
+addToSet :: (ManageConstraints :> es) => ConstraintSet constraint -> constraint -> Eff es ()
 addToSet constraintSet constraint = do
     _ <- addToSetWithReference constraintSet constraint
     pure ()
 
-removeNode :: (MonadIO io) => ConstraintSet constraint -> ConstraintNode constraint -> io ()
-removeNode constraintSet node = do
+removeNode :: (ManageConstraints :> es) => ConstraintSet constraint -> ConstraintNode constraint -> Eff es ()
+removeNode constraintSet node = unsafeEff_ do
     previous <- readIORef node.previous
     next <- readIORef node.next
     if node == next
@@ -94,8 +108,8 @@ removeNode constraintSet node = do
             writeIORef next.previous previous
 
 -- | O(n)
-currentConstraints :: (MonadIO io) => ConstraintSet constraint -> io [constraint]
-currentConstraints set =
+currentConstraints :: (ManageConstraints :> es) => ConstraintSet constraint -> Eff es [constraint]
+currentConstraints set = unsafeEff_ do
     readIORef set.start >>= \case
         Nothing -> pure []
         Just start -> do
@@ -114,16 +128,16 @@ data ConstraintQueue constraint = MkConstraintQueue
     }
 
 -- | O(1)
-newConstraintQueue :: (MonadIO io) => ConstraintSet constraint -> io (ConstraintQueue constraint)
-newConstraintQueue set = do
+newConstraintQueue :: (ManageConstraints :> es) => ConstraintSet constraint -> Eff es (ConstraintQueue constraint)
+newConstraintQueue set = unsafeEff_ do
     blockedConstraints <- newIORef mempty
     pure (MkConstraintQueue{set, blockedConstraints})
 
 -- | O(1)
-enqueue :: (MonadIO io, MonadFix io) => ConstraintQueue constraint -> constraint -> io ()
+enqueue :: (ManageConstraints :> es) => ConstraintQueue constraint -> constraint -> Eff es ()
 enqueue queue constraint = do
     node <- addToSetWithReference queue.set constraint
-    modifyIORef' queue.blockedConstraints (<> ListBuilder.singleton node)
+    unsafeEff_ $ modifyIORef' queue.blockedConstraints (<> ListBuilder.singleton node)
 
 {- | Clear this queue and return all its constraints.
 
@@ -131,10 +145,10 @@ The queue remains operational afterwards so new constraints can be added again.
 
 O(1) amortized
 -}
-dequeueAll :: (MonadIO io) => ConstraintQueue constraint -> io [constraint]
+dequeueAll :: (ManageConstraints :> es) => ConstraintQueue constraint -> Eff es [constraint]
 dequeueAll queue = do
-    constraintNodes <- readIORef queue.blockedConstraints
-    writeIORef queue.blockedConstraints mempty
+    constraintNodes <- unsafeEff_ $ readIORef queue.blockedConstraints
+    unsafeEff_ $ writeIORef queue.blockedConstraints mempty
     for (ListBuilder.toList constraintNodes) \node -> do
         removeNode queue.set node
         pure node.constraint
@@ -147,8 +161,8 @@ elements into the second one (but significantly more efficient)
 
 O(1)
 -}
-mergeInto :: (HasCallStack, MonadIO io) => ConstraintQueue constraint -> ConstraintQueue constraint -> io ()
-mergeInto queue1 queue2 = do
+mergeInto :: (HasCallStack, ManageConstraints :> es) => ConstraintQueue constraint -> ConstraintQueue constraint -> Eff es ()
+mergeInto queue1 queue2 = unsafeEff_ do
     when (queue1.set /= queue2.set) do
         panic "Trying to merge constraint queues from different constraint sets"
 
