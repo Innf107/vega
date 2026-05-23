@@ -1849,7 +1849,9 @@ monomorphized loc env type_ = do
         loc
         env
         type_
-        (\meta -> Constraint.enqueue meta.blockedConstraints (AssertMonomorphized loc env meta))
+        -- We don't need to block monomorphization constraints on intermediate meta variables since
+        -- they only really matter at the end of type checking anyway
+        (\meta -> Constraint.addToSet ?constraintSet (AssertMonomorphized loc env meta))
 
 emitHasFieldConstraint :: (TypeCheck es) => Loc -> Env -> MetaVar -> Text -> Type -> Eff es ()
 emitHasFieldConstraint loc env recordType field fieldType = do
