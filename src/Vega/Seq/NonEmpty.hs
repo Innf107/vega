@@ -12,12 +12,14 @@ module Vega.Seq.NonEmpty (
     last,
     mapWithIndex,
     foldl1',
+    maximum,
 ) where
 
 import Relude hiding (NonEmpty, first, last, unzip)
 import Relude qualified
 
 import Data.Sequence qualified as Seq
+import Prelude qualified
 
 newtype NonEmpty a = MkNonEmpty (Seq a)
     deriving newtype
@@ -82,3 +84,6 @@ mapWithIndex f = coerce (Seq.mapWithIndex f)
 
 foldl1' :: (a -> a -> a) -> NonEmpty a -> a
 foldl1' f (x :<|| xs) = foldl' f x xs
+
+maximum :: (Ord a) => NonEmpty a -> a
+maximum nonEmpty = Prelude.maximum (toSeq nonEmpty)

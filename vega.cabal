@@ -34,6 +34,7 @@ library
       Vega.Compilation.JavaScript.Syntax
       Vega.Compilation.LLVM.AttributeFunctionType
       Vega.Compilation.LLVM.Layout
+      Vega.Compilation.LLVM.Layout2
       Vega.Compilation.LLVM.MIRToLLVM
       Vega.Compilation.LLVM.Runtime
       Vega.Compilation.LLVM.Runtime.Heap
@@ -72,6 +73,7 @@ library
       Vega.Runtime
       Vega.SCC
       Vega.Seq.NonEmpty
+      Vega.Size
       Vega.Syntax
       Vega.TypeCheck
       Vega.TypeCheck.IntSum

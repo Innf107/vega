@@ -153,6 +153,7 @@ forwardDeclareDeclaration = \case
         (functionTypeWithAttributes, _sret) <- functionLLVMType parameterLayouts returnLayout
         function <- addFunctionWithAttributes ?module_ (renderLLVMName name) functionTypeWithAttributes
         LLVM.setFunctionCallConv function LLVM.tailCallConv
+        LLVM.setGC function "statepoint-example"
 
         -- We also generate a wrapper function for closures. See Note: [Closure Representation]
         let parameters = parametersWithAttributes functionTypeWithAttributes

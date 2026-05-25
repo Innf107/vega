@@ -358,6 +358,9 @@ compileBackend = do
 
             {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
 
+            -- TODO: move this behind a flag
+            LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.s|] LLVM.Target.AssemblyFile
+
             -- TODO: be smarter about where to put the output
             {-# SCC "LLVM.Target.targetMachineEmitToFile" #-} LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile
 

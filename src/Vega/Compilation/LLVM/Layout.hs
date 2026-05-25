@@ -71,7 +71,7 @@ data LayoutKind
 
 instance Show LayoutKind where
     show AggregatePointer = "AggregatePointer"
-    show (LLVMScalar _) = "LLVMScalar _"
+    show (LLVMScalar type_) = "LLVMScalar " <> Relude.show type_
     show ZeroSized = "ZeroSized"
 
 data LayoutDetails
