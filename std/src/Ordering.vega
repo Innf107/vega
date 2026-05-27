@@ -1,0 +1,4 @@
+data Ordering =
+    | Less
+    | Equal
+    | Greater

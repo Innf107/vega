@@ -2,6 +2,8 @@
 import std:Array (copyArray)
 import std:List (List, Nil, Cons)
 import std:Maybe (Maybe, Nothing, Just)
+import std:Ordering (Ordering, Less, Equal, Greater)
+import std:Int
 
 import internal:Internal 
     ( replicateMutableArray
@@ -39,6 +41,12 @@ replicateChar(char, length) = {
 
 length : String -> Int
 length(String({ content=_, offset=_, length })) = length
+
+unsafeIndex : (String, Int) -> UInt8
+unsafeIndex(String({content, offset, length}), index) = unsafeReadArray(content, offset + index)
+
+index : (String, Int) -> Maybe(UInt8)
+index(string, index) = if index < length(string) then Nothing else Just(unsafeIndex(string, index))
 
 append : (String, String) -> String
 append(string1, string2) = {
@@ -174,3 +182,23 @@ drop(string, droppedLength) = {
     }
 }
 
+-- O(1)
+uncons : String -> Maybe((UInt8, String))
+uncons(string) = {
+    if length(string) == 0 then 
+        Nothing
+    else
+        Just((unsafeIndex(string, 0), drop(string, 1)))
+}
+
+compare : (String, String) -> Ordering
+compare(string1, string2) = match (uncons(string1), uncons(string2)) {
+    (Nothing, Nothing) -> Equal
+    (Just(_), Nothing) -> Greater
+    (Nothing, Just(_)) -> Less
+    (Just((char1, rest1)), Just((char2, rest2))) -> match Int.compare (uint8ToInt(char1), uint8ToInt(char2)) {
+        Less -> Less
+        Greater -> Greater
+        Equal -> compare(rest1, rest2)
+    }
+}
