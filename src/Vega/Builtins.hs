@@ -246,8 +246,8 @@ primopType = \case
     UnsafeRem -> [intType, intType] --> intType
     Errno -> [] --> int32Type
     UnsafeCoerce -> forallInferred Monomorphized "r" Rep \r ->
-        forallVisible Parametric "a" r \a ->
-            forallVisible Parametric "b" r \b ->
+        forallVisible Parametric "a" (Type r) \a ->
+            forallVisible Parametric "b" (Type r) \b ->
                 [a] --> b
 
 -- This should really be determined by primopType but we can't currently do that without
