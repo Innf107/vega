@@ -85,6 +85,15 @@ for(array, f) = {
     go(0)
 }
 
+forIndexed : forall a. (Array(a), (a, Int) -> ()) -> ()
+forIndexed(array, f) = {
+    let go(i) = if i < arrayLength(array) then {
+        f(unsafeReadArray(array, i), i)
+        go(i + 1)
+    } else {}
+    go(0)
+}
+
 generate : forall a.(Int, Int -> a) -> Array(a)
 generate(length, makeElement) = if length <= 0 then {
     emptyArray()

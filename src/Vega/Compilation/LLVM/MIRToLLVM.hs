@@ -75,9 +75,8 @@ type Compile es =
     )
 
 {-# SCC compile #-}
-compile :: (?context :: LLVM.Context, IOE :> es, Trace :> es) => MIR.Program -> Eff es LLVM.Module
-compile program = do
-    module_ <- LLVM.moduleCreateWithName "idkwhattoputhereyet"
+compile :: (?context :: LLVM.Context, IOE :> es, Trace :> es) => MIR.Program -> LLVM.Module -> Eff es ()
+compile program module_ = do
     runtimeDefinitions <- declareRuntimeDefinitions module_
     let ?module_ = module_
     let ?runtimeDefinitions = runtimeDefinitions
@@ -92,7 +91,7 @@ compile program = do
                     , variableMappings = mempty
                     }
         evalState initialState $ compileDeclaration declaration
-    pure module_
+    
 
 addMainFunction :: (?context :: LLVM.Context, IOE :> es) => Vega.GlobalName -> LLVM.Module -> Eff es ()
 addMainFunction entryPoint module_ = do
@@ -925,7 +924,7 @@ createStaticByteArray bytes = do
     infoTable <- getOrCreateArrayInfoTablePointer True (Layout.intLayoutInBytes 1)
     unique <- liftIO newUnique
 
-    let arrayHeapType = LLVM.structType [LLVM.pointerType, LLVM.int64Type, LLVM.arrayType LLVM.int8Type (ByteString.length bytes)] False
+    let arrayHeapType = LLVM.structType [LLVM.pointerType, LLVM.int64Type, LLVM.arrayType LLVM.int8Type (fromIntegral (ByteString.length bytes))] False
     global <- LLVM.addGlobal ?module_ arrayHeapType ("string_" <> show (hashUnique unique))
     structValue <-
         LLVM.constStructInContext
@@ -994,7 +993,7 @@ buildArrayStore builder layout array index value = case Layout.kind layout of
         pure ()
     Layout.AggregatePointer -> do
         contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
-        pointer <- LLVMBuilder.buildGetElementPtr builder (LLVM.arrayType LLVM.int8Type (Layout.sizeInBytes layout)) contents [index] ""
+        pointer <- LLVMBuilder.buildGetElementPtr builder (LLVM.arrayType LLVM.int8Type (fromIntegral (Layout.sizeInBytes layout))) contents [index] ""
         buildComplexStore builder layout value pointer
         pure ()
     Layout.ZeroSized -> pure ()
@@ -1007,7 +1006,7 @@ buildArrayLoad builder layout array index varName = case Layout.kind layout of
         LLVMBuilder.buildLoad builder scalar pointer varName
     Layout.AggregatePointer -> do
         contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
-        pointer <- LLVMBuilder.buildGetElementPtr builder (LLVM.arrayType LLVM.int8Type (Layout.sizeInBytes layout)) contents [index] ""
+        pointer <- LLVMBuilder.buildGetElementPtr builder (LLVM.arrayType LLVM.int8Type (fromIntegral (Layout.sizeInBytes layout))) contents [index] ""
         buildComplexLoad builder layout pointer varName
     Layout.ZeroSized -> pure zeroSizedDummyValue
 

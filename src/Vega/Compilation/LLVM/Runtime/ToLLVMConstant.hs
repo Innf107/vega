@@ -21,12 +21,11 @@ instance ToLLVMConstant Word64 where
     alignment = Alignment.fromValue 8
     toLLVMConstant x = pure $ (LLVM.int64Type, LLVM.constInt LLVM.int64Type x False)
 
--- TODO: LLVM.constNull should be pure in llvm-ng
-paddingConstant :: (MonadIO io, ?context :: LLVM.Context) => Int -> io LLVM.Value
-paddingConstant size = LLVM.constNull (LLVM.arrayType LLVM.int8Type size)
+paddingConstant :: (?context :: LLVM.Context) => Int -> LLVM.Value
+paddingConstant size = LLVM.constNull (LLVM.arrayType LLVM.int8Type (fromIntegral size))
 
 paddingType :: (?context :: LLVM.Context) => Int -> LLVM.Type
-paddingType size = LLVM.arrayType LLVM.int8Type size
+paddingType size = LLVM.arrayType LLVM.int8Type (fromIntegral size)
 
 addPadding :: (?context :: LLVM.Context, MonadIO io) => Seq (Int, Alignment, LLVM.Value, LLVM.Type) -> io (Seq LLVM.Value, Seq LLVM.Type)
 addPadding fields = go 0 [] [] fields
@@ -42,7 +41,7 @@ addPadding fields = go 0 [] [] fields
             case padding of
                 0 -> go nextPos (values :|> value) (types :|> type_) rest
                 _ -> do
-                    paddingValue <- paddingConstant padding
+                    let paddingValue = paddingConstant padding
                     go
                         nextPos
                         (values :|> paddingValue :|> value)
@@ -113,7 +112,7 @@ instance (ToLLVMConstant a) => ToLLVMCUnion (K1 _r a) where
         case paddingSize of
             0 -> pure (type_, value)
             _ -> do
-                padding <- paddingConstant paddingSize
+                let padding = paddingConstant paddingSize
                 let paddingArray = paddingType paddingSize
                 constant <- LLVM.constStructInContext [value, padding] False
                 type_ <- pure $ LLVM.structType [type_, paddingArray] False

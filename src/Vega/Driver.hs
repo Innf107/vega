@@ -327,54 +327,53 @@ compileBackend = do
                         let ?config = Pretty.defaultPrettyANSIIConfig
                         Pretty.eprintANSII (Pretty.errorText "MIR VERIFICATION ERROR: " <> error)
 
-            context <- LLVM.contextCreate
-            let ?context = context
-            llvmModule <- MIRToLLVM.compile monomorphizedMIRProgram
-            MIRToLLVM.addMainFunction entryPoint llvmModule
-            debugEmit llvmModule
+            LLVM.withContext $ LLVM.withModule "idkwhattoputhereyet" \llvmModule -> do
+                MIRToLLVM.compile monomorphizedMIRProgram llvmModule
+                MIRToLLVM.addMainFunction entryPoint llvmModule
+                debugEmit llvmModule
 
-            LLVM.initializeNativeTarget >>= \case
-                False -> pure ()
-                True -> panic "Unable to initialize native target in LLVM"
-            LLVM.Target.initializeNativeAsmPrinter >>= \case
-                False -> pure ()
-                True -> panic "Unable to initialize native asm printer in LLVM"
+                LLVM.initializeNativeTarget >>= \case
+                    False -> pure ()
+                    True -> panic "Unable to initialize native target in LLVM"
+                LLVM.Target.initializeNativeAsmPrinter >>= \case
+                    False -> pure ()
+                    True -> panic "Unable to initialize native asm printer in LLVM"
 
-            -- TODO: for now we're just building for the host machine.
-            -- we will eventually want to make this configurable
-            triple <- LLVM.Target.getDefaultTargetTriple
-            target <- LLVM.Target.getTargetFromTriple triple
+                -- TODO: for now we're just building for the host machine.
+                -- we will eventually want to make this configurable
+                triple <- LLVM.Target.getDefaultTargetTriple
+                target <- LLVM.Target.getTargetFromTriple triple
 
-            targetMachineOptions <- LLVM.Target.createTargetMachineOptions
+                targetMachineOptions <- LLVM.Target.createTargetMachineOptions
 
-            targetMachine <-
-                LLVM.Target.createTargetMachineWithOptions target triple targetMachineOptions >>= \case
-                    Nothing -> panic "Unable to create LLVM target machine"
-                    Just targetMachine -> pure targetMachine
+                targetMachine <-
+                    LLVM.Target.createTargetMachineWithOptions target triple targetMachineOptions >>= \case
+                        Nothing -> panic "Unable to create LLVM target machine"
+                        Just targetMachine -> pure targetMachine
 
-            dataLayout <- LLVM.Target.createTargetDataLayout targetMachine
-            LLVM.setTarget llvmModule triple
-            LLVM.Target.setModuleDataLayout llvmModule dataLayout
+                dataLayout <- LLVM.Target.createTargetDataLayout targetMachine
+                LLVM.setTarget llvmModule triple
+                LLVM.Target.setModuleDataLayout llvmModule dataLayout
 
-            {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
+                {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
 
-            -- TODO: move this behind a flag
-            -- LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.s|] LLVM.Target.AssemblyFile
+                -- TODO: move this behind a flag
+                -- LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.s|] LLVM.Target.AssemblyFile
 
-            -- TODO: be smarter about where to put the output
-            {-# SCC "LLVM.Target.targetMachineEmitToFile" #-} LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile
+                -- TODO: be smarter about where to put the output
+                {-# SCC "LLVM.Target.targetMachineEmitToFile" #-} LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile
 
-            MkDriverConfig{linker} <- ask
-            linkerCommand <- case linker of
-                "auto" -> findLinker
-                path -> pure $ toString path
+                MkDriverConfig{linker} <- ask
+                linkerCommand <- case linker of
+                    "auto" -> findLinker
+                    path -> pure $ toString path
 
-            -- TODO: put this somewhere more sensible
-            writeFileBS "libvega_runtime.a" runtimeArchive
+                -- TODO: put this somewhere more sensible
+                writeFileBS "libvega_runtime.a" runtimeArchive
 
-            {-# SCC "linker" #-} runProcess $ callProcess linkerCommand ["out.o", "libvega_runtime.a"]
-            removeFile "out.o"
-            removeFile "libvega_runtime.a"
+                {-# SCC "linker" #-} runProcess $ callProcess linkerCommand ["out.o", "libvega_runtime.a"]
+                removeFile "out.o"
+                removeFile "libvega_runtime.a"
         _ -> undefined
 
 execute :: FilePath -> Text -> Eff es ()

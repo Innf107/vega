@@ -112,7 +112,7 @@ llvmParameterType layout = case layout.kind of
 llvmType :: (?context :: LLVM.Context, HasCallStack) => Layout -> LLVM.Type
 llvmType layout = case layout.kind of
     LLVMScalar type_ -> type_
-    AggregatePointer -> LLVM.arrayType LLVM.int8Type (sizeInBytes layout)
+    AggregatePointer -> LLVM.arrayType LLVM.int8Type (fromIntegral (sizeInBytes layout))
     ZeroSized -> panic "Trying to access LLVM type of zero-sized layout"
 
 kind :: Layout -> LayoutKind
