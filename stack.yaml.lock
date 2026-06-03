@@ -12,15 +12,15 @@ packages:
   original:
     hackage: hashtables-1.4.2
 - completed:
-    commit: 8ab7d89da3fd5cc5a2fba5721cf04201e7efa6ac
+    commit: ee7892844eace4ed129c2c0aa6e5e2ae158f5a9a
     git: https://github.com/Innf107/llvm-ng
     name: llvm-ng
     pantry-tree:
-      sha256: befeedf3f389a0d211d5756aabade3915f5503926d44564ca96d3f0419d24cc1
+      sha256: 0cfef622a8bf70ca5cac37078e09be8a1e63a9a9822a452286d1143168e19bcc
       size: 1329
     version: 0.1.0.0
   original:
-    commit: 8ab7d89da3fd5cc5a2fba5721cf04201e7efa6ac
+    commit: ee7892844eace4ed129c2c0aa6e5e2ae158f5a9a
     git: https://github.com/Innf107/llvm-ng
 - completed:
     hackage: llvm-ffi-21.0.0.2@sha256:d898d53846373b86a6e34fc2c72cb79cbbe4398bd38e127c69367a933eba6e57,8424

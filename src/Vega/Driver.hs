@@ -344,7 +344,10 @@ compileBackend = do
                 triple <- LLVM.Target.getDefaultTargetTriple
                 target <- LLVM.Target.getTargetFromTriple triple
 
-                targetMachineOptions <- LLVM.Target.createTargetMachineOptions
+                let targetMachineOptions = LLVM.Target.defaultTargetMachineOptions {
+                    LLVM.Target.relocMode = Just LLVM.Target.RelocPIC
+                }
+                
 
                 targetMachine <-
                     LLVM.Target.createTargetMachineWithOptions target triple targetMachineOptions >>= \case
@@ -354,6 +357,7 @@ compileBackend = do
                 dataLayout <- LLVM.Target.createTargetDataLayout targetMachine
                 LLVM.setTarget llvmModule triple
                 LLVM.Target.setModuleDataLayout llvmModule dataLayout
+                
 
                 {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
 

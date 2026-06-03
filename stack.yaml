@@ -37,7 +37,7 @@ packages:
 extra-deps:
 - hashtables-1.4.2
 - git: https://github.com/Innf107/llvm-ng
-  commit: 8ab7d89da3fd5cc5a2fba5721cf04201e7efa6ac
+  commit: ee7892844eace4ed129c2c0aa6e5e2ae158f5a9a
 - llvm-ffi-21.0.0.2@sha256:d898d53846373b86a6e34fc2c72cb79cbbe4398bd38e127c69367a933eba6e57,8424
 # - acme-missiles-0.3
 # - git: https://github.com/commercialhaskell/stack.git
