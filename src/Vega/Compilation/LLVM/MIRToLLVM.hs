@@ -672,11 +672,11 @@ compilePrimopCall builder primop arguments representationArguments returnReprese
         OffsetPointerBytes -> compileOffsetPointerBytes builder arguments returnRepresentation varName
         CodePoints -> undefined
         Int8ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
-        UInt8ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
+        UInt8ToInt -> compileIntConversion Unsigned 64 builder arguments returnRepresentation varName
         Int16ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
-        UInt16ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
+        UInt16ToInt -> compileIntConversion Unsigned 64 builder arguments returnRepresentation varName
         Int32ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
-        UInt32ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
+        UInt32ToInt -> compileIntConversion Unsigned 64 builder arguments returnRepresentation varName
         UIntToInt -> identity
         IntToInt8 -> compileIntConversion Signed 8 builder arguments returnRepresentation varName
         IntToUInt8 -> compileIntConversion Unsigned 8 builder arguments returnRepresentation varName
