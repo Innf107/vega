@@ -4,6 +4,7 @@ import std:List (List, Nil, Cons)
 import std:Maybe (Maybe, Nothing, Just)
 import std:Ordering (Ordering, Less, Equal, Greater)
 import std:Int
+import std:Panic (panic)
 
 import internal:Internal 
     ( replicateMutableArray
@@ -45,8 +46,13 @@ length(String({ content=_, offset=_, length })) = length
 unsafeIndex : (String, Int) -> UInt8
 unsafeIndex(String({content, offset, length}), index) = unsafeReadArray(content, offset + index)
 
-index : (String, Int) -> Maybe(UInt8)
-index(string, index) = if index < length(string) then Nothing else Just(unsafeIndex(string, index))
+index : (String, Int) -> UInt8
+index(string, index) = match indexMaybe(string, index) {
+    Nothing -> panic(append(append(append("String.index: Index ", Int.toString(index)), " out of range for string of length "), Int.toString(length(string))))
+}
+
+indexMaybe : (String, Int) -> Maybe(UInt8)
+indexMaybe(string, index) = if index < length(string) then Nothing else Just(unsafeIndex(string, index))
 
 append : (String, String) -> String
 append(string1, string2) = {
