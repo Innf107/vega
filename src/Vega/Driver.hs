@@ -330,7 +330,8 @@ compileBackend = do
             LLVM.withContext $ LLVM.withModule "idkwhattoputhereyet" \llvmModule -> do
                 MIRToLLVM.compile monomorphizedMIRProgram llvmModule
                 MIRToLLVM.addMainFunction entryPoint llvmModule
-                debugEmit llvmModule
+                -- TODO: emit unoptimized LLVM here
+                -- debugEmit llvmModule
 
                 LLVM.initializeNativeTarget >>= \case
                     False -> pure ()
@@ -344,10 +345,11 @@ compileBackend = do
                 triple <- LLVM.Target.getDefaultTargetTriple
                 target <- LLVM.Target.getTargetFromTriple triple
 
-                let targetMachineOptions = LLVM.Target.defaultTargetMachineOptions {
-                    LLVM.Target.relocMode = Just LLVM.Target.RelocPIC
-                }
-                
+                let targetMachineOptions =
+                        LLVM.Target.defaultTargetMachineOptions
+                            { LLVM.Target.relocMode = Just LLVM.Target.RelocPIC
+                            , LLVM.Target.codeGenOptLevel = Just LLVM.Target.CodeGenLevelNone
+                            }
 
                 targetMachine <-
                     LLVM.Target.createTargetMachineWithOptions target triple targetMachineOptions >>= \case
@@ -360,6 +362,10 @@ compileBackend = do
                 
 
                 {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
+
+                -- TODO: add proper optimization flags that control this
+                LLVM.runPasses llvmModule "default<O1>" (Just targetMachine) LLVM.defaultPassBuilderOptions
+                debugEmit llvmModule
 
                 -- TODO: move this behind a flag
                 -- LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.s|] LLVM.Target.AssemblyFile
