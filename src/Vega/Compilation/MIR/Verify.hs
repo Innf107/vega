@@ -61,7 +61,7 @@ verifyDeclaration = \case
             -- We need to traverse the blocks in topologically sorted order so we know all information about all
             -- variables defined earlier.
             -- Really we *should* also check that every variable dominates every use (i.e. is defined on every path to its use)
-            dfs init \descriptor -> case HashMap.lookup descriptor blocks of
+            dfs [init] \descriptor -> case HashMap.lookup descriptor blocks of
                 Nothing -> do
                     verificationError $ "Invalid block descriptor: " <> pretty descriptor
                     pure []

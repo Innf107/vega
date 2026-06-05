@@ -4,23 +4,37 @@ import Data.HashSet (HashSet)
 import Data.HashSet qualified as HashSet
 import Data.Sequence (Seq)
 import Effectful (Eff, IOE, raise, (:>))
-import Effectful.State.Static.Local (execState, get, modify, put)
-import Relude hiding (execState, get, modify, put)
+import Relude
+import Streaming (Of, Stream)
 
-dfs ::
+{-# SPECIALIZE dfs ::
     forall vertex es.
     (Hashable vertex) =>
-    vertex ->
+    Seq vertex ->
     (vertex -> Eff es (Seq vertex)) ->
     Eff es (HashSet vertex)
-dfs initial onVertex = execState HashSet.empty do
+    #-}
+{-# SPECIALIZE dfs ::
+    forall vertex es a.
+    (Hashable vertex) =>
+    Seq vertex ->
+    (vertex -> Stream (Of a) (Eff es) (Seq vertex)) ->
+    Stream (Of a) (Eff es) (HashSet vertex)
+    #-}
+dfs ::
+    forall m vertex.
+    (Hashable vertex, Monad m) =>
+    Seq vertex ->
+    (vertex -> m (Seq vertex)) ->
+    m (HashSet vertex)
+dfs roots onVertex = flip execStateT (HashSet.empty @vertex) do
     let go next = do
             modify (HashSet.insert next)
-            neighbors <- raise $ onVertex next
+            neighbors <- lift $ onVertex next
             for_ neighbors \neighbor -> do
                 visited <- get
                 case neighbor `HashSet.member` visited of
                     True -> pure ()
                     False -> do
                         go neighbor
-    go initial
+    for_ roots go

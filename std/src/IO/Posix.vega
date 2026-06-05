@@ -1,5 +1,5 @@
 
-import internal:Internal (offsetPointerBytes, unsafeUninitializedMutableArray, unsafeMutableArrayContents, offsetPointerBytes, int32ToInt)
+import internal:Internal (errno, int32ToInt, offsetPointerBytes, unsafeUninitializedMutableArray, unsafeMutableArrayContents, offsetPointerBytes, int32ToInt)
 import std:Int
 import std:String (String)
 import std:String
@@ -15,6 +15,10 @@ writeBytes(FileDescriptor(fd), array, offset, length) = {
         let go(shadow pointer, shadow length) = {
             if (length <= 0) then {} else {
                 let written = Raw.write(fd, pointer, length)
+
+                if written < 0 then {
+                    panic (String.append("std:IO/Posix:writeBytes: write failed with error code ", Int.toString(int32ToInt(errno()))))
+                } else {}
 
                 let shadow pointer = offsetPointerBytes(pointer, written)
                 let shadow length = length - written

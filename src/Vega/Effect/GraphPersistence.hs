@@ -3,7 +3,7 @@
 
 module Vega.Effect.GraphPersistence where
 
-import Relude hiding (State, execState, Type, evalState, get, modify, put)
+import Relude hiding (State, Type, evalState, execState, get, modify, put)
 
 import Vega.Syntax hiding (Effect)
 
@@ -12,18 +12,20 @@ import Effectful.State.Static.Local (State, evalState, execState, get, modify, p
 import Effectful.TH (makeEffect)
 
 import Data.HashSet qualified as HashSet
+import Data.Traversable (for)
 import Streaming (Stream, hoist)
 import Streaming.Prelude (Of, yield)
-import Vega.Package (Backend)
+import System.OsPath (OsPath)
 import Vega.Compilation.Core.Syntax qualified as Core
+import Vega.DFS qualified as DFS
+import Vega.Debug (showHeadConstructor)
 import Vega.Error (CompilationError, RenameErrorSet, TypeErrorSet)
+import Vega.Package (Backend)
+import Vega.Panic (panic)
 import Vega.Pretty (Pretty, keyword, pretty, (<+>))
 import Vega.SCC (SCCId)
 import Vega.Syntax qualified as Vega
-import Vega.Panic (panic)
-import Vega.Debug (showHeadConstructor)
-import Data.Traversable (for)
-import System.OsPath (OsPath)
+import Vega.Util (viaList)
 
 data GraphData error a
     = Ok a
@@ -107,44 +109,37 @@ data GraphPersistence :: Effect where
 makeEffect ''GraphPersistence
 
 reachableFrom :: (GraphPersistence :> es) => Seq DeclarationName -> Stream (Of DeclarationName) (Eff es) ()
-reachableFrom roots = hoist (evalState (mempty :: HashSet DeclarationName)) $ for_ roots go
-  where
-    go :: (GraphPersistence :> es, State (HashSet DeclarationName) :> es) => DeclarationName -> Stream (Of DeclarationName) (Eff es) ()
-    go name = do
-        yield name
-        dependencies <- lift $ getDependencies name
-        for_ dependencies \dependency -> do
-            seenSoFar <- lift get
-            when (not (HashSet.member dependency seenSoFar)) do
-                lift $ modify (HashSet.insert dependency)
-                go dependency
+reachableFrom roots = void $ DFS.dfs roots \name -> do
+    yield name
+    lift $ fmap viaList $ getDependencies name
 
 -- TODO: we should allow some types to act as cycle breakers that stop auto-boxing (in particular Box)
-getAutoBoxing :: GraphPersistence :> es => GlobalName -> Eff es (Seq Bool)
-getAutoBoxing dataConstructorName = getDefiningDeclaration dataConstructorName >>= \case
-    Nothing -> panic $ "Trying to access auto-boxing of data constructor with missing declaration: " <> prettyGlobal DataConstructorKind dataConstructorName
-    Just declaration -> getRenamed declaration >>= \case
-        Missing{} -> undefined
-        Failed{} -> undefined
-        Ok (MkDeclaration{syntax = DefineVariantType _ _ constructors}) -> do
-            -- TODO: cache the results for all constructors
-            result <- execState Nothing $ for_ constructors \(_, name, parameters) -> do
-                autoBoxingFlags <- for parameters \type_ -> do
-                    ownSCC <- getSCC declaration
-                    flip anyM (typeConstructorsS type_) \(_loc, name) -> case name of
-                        Global globalName -> getDefiningDeclaration globalName >>= \case
-                            -- If the type is primitive, it is obviously not in the same SCC as us
-                            Nothing -> pure False
-                            Just typeDeclaration -> do
-                                otherSCC <- getSCC typeDeclaration
-                                pure (ownSCC == otherSCC)
-                        Local{} -> undefined
-                -- TODO: cache autoBoxingFlags
-                when (name == dataConstructorName) do
-                    put (Just autoBoxingFlags)
-            case result of
-                Just autoBoxingFlags -> pure autoBoxingFlags
-                Nothing -> panic $ "Definition of data constructor " <> prettyGlobal DataConstructorKind dataConstructorName <> " doesn't define it"
-        Ok declaration -> panic $ "Data constructor " <> prettyGlobal DataConstructorKind dataConstructorName <> " refers to non-DefineVariantType declaration: " <> showHeadConstructor declaration.syntax
-
-
+getAutoBoxing :: (GraphPersistence :> es) => GlobalName -> Eff es (Seq Bool)
+getAutoBoxing dataConstructorName =
+    getDefiningDeclaration dataConstructorName >>= \case
+        Nothing -> panic $ "Trying to access auto-boxing of data constructor with missing declaration: " <> prettyGlobal DataConstructorKind dataConstructorName
+        Just declaration ->
+            getRenamed declaration >>= \case
+                Missing{} -> undefined
+                Failed{} -> undefined
+                Ok (MkDeclaration{syntax = DefineVariantType _ _ constructors}) -> do
+                    -- TODO: cache the results for all constructors
+                    result <- execState Nothing $ for_ constructors \(_, name, parameters) -> do
+                        autoBoxingFlags <- for parameters \type_ -> do
+                            ownSCC <- getSCC declaration
+                            flip anyM (typeConstructorsS type_) \(_loc, name) -> case name of
+                                Global globalName ->
+                                    getDefiningDeclaration globalName >>= \case
+                                        -- If the type is primitive, it is obviously not in the same SCC as us
+                                        Nothing -> pure False
+                                        Just typeDeclaration -> do
+                                            otherSCC <- getSCC typeDeclaration
+                                            pure (ownSCC == otherSCC)
+                                Local{} -> undefined
+                        -- TODO: cache autoBoxingFlags
+                        when (name == dataConstructorName) do
+                            put (Just autoBoxingFlags)
+                    case result of
+                        Just autoBoxingFlags -> pure autoBoxingFlags
+                        Nothing -> panic $ "Definition of data constructor " <> prettyGlobal DataConstructorKind dataConstructorName <> " doesn't define it"
+                Ok declaration -> panic $ "Data constructor " <> prettyGlobal DataConstructorKind dataConstructorName <> " refers to non-DefineVariantType declaration: " <> showHeadConstructor declaration.syntax
