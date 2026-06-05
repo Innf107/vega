@@ -83,7 +83,7 @@ open(path, openMode) = {
     })
     if int32ToInt(fd) < 0 then {
         -- TODO: escape the string
-        panic(String.append(String.append(String.append("Unable to open file '", path), ". Error code: "), Int.toString(0 - int32ToInt(fd))))
+        panic(String.append(String.append(String.append("Unable to open file '", path), "'. Error code: "), Int.toString(0 - int32ToInt(fd))))
     } else {
         FileDescriptor(fd)
     }
