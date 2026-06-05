@@ -1,5 +1,6 @@
 
 import std:Array (copyArray)
+import std:Array
 import std:List (List, Nil, Cons)
 import std:Maybe (Maybe, Nothing, Just)
 import std:Ordering (Ordering, Less, Equal, Greater)
@@ -23,12 +24,19 @@ import internal:Internal
 -- Vega.Builtins in the compiler.
 data String = String({ content : Array(UInt8), length : Int, offset : Int })
 
+-- O(n)
+fromByteArray : Array(UInt8) -> String
 -- This function is wired into the compiler. If you change anything about its signature or name,
 -- update stringFromByteArrayFunction in Vega.Builtins in the compiler.
-fromByteArray : Array(UInt8) -> String
 fromByteArray(array) = {
     String({ content = array, offset = 0, length = arrayLength(array) })
 }
+
+-- | Access an array of the underlying bytes of this string
+--
+-- O(n)
+toByteArray : String -> Array(UInt8)
+toByteArray(String(string)) = Array.fromSliceUnsafe({ array = string.content, length = string.length, offset = string.offset })
 
 unsafeFromByteArraySlice : ({ content : Array(UInt8), offset : Int, length : Int }) -> String
 unsafeFromByteArraySlice(record) = String(record)
@@ -197,6 +205,7 @@ uncons(string) = {
         Just((unsafeIndex(string, 0), drop(string, 1)))
 }
 
+-- O(n)
 compare : (String, String) -> Ordering
 compare(string1, string2) = match (uncons(string1), uncons(string2)) {
     (Nothing, Nothing) -> Equal

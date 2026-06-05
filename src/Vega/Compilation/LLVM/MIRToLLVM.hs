@@ -91,7 +91,6 @@ compile program module_ = do
                     , variableMappings = mempty
                     }
         evalState initialState $ compileDeclaration declaration
-    
 
 addMainFunction :: (?context :: LLVM.Context, IOE :> es) => Vega.GlobalName -> LLVM.Module -> Eff es ()
 addMainFunction entryPoint module_ = do
@@ -187,8 +186,14 @@ forwardDeclareDeclaration = \case
         let externalFunctionType = attributeFunctionType (viaList (fmap (\parameter -> (parameter, [])) externalParameterTypes)) (externalReturnType, [])
 
         -- We declare the actual external function first
-        externalFunction <- addFunctionWithAttributes ?module_ externalName externalFunctionType
-        LLVM.setFunctionCallConv externalFunction LLVM.ccallConv
+        externalFunction <-
+            LLVM.getNamedFunction ?module_ externalName >>= \case
+                -- TODO: we should really check that both declarations use the same type here and throw an error if not
+                Just previouslyDefinedFunction -> pure previouslyDefinedFunction
+                Nothing -> do
+                    externalFunction <- addFunctionWithAttributes ?module_ externalName externalFunctionType
+                    LLVM.setFunctionCallConv externalFunction LLVM.ccallConv
+                    pure externalFunction
 
         -- And then we define the vega wrapper that converts arguments as necessary
         parameterLayouts <- for parameterRepresentations Layout.representationLayout

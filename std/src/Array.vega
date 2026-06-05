@@ -13,7 +13,44 @@ import internal:Internal
     , mutableArrayLength
     , unsafeUninitializedMutableArray
     )
-import std:List (length, List, Cons, Nil)
+import std:List (List, Cons, Nil)
+import std:List
+import std:Int
+import std:String
+import std:Panic (panic)
+
+read : forall a. (Array(a), Int) -> a
+read(array, index) = {
+    boundsCheck(array, index, "std:Array:read")
+    unsafeReadArray(array, index)
+}
+
+writeMutable : forall a. (MutableArray(a), Int, a) -> ()
+writeMutable(array, index, value) = {
+    boundsCheckMutable(array, index, "std:Array:writeMutable")
+    unsafeWriteMutableArray(array, index, value)
+}
+
+
+boundsCheck : forall a. (Array(a), Int, String) -> ()
+boundsCheck(array, index, name) =
+    if index >= 0 && index < arrayLength(array) then 
+        ()
+    else
+        panic(String.append(String.append(String.append(String.append(name, ": index "), Int.toString(index)), " out of bounds for array of length "), Int.toString(arrayLength(array))))
+
+boundsCheckMutable : forall a. (MutableArray(a), Int, String) -> ()
+boundsCheckMutable(array, index, name) =
+    if index >= 0 && index < mutableArrayLength(array) then 
+        ()
+    else
+        panic(String.append(String.append(String.append(String.append(name, ": index "), Int.toString(index)), " out of bounds for array of length "), Int.toString(mutableArrayLength(array))))
+
+
+length : forall a. Array(a) -> Int
+-- This mostly exists for API consistency but also so user code doesn't need to interact with any of the primops directly
+length(array) = arrayLength(array)
+
 
 -- TODO: This should probably use some primop that compiles directly to a memmov
 -- TODO: bounds checks lol
@@ -60,7 +97,7 @@ fromList : forall a. List(a) -> Array(a)
 fromList(list) = match list {
     Nil -> emptyArray()
     Cons(first, rest) -> {
-        let remainingLength = length(rest)
+        let remainingLength = List.length(rest)
         let array = replicateMutableArray(remainingLength + 1, first)
         
         let go(i, toCopy) = match toCopy {
@@ -75,6 +112,18 @@ fromList(list) = match list {
     }
 }
 
+fromSliceUnsafe : forall a. { array : Array(a), offset : Int, length : Int } -> Array(a)
+fromSliceUnsafe({array, offset, length}) = {
+    let newArray = unsafeUninitializedMutableArray(length)
+    copyArray({
+        sourceArray = array,
+        sourceOffset = offset,
+        targetArray = newArray,
+        targetOffset = 0,
+        length = length
+    })
+    unsafeFreezeArray(newArray)
+}
 
 for : forall a. (Array(a), a -> ()) -> ()
 for(array, f) = {

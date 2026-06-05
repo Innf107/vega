@@ -363,9 +363,9 @@ compileBackend = do
 
                 {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
 
+                debugEmit llvmModule
                 -- TODO: add proper optimization flags that control this
                 LLVM.runPasses llvmModule "default<O1>" (Just targetMachine) LLVM.defaultPassBuilderOptions
-                debugEmit llvmModule
 
                 -- TODO: move this behind a flag
                 -- LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.s|] LLVM.Target.AssemblyFile

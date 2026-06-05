@@ -8,7 +8,7 @@ external exit : Int32 -> ()
 -- TODO: this should do something smarter but we don't have that just yet
 panic : forall a. String -> a
 panic(message) = {
-    printFD(stderr(), String.append("\e[32mPANIC: ", message))
+    printFD(stderr(), String.append("\e[31mPANIC: ", message))
     exit(1i32)
 
     -- this will never run but we need to include it since exit technically returns ()
