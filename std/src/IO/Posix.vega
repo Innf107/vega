@@ -1,17 +1,20 @@
 
-import internal:Internal (offsetPointerBytes)
-
-import std:String (String, append)
-import std:IO/Posix/Raw (writeRaw)
+import internal:Internal (offsetPointerBytes, unsafeUninitializedMutableArray, unsafeMutableArrayContents, offsetPointerBytes, int32ToInt)
+import std:Int
+import std:String (String)
+import std:String
+import std:IO/Posix/Raw 
 import std:IO/Posix/FileDescriptor (FileDescriptor, stdout)
 import std:Array (unsafeWithPointerAtOffset)
+import std:ArrayList
+import std:Panic (panic)
 
 writeBytes : (FileDescriptor, Array(UInt8), Int, Int) -> ()
 writeBytes(FileDescriptor(fd), array, offset, length) = {
     unsafeWithPointerAtOffset(array, offset, \pointer -> {
         let go(shadow pointer, shadow length) = {
             if (length <= 0) then {} else {
-                let written = writeRaw(fd, pointer, length)
+                let written = Raw.write(fd, pointer, length)
 
                 let shadow pointer = offsetPointerBytes(pointer, written)
                 let shadow length = length - written
@@ -27,7 +30,7 @@ writeString(fileDescriptor, String({content, offset, length})) = writeBytes(file
 
 printFD : (FileDescriptor, String) -> ()
 printFD(fileDescriptor, message) = {
-    let String({content, offset, length}) = append(message, "\n")
+    let String({content, offset, length}) = String.append(message, "\n")
     writeBytes(fileDescriptor, content, offset, length)
 }
 
@@ -36,3 +39,52 @@ print(message) = {
     printFD(stdout(), message)
 }
 
+-- This reads the entire contents of the file descriptor into the given string.
+-- This will not perform any form of streaming, so you should not use it if the file is large
+readAllToString : FileDescriptor -> String
+readAllToString(FileDescriptor(fd)) = {
+    let bufferSize = 8192 -- no idea if this is good
+    
+    let output = ArrayList.newWithCapacity(bufferSize)
+
+    let go() = {
+        ArrayList.reserveCapacity(output, bufferSize)
+        let amountRead = ArrayList.unsafeWriteToCapacityPointer(output, \pointer -> {
+                Raw.read(fd, pointer, bufferSize)
+            })
+        -- TODO: handle EINTR
+        if amountRead < 0 then {
+            panic(String.append("readAllToString: read failed with exit code ", Int.toString(0 - amountRead)))
+        } else if amountRead == 0 then {
+            String.unsafeFromByteArraySlice(ArrayList.unsafeFreezeSlice(output))
+        } else {
+            go()
+        }
+    }
+    go()
+}
+
+data OpenMode =
+    | ReadOnly
+    | WriteOnly
+    | ReadWrite
+    | Append
+
+open : (String, OpenMode) -> FileDescriptor
+open(path, openMode) = {
+    let openFlags = match openMode {
+        ReadOnly -> 0i32
+        WriteOnly -> 1i32
+        ReadWrite -> 2i32
+        Append -> 1024i32
+    }
+    let fd = String.withCString(path, \pathCString -> {
+        Raw.open(pathCString, openFlags)
+    })
+    if int32ToInt(fd) < 0 then {
+        -- TODO: escape the string
+        panic(String.append(String.append(String.append("Unable to open file '", path), ". Error code: "), Int.toString(0 - int32ToInt(fd))))
+    } else {
+        FileDescriptor(fd)
+    }
+}

@@ -1,0 +1,171 @@
+import internal:Internal (unsafeUninitializedMutableArray, arrayLength, mutableArrayLength, unsafeFreezeArray, 
+                        unsafeWriteMutableArray, unsafeReadMutableArray, unsafeMutableArrayContents, offsetPointerBytes)
+import std:Panic (panic)
+import std:Array
+import std:Ref (Ref)
+import std:Ref
+import std:Int
+import std:String
+
+data ArrayList(a) = ArrayList({
+    buffer : Ref(MutableArray(a)),
+    filled : Ref(Int)
+})
+
+newWithCapacity : forall a. Int -> ArrayList(a)
+newWithCapacity(capacity) = {
+    let buffer = unsafeUninitializedMutableArray(capacity)
+    ArrayList({
+        buffer = Ref.new(buffer),
+        filled = Ref.new(0)
+    })
+}
+
+new : forall a. () -> ArrayList(a)
+new() = newWithCapacity(8) -- no idea if this makes sense
+
+-- Convert an existing mutable array to an ArrayList.
+-- This assumes that the underlying array will not be used after this
+--
+-- O(1)
+fromMutableArrayUnsafe : forall a. MutableArray(a) -> ArrayList(a)
+fromMutableArrayUnsafe(buffer) = ArrayList({ buffer = Ref.new(buffer), filled = Ref.new(mutableArrayLength(buffer)) })
+
+-- Create an immutable array from the current state of this ArrayList.
+-- The ArrayList can safely be mutated afterwards
+--
+-- O(n)
+freeze : forall a. ArrayList(a) -> Array(a)
+freeze(ArrayList({ buffer, filled })) = {
+    let shadow buffer = Ref.read(buffer)
+    let shadow filled = Ref.read(filled)
+    
+    let target = unsafeUninitializedMutableArray(filled)
+    Array.copyMutableArray({
+        sourceArray = buffer,
+        sourceOffset = 0,
+        targetArray = target,
+        targetOffset = 0,
+        length = filled
+    })
+    unsafeFreezeArray(target)
+}
+-- Create an array slice from this ArrayList.
+--
+-- It is the responsibility of the caller to ensure that the ArrayList is not accessed
+-- after this and only elements inside the returned bounds are ever read.
+--
+-- O(1)
+unsafeFreezeSlice : forall a. ArrayList(a) -> { content : Array(a), offset : Int, length : Int }
+unsafeFreezeSlice(ArrayList({ buffer, filled })) = 
+    {   
+        content = unsafeFreezeArray(Ref.read(buffer)), 
+        offset = 0,
+        length = Ref.read(filled)
+    }
+
+push : forall a. (ArrayList(a), a) -> ()
+push(arrayList, element) = {
+    let ArrayList({buffer, filled}) = arrayList
+    reserveCapacity(arrayList, 1)
+    unsafeWrite(arrayList, Ref.read(filled), element)
+    Ref.write(filled, Ref.read(filled) + 1)
+}
+
+pushArray : forall a. (ArrayList(a), Array(a)) -> ()
+pushArray(arrayList, array) = {
+    reserveCapacity(arrayList, arrayLength(array))
+    let ArrayList({buffer, filled}) = arrayList
+    Array.copyArray({
+        targetArray = Ref.read(buffer),
+        targetOffset = Ref.read(filled),
+        sourceArray = array,
+        sourceOffset = 0,
+        length = arrayLength(array)
+    })
+    Ref.write(filled, Ref.read(filled) + arrayLength(array))
+}
+
+length : forall a. ArrayList(a) -> Int
+length(ArrayList({buffer, filled})) = Ref.read(filled)
+
+-- Write to an index in the array without performing any bounds checks
+unsafeWrite : forall a. (ArrayList(a), Int, a) -> ()
+unsafeWrite(ArrayList({buffer, filled}), index, value) = {
+    unsafeWriteMutableArray(Ref.read(buffer), index, value)
+}
+
+write : forall a. (ArrayList(a), Int, a) -> ()
+write(arrayList, index, value) = {
+    if index < 0 || index >= length(arrayList) then {
+        panic(String.append(String.append(String.append("ArrayList.write: index ", Int.toString(index)), " out of range for ArrayList of size "), Int.toString(length(arrayList))))
+    } else {
+        unsafeWrite(arrayList, index, value)
+    }
+}
+
+unsafeRead : forall a. (ArrayList(a), Int) -> a
+unsafeRead(ArrayList({buffer, filled}), index) = {
+    unsafeReadMutableArray(Ref.read(buffer), index)
+}
+
+read : forall a. (ArrayList(a), Int) -> a
+read(arrayList, index) = {
+    if index < 0 || index >= length(arrayList) then {
+        panic(String.append(String.append(String.append("ArrayList.write: index ", Int.toString(index)), " out of range for ArrayList of size "), Int.toString(length(arrayList))))
+    } else {
+        unsafeRead(arrayList, index)
+    }
+}
+
+resizeFactor : () -> Int
+resizeFactor() = 2
+
+newSize : (Int, Int) -> Int
+newSize(currentSize, minAdditionalCapacity) = {
+    if (currentSize + minAdditionalCapacity < resizeFactor() * currentSize) then {
+        resizeFactor() * currentSize
+    } else {
+        currentSize + minAdditionalCapacity
+    }
+}
+
+reserveCapacity : forall a. (ArrayList(a), Int) -> ()
+reserveCapacity(ArrayList({ buffer, filled }), minCapacity) = {
+    let oldArray = Ref.read(buffer)
+    let currentSize = mutableArrayLength(oldArray)
+    let currentCapacity = currentSize - Ref.read(filled)
+    if currentCapacity < minCapacity then {
+        let newArraySize = newSize(currentSize, minCapacity - currentCapacity)
+        let newArray = unsafeUninitializedMutableArray(newArraySize)
+        Array.copyMutableArray({
+            targetArray = newArray,
+            targetOffset = 0,
+            sourceArray = oldArray,
+            sourceOffset = 0,
+            length = currentSize
+        })
+        Ref.write(buffer, newArray)
+    } else {}
+}
+
+unsafeWithPointerAtOffset : forall r. (ArrayList(UInt8), Int, Pointer(UInt8) -> r) -> r
+unsafeWithPointerAtOffset(ArrayList({buffer, filled}), offset, cont) = {
+    cont(offsetPointerBytes(unsafeMutableArrayContents(Ref.read(buffer)), offset))
+}
+
+-- The argument function is passed a pointer to the first uninitialized byte of the current buffer.
+-- The value returned from this function is interpreted as the number of bytes written, which will be marked as initialized.
+-- 
+-- It is the responsibility of the caller that no locations outside the capacity are written through the pointer
+-- (using `reserveCapacity`) and that all locations covered by the returned number of bytes have actually been initialized.
+unsafeWriteToCapacityPointer : forall r. (ArrayList(UInt8), Pointer(UInt8) -> Int) -> Int
+unsafeWriteToCapacityPointer(arrayList, write) = {
+    let amountWritten = unsafeWithPointerAtOffset(arrayList, length(arrayList), \pointer -> write(pointer))
+
+    let ArrayList({buffer, filled}) = arrayList
+    Ref.write(filled, Ref.read(filled) + amountWritten)
+
+    amountWritten
+}
+

@@ -1,3 +1,7 @@
 
 
-external writeRaw : (Int32, Pointer(UInt8), Int) -> Int = "write"
+external write : (Int32, Pointer(UInt8), Int) -> Int
+
+external read : (Int32, Pointer(UInt8), Int) -> Int
+
+external open : (Pointer(UInt8), Int32) -> Int32
