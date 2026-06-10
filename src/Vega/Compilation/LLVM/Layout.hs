@@ -16,6 +16,7 @@ module Vega.Compilation.LLVM.Layout (
     atRestDecomposedScalarOffset,
     atRestUnboxedOffset,
     atRestLLVMType,
+    buildAtRestAlloca,
     llvmParameters,
     parameterCount,
     parameterBoxedIndex,
@@ -67,6 +68,8 @@ module Vega.Compilation.LLVM.Layout (
     assertBoxed,
     assertScalar,
     assertSingleValue,
+    closurePayload,
+    closureFunctionPointer,
 ) where
 
 import Control.Exception (assert)
@@ -255,7 +258,7 @@ atRestDecomposedScalarOffset layout scalarIndex = layout.boxedCount * Size.inByt
 atRestUnboxedOffset :: Layout -> Int
 atRestUnboxedOffset layout = layout.boxedCount * Size.inBytes pointerSize + Size.inBytes (decomposedStride layout)
 
--- Returns an LLVM representation of this type at rest or Nothing if it is zero-sized
+-- | Returns an LLVM representation of this type at rest or Nothing if it is zero-sized
 atRestLLVMType :: (?context :: LLVM.Context) => Layout -> Maybe LLVM.Type
 atRestLLVMType layout
     | Size.inBits (layout.size) == 0 = Nothing
@@ -268,6 +271,17 @@ atRestLLVMType layout
         let pointers = LLVM.arrayType LLVM.pointerType layout.boxedCount
         let unboxed = LLVM.arrayType LLVM.int8Type (Size.inBytes layout.unboxedSize + Size.inBytes (decomposedStride layout))
         Just (LLVM.structType [pointers, unboxed] False)
+
+{- | Create an alloca for this type when stored *at rest* (e.g. when returned via an sret pointer).
+This is only valid if the type is not zero-sized.
+-}
+buildAtRestAlloca :: (HasCallStack, ?context :: LLVM.Context, MonadIO io) => LLVMBuilder.Builder -> Layout -> Text -> io LLVM.Value
+buildAtRestAlloca builder layout varName = case atRestLLVMType layout of
+    Nothing -> panic "unable to construct alloca for zero sized layout"
+    -- TODO: it might make sense to use something custom here that allocates something of size `atRest*Stride* layout`.
+    -- LLVM might be able to compile the associated memcpys more efficiently if they have a more aligned  size
+    -- and we can afford the extra <= 7 bytes of stack space
+    Just llvmType -> LLVMBuilder.buildAlloca builder llvmType varName
 
 -- | The index of the function parameter corresponding to the i-th boxed component
 parameterBoxedIndex :: Layout -> Int -> Int
@@ -488,7 +502,7 @@ representationLayout representation = do
         Core.SumRep [Core.ProductRep [], Core.ProductRep []] -> do
             let offset = context.inFlightUnboxedOffsetSoFar
             let (context, _) = asUnboxedPrimitive context (Size.fromBits 1) (Alignment.fromValue 1)
-            pure (context, NestedSumLayout {boxedIndices = [], decomposedIndices = [], unboxedOffset = Just offset, layout = boolLayout})
+            pure (context, NestedSumLayout{boxedIndices = [], decomposedIndices = [], unboxedOffset = Just offset, layout = boolLayout})
         Core.SumRep Empty -> do
             pure (context, ProductLayout{elements = []})
         representation@(Core.SumRep (NonEmpty _)) -> do
@@ -624,7 +638,7 @@ completeLayout :: PartialLayout -> Layout
 completeLayout MkPartialLayout{size, alignment, boxedCount, decomposedScalars, unboxedAlignment, unboxedSize, details} =
     case details of
         -- Nested sums already store their own representation so we can skip the partial layout information we have in that case
-        NestedSumLayout { layout } -> layout
+        NestedSumLayout{layout} -> layout
         _ -> MkLayout{size, alignment, boxedCount, decomposedScalars, unboxedAlignment, unboxedSize, details = Simple details}
 
 totalSize :: (Foldable f) => f (Size, Alignment) -> Size
@@ -721,3 +735,13 @@ assertSingleValue = \case
     MkCompoundValue{boxed = [boxed], decomposedScalars = [], unboxedPointer = Nothing} -> boxed
     MkCompoundValue{boxed = [], decomposedScalars = [scalar], unboxedPointer = Nothing} -> scalar
     value -> panic $ "Unexpected complex compound value " <> pretty value
+
+closurePayload :: (?context :: LLVM.Context) => ElementLocation
+closurePayload = case details closureLayout of
+    Simple (ProductLayout [_functionPointer, Primitive location]) -> location
+    _ -> panic $ "unexpected closure layout"
+
+closureFunctionPointer :: (?context :: LLVM.Context) => ElementLocation
+closureFunctionPointer = case details closureLayout of
+    Simple (ProductLayout [Primitive location, _payload]) -> location
+    _ -> panic "unexpected closure layout"
