@@ -5,7 +5,7 @@
 
 module Vega.Compilation.LLVM.MIRToLLVM (compile, addMainFunction) where
 
-import Relude hiding (State, evalState, get, modify, prettyCallStack, put, trace)
+import Relude hiding (NonEmpty, State, evalState, get, modify, prettyCallStack, put, trace)
 
 import Data.ByteString qualified as ByteString
 import Data.HashMap.Strict qualified as HashMap
@@ -51,6 +51,8 @@ import Vega.OutArray qualified as OutArray
 import Vega.Panic (panic, prettyCallStack)
 import Vega.Pretty (pretty)
 import Vega.Pretty qualified as Pretty
+import Vega.Seq.NonEmpty (NonEmpty ((:<||)), pattern NonEmpty)
+import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Size qualified as Size
 import Vega.Syntax (renderPackageName)
 import Vega.Syntax qualified as Vega
@@ -356,22 +358,40 @@ compileInstruction builder = \case
     MIR.ArithmeticOperator var operator -> do
         (value, layout) <- compileArithmeticOperator builder operator (renderVariable var)
         insertVarMapping var (Layout.scalarCompoundValue value) layout
-    MIR.AccessField{var, path, target, fieldRepresentation} -> do
-        (targetValue, targetLayout) <- lookupVar target
+    MIR.AccessField{var, path, target = parent, fieldRepresentation} -> do
+        (parentValue, parentLayout) <- lookupVar parent
         fieldLayout <- Layout.representationLayout fieldRepresentation
 
-        let go currentOffset layout = \case
-                Empty -> currentOffset
-                MIR.ProductFieldPath index :<| rest -> do
-                    let (offset, innerLayout) = Layout.productOffsetAndLayout index layout
-                    go (currentOffset + offset) innerLayout rest
-                MIR.SumConstructorPath index :<| rest -> do
-                    let (offset, innerLayout) = Layout.sumOffsetAndLayout index layout
-                    go (currentOffset + offset) innerLayout rest
-        let offset = go 0 targetLayout path
+        case path of
+            Empty -> insertVarMapping var parentValue parentLayout
+            NonEmpty path -> runSTE \_ -> do
+                let detailsInParent = followLayoutPath path (Layout.details parentLayout)
+                let detailsInField = Layout.details fieldLayout
 
-        pointer <- buildGEPOffset builder targetValue offset ""
-        asVar_ var fieldLayout $ buildLoadOrKeepPointer builder fieldLayout pointer
+                builder <- Layout.newBuilder builder fieldLayout
+
+                let copyAllFields detailsInParent detailsInField = case detailsInParent of
+                        Layout.Primitive parentLocation -> case detailsInField of
+                            Layout.Primitive fieldLocation -> do
+                                undefined
+                            _ -> mismatch
+                        Layout.ProductLayout parentSubLayouts -> case detailsInField of
+                            Layout.ProductLayout fieldSubLayouts -> do
+                                zipWithM_ copyAllFields (toList parentSubLayouts) (toList fieldSubLayouts)
+                            _ -> mismatch
+                        Layout.NestedSumLayout{} -> case detailsInField of
+                            Layout.NestedSumLayout{} -> undefined
+                            _ -> mismatch
+                      where
+                        mismatch = panic $ "mismatched layout details in parent vs field: " <> showHeadConstructor detailsInParent <> " vs " <> showHeadConstructor detailsInField
+
+                case detailsInField of
+                    Layout.Simple simpleDetails -> do
+                        copyAllFields detailsInParent simpleDetails
+                    Layout.TopLevelSumLayout{} -> undefined
+
+                readValue <- Layout.buildValue builder
+                insertVarMapping var readValue fieldLayout
     MIR.Box{var, target} -> do
         -- TODO: we should probably inline the fast path for minor heap allocations here
         (targetValue, targetLayout) <- lookupVar target
@@ -1045,16 +1065,18 @@ accessLocation builder value layout location varName = case location of
         elementPointer <- buildGEPOffset builder unboxedPointer inFlightOffsetInBytes ""
         buildComplexLoad builder layout elementPointer varName
 
-accessScalarField :: (HasCallStack) => LLVMBuilder.Builder -> Layout -> CompoundValue -> MIR.Path -> Eff es LLVM.Value
-accessScalarField builder layout compoundValue path = case (Layout.details layout, path) of
-    (Layout.Simple nestedLayout, path) -> go nestedLayout path
-    (Layout.TopLevelSumLayout{}, (MIR.SumConstructorPath index :<| restPath)) -> undefined
+followLayoutPath :: NonEmpty MIR.PathSegment -> Layout.TopLevelLayoutDetails -> Layout.NestedLayoutDetails
+followLayoutPath path topLevelDetails = case (path, topLevelDetails) of
+    (MIR.SumConstructorPath index :<|| subPath, Layout.TopLevelSumLayout{constructors}) ->
+        followNested subPath (constructors `NonEmpty.index` index)
+    (MIR.SumConstructorPath index :<|| _, details) -> do
+        panic $ "Trying to access sum constructor " <> Pretty.number index <> " in non-TopLevelSumLayout layout " <> showHeadConstructor details
+    (MIR.ProductFieldPath index :<|| _, Layout.TopLevelSumLayout{}) -> do
+        panic $ "Trying to access product field " <> Pretty.number index <> " in TopLevelSumLayout"
+    (path, Layout.Simple details) -> followNested (NonEmpty.toSeq path) details
   where
-    go (Layout.Primitive (Layout.BoxedScalar index)) Empty = pure $ Layout.boxedValues compoundValue Vector.! index
-    go details Empty = panic $ "Trying to access non-primitive field as scalar: " <> showHeadConstructor details
-    go (Layout.ProductLayout details) (MIR.ProductFieldPath index :<| restPath) = undefined
-    go details (MIR.ProductFieldPath _ :<| rest) = panic $ "Trying to access product field path on non-product layout: " <> showHeadConstructor details
-    go (Layout.NestedSumLayout{}) (MIR.ProductFieldPath index :<| restPath) = undefined
+    followNested path details = case (path, details) of
+        (MIR.SumConstructorPath index :<| subPath, Layout.NestedSumLayout{}) -> undefined -- ughhhhhhhh
 
 buildProduct :: (Compile es) => LLVMBuilder.Builder -> Seq LLVM.Value -> Layout -> Text -> Eff es CompoundValue
 buildProduct builder values layout varName = do
