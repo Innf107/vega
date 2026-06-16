@@ -301,7 +301,8 @@ compileRegisteredBlock builder descriptor block = do
             Nothing -> panic $ "compileRegisteredBlock: Trying to compile unregistered MIR block " <> pretty descriptor
             Just llvmBlock -> llvmBlock
     LLVMBuilder.positionBuilderAtEnd builder llvmBlock
-    compilePhis builder block.phis
+    phis <- readIORef block.phis
+    compilePhis builder phis
     for_ block.instructions (compileInstruction builder)
     compileTerminator builder block.terminator
 

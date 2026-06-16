@@ -48,6 +48,7 @@ import Vega.Util (assert)
 import Vega.Util qualified as Util
 import Vega.VectorMap qualified as VectorMap
 import Witherable (wither)
+import Effectful.State.Static.Local (runState, modify, get, put)
 
 type Compile es =
     ( GraphPersistence :> es
@@ -233,15 +234,15 @@ compileExpr expr = do
         Vega.DoubleLiteral{} -> deferToValue
         Vega.TupleLiteral{} -> deferToValue
         Vega.RecordLiteral{} -> deferToValue
-        Vega.RecordFieldAccess{loc=_, record, field, ext = (fieldRepresentation, recordType)} -> do
+        Vega.RecordFieldAccess{loc = _, record, field, ext = (fieldRepresentation, recordType)} -> do
             (recordStatements, recordValue, _) <- compileExprToValue record
 
-            index <- followMetasWithoutPathCompression recordType >>= \case
+            index <-
+                followMetasWithoutPathCompression recordType >>= \case
                     Vega.Record fields -> case VectorMap.lookupIndex field fields of
                         Just fieldIndex -> pure fieldIndex
                         Nothing -> panic $ "Record in field access for " <> Vega.prettyGlobalText Vega.VarKind field <> " did not contain it. Record type: " <> pretty recordType
                     _ -> panic $ "Non-record type in record field access: " <> pretty recordType
-
 
             fieldRepresentation <- convertRepresentation fieldRepresentation
             pure
@@ -549,7 +550,8 @@ compileCaseTree compileGoal caseTree scrutinees = do
                 local <- newLocal
                 (bodyStatements, bodyExpr, representation) <- compileGoal goal
                 pure (Just (goal, (local, Core.LetJoin local boundVars bodyStatements bodyExpr, representation)))
-    joinPoints <- fmap HashMap.fromList $ wither toJoinPoint $ HashMap.toList (boundVarsAndFrequencies caseTree)
+    frequencies <- boundVarsAndFrequencies caseTree
+    joinPoints <- fmap HashMap.fromList $ wither toJoinPoint $ HashMap.toList frequencies
 
     let
         consume :: (HasCallStack) => Seq Core.Value -> (Core.Value, Seq Core.Value)
@@ -685,14 +687,22 @@ compileCaseTree compileGoal caseTree scrutinees = do
     let joinPointDefinitions = fromList $ map (\(_, statement, _) -> statement) (toList joinPoints)
     pure (joinPointDefinitions <> caseStatements, caseExpr, representation)
 
-boundVarsAndFrequencies :: forall goal. (Hashable goal) => CaseTree goal -> HashMap goal (Seq (Core.LocalCoreName, Core.Representation), Int)
-boundVarsAndFrequencies tree = flip execState mempty $ do
+boundVarsAndFrequencies ::
+    forall goal es.
+    (Hashable goal, Compile es) =>
+    CaseTree goal ->
+    Eff es (HashMap goal (Seq (Core.LocalCoreName, Core.Representation), Int))
+boundVarsAndFrequencies tree = fmap snd $ runState mempty $ do
     PatternMatching.traverseLeavesWithBoundVars tree \locals goal -> do
-        Relude.modify $ flip alter goal \case
+        state <- get
+        next <- state & flip HashMap.alterF goal \case
             Nothing -> do
-                let localsWithRepresentations = fmap (\local -> (Core.UserProvided local, undefined)) locals
-                Just (localsWithRepresentations, 1)
-            Just (locals, count) -> Just (locals, count + 1)
+                localsWithRepresentations <- for locals \(local, vegaRepresentation) -> do
+                    representation <- convertRepresentation vegaRepresentation
+                    pure (Core.UserProvided local, representation)
+                pure $ Just (localsWithRepresentations, 1 :: Int)
+            Just (locals, count) -> pure $ Just (locals, count + 1)
+        put next
 
 newLocal :: (Compile es) => Eff es Core.LocalCoreName
 newLocal = do

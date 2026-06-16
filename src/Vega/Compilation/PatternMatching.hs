@@ -33,7 +33,7 @@ data CaseTree goal
         }
     | TupleCase (Seq Representation) (CaseTree goal)
     | -- Bind a scrutinee to a variable without consuming it
-      BindVar {name :: LocalName, representation :: Type, next :: CaseTree goal}
+      BindVar {name :: LocalName, representation :: Representation, next :: CaseTree goal}
     | -- Consume a scrutinee and unconditionally continue
       Ignore (CaseTree goal)
     deriving (Generic, Functor, Foldable)
@@ -196,10 +196,10 @@ serializeSubPatternsWithLeaf patterns leaf = case patterns of
 serializeSubPatterns :: Seq (Pattern Typed) -> goal -> CaseTree goal
 serializeSubPatterns patterns goal = serializeSubPatternsWithLeaf patterns (Leaf goal)
 
-traverseLeavesWithBoundVars :: forall goal f. (Monad f) => CaseTree goal -> (Seq LocalName -> goal -> f ()) -> f ()
+traverseLeavesWithBoundVars :: forall goal f. (Monad f) => CaseTree goal -> (Seq (LocalName, Representation) -> goal -> f ()) -> f ()
 traverseLeavesWithBoundVars tree onLeaf = go [] onLeaf tree
   where
-    go :: forall goal. Seq LocalName -> (Seq LocalName -> goal -> f ()) -> CaseTree goal -> f ()
+    go :: forall goal. Seq (LocalName, Representation) -> (Seq (LocalName, Representation) -> goal -> f ()) -> CaseTree goal -> f ()
     go boundVars onLeaf = \case
         Leaf goal -> onLeaf boundVars goal
         IntCase{cases, default_} -> do
@@ -211,8 +211,8 @@ traverseLeavesWithBoundVars tree onLeaf = go [] onLeaf tree
                 go boundVars onLeaf subTree
             for_ default_ (go boundVars onLeaf)
         TupleCase _ subTree -> go boundVars onLeaf subTree
-        BindVar name _rep subTree -> do
-            go (boundVars :|> name) onLeaf subTree
+        BindVar name representation subTree -> do
+            go (boundVars :|> (name, representation)) onLeaf subTree
         Ignore subTree -> go boundVars onLeaf subTree
 
 instance (Pretty goal) => Pretty (CaseTree goal) where

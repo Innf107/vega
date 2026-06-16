@@ -26,6 +26,7 @@ import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation (..
 import Vega.Panic (panic)
 import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, literal, localIdentText, lparen, number, pretty, rparen, (<+>))
 import Vega.Syntax qualified as Vega
+import System.IO.Unsafe (unsafePerformIO)
 
 data Program = MkProgram
     { declarations :: HashMap Vega.GlobalName Declaration
@@ -55,7 +56,7 @@ newtype BlockDescriptor = MkBlockDescriptor Unique
 newtype Phis = MkPhis (HashMap Variable (Representation, HashMap BlockDescriptor Variable))
 
 data Block = MkBlock
-    { phis :: Phis
+    { phis :: IORef Phis
     , instructions :: Seq Instruction
     , terminator :: Terminator
     }
@@ -188,7 +189,10 @@ instance Pretty Declaration where
                 <+> literal externalName
 
 prettyBlock :: BlockDescriptor -> Block -> Doc Ann
-prettyBlock descriptor MkBlock{phis = MkPhis phiMap, instructions, terminator} =
+prettyBlock descriptor MkBlock{phis, instructions, terminator} = do
+    -- These should really all be written after MIR generation and this is all only
+    -- for debugging anyway so this is fiiiine
+    let MkPhis phiMap = unsafePerformIO $ readIORef phis
     align $
         pretty descriptor
             <> keyword ":"

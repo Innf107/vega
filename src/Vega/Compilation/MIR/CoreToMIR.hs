@@ -18,6 +18,7 @@ import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Data.Unique qualified as Unique
 import Data.Vector.Generic qualified as Vector
+import Data.Vector.Strict (Vector)
 import Vega.Builtins qualified as Builtins
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
@@ -41,17 +42,24 @@ type Compile es =
     , Trace :> es
     , NewUnique :> es
     , State CurrentDeclarationState :> es
+    , IOE :> es
     , ?currentDeclarationName :: Vega.GlobalName
     , ?currentRepresentationParameters :: DeBruijn.Limit
     )
 
 data CurrentDeclarationState = MkDeclarationState
     { blocks :: HashMap MIR.BlockDescriptor MIR.Block
-    , joinPoints :: HashMap LocalCoreName MIR.BlockDescriptor
+    , joinPoints :: HashMap LocalCoreName JoinPointInfo
     , additionalDeclarations :: Seq MIR.Declaration
     , -- TOOD: preserve the order or something?
       locals :: HashMap LocalCoreName (MIR.Variable, Representation)
     , varCount :: Int
+    }
+
+data JoinPointInfo = MkJoinPointInfo
+    { block :: MIR.BlockDescriptor
+    , phis :: IORef Phis
+    , parameters :: Vector (MIR.Variable, Representation)
     }
 
 getLocal :: (HasCallStack, Compile es) => LocalCoreName -> Eff es (MIR.Variable, Representation)
@@ -79,7 +87,7 @@ registerAdditionalDeclarations :: (Compile es) => Seq MIR.Declaration -> Eff es 
 registerAdditionalDeclarations declarations = modify (\state -> state{additionalDeclarations = state.additionalDeclarations <> declarations})
 
 {-# SCC compileDeclaration #-}
-compileDeclaration :: (GraphPersistence :> es, Trace :> es, NewUnique :> es) => Core.Declaration -> Eff es (Seq MIR.Declaration)
+compileDeclaration :: (GraphPersistence :> es, IOE :> es, Trace :> es, NewUnique :> es) => Core.Declaration -> Eff es (Seq MIR.Declaration)
 compileDeclaration = \case
     Core.DefineFunction{name, representationParameters, parameters, returnRepresentation, statements, result} -> do
         trace CoreToMIR $ "compileDeclaration " <> Vega.prettyGlobal Vega.VarKind name
@@ -104,6 +112,7 @@ data ClosureEntry
 
 compileFunction ::
     ( GraphPersistence :> es
+    , IOE :> es
     , Trace :> es
     , NewUnique :> es
     , ?currentRepresentationParameters :: DeBruijn.Limit
@@ -202,18 +211,20 @@ compileBodyWith onReturn block statements returnExpr = case statements of
         registerVariable name var representation
         block <- compileLet block var representation expr
         compileBodyWith onReturn block rest returnExpr
-    Core.LetJoin name parameters statements returnExpr :<| rest -> do
-        undefined
-    {-
-    parameterVariables <- for parameters \(parameter, representation) -> do
-        variable <- newVar
-        registerVariable parameter variable representation
-        pure variable
-    joinPointBlock <- newBlock parameterVariables
-    compileBody joinPointBlock statements returnExpr
-    addJoinPoint name joinPointBlock.descriptor
-    compileBody block rest returnExpr
-    -}
+    Core.LetJoin name parameters joinPointStatements joinPointReturnExpr :<| rest -> do
+        joinPointBlock <- newBlock
+
+        parameters <-
+            Vector.fromList <$> for (toList parameters) \(name, representation) -> do
+                mirVariable <- newVarFromName name
+                registerVariable name mirVariable representation
+                pure (mirVariable, representation)
+
+        addJoinPoint name joinPointBlock.descriptor joinPointBlock.phis parameters
+
+        compileBody joinPointBlock joinPointStatements joinPointReturnExpr
+
+        compileBodyWith onReturn block rest returnExpr
     Core.LetFunction{name, parameters, returnRepresentation, statements, result} :<| rest -> do
         var <- newVarFromName name
         block <- compileLocalFunction block (Just name) var parameters returnRepresentation statements result
@@ -369,12 +380,21 @@ compileReturn block expr = do
                         GlobalClosure -> do
                             (block, arguments) <- compileValues block arguments
                             finish block (TailCallDirect{functionName, representationArguments, arguments, returnRepresentation})
-        Core.JumpJoin joinPoint arguments -> do
+        Core.JumpJoin joinPointName arguments -> do
             (block, arguments) <- compileValues block arguments
 
-            joinPointBlock <- joinPointBlockFor joinPoint
-            undefined
-        -- finish block (MIR.Jump joinPointBlock arguments)
+            joinPoint <- joinPointFor joinPointName
+
+            let newPhis =
+                    MkPhis $
+                        HashMap.fromList $
+                            indexed (toList arguments) & fmap \(index, argument) -> do
+                                let (target, representation) = joinPoint.parameters Vector.! index
+                                (target, (representation, [(block.descriptor, argument)]))
+
+            modifyIORef' joinPoint.phis (`mergePhis` newPhis)
+
+            finish block (MIR.Jump joinPoint.block)
         Core.ProductAccess{resultRepresentation} -> deferToReturn resultRepresentation
         Core.Box{} -> deferToReturn (Core.PrimitiveRep Vega.BoxedRep)
         Core.Unbox{innerRepresentation} -> deferToReturn innerRepresentation
@@ -747,16 +767,22 @@ freeLocalVariables initialBound statements expr = runST do
     goBody initialBound statements expr
     readSTRef found
 
-addJoinPoint :: (Compile es) => LocalCoreName -> MIR.BlockDescriptor -> Eff es ()
-addJoinPoint name blockDescriptor = do
-    modify (\state -> state{joinPoints = HashMap.insert name blockDescriptor state.joinPoints})
+addJoinPoint :: (Compile es) => LocalCoreName -> MIR.BlockDescriptor -> IORef Phis -> Vector (MIR.Variable, Representation) -> Eff es ()
+addJoinPoint name blockDescriptor phis parameters = do
+    let info =
+            MkJoinPointInfo
+                { block = blockDescriptor
+                , parameters
+                , phis
+                }
+    modify (\state -> state{joinPoints = HashMap.insert name info state.joinPoints})
 
-joinPointBlockFor :: (Compile es) => LocalCoreName -> Eff es MIR.BlockDescriptor
-joinPointBlockFor name = do
+joinPointFor :: (Compile es) => LocalCoreName -> Eff es JoinPointInfo
+joinPointFor name = do
     MkDeclarationState{joinPoints} <- get
     case HashMap.lookup name joinPoints of
         Nothing -> panic $ "JumpJoin to join point without a block descriptor: " <> pretty name
-        Just descriptor -> pure descriptor
+        Just info -> pure info
 
 newVar :: (Compile es) => Text -> Eff es MIR.Variable
 newVar text = do
@@ -773,17 +799,19 @@ newVarFromName = \case
 data BlockBuilder = MkBlockBuilder
     { descriptor :: MIR.BlockDescriptor
     , instructions :: Seq MIR.Instruction
-    , phis :: MIR.Phis
+    , phis :: IORef MIR.Phis
     }
 
 newBlock :: (Compile es) => Eff es BlockBuilder
 newBlock = do
     descriptor <- MIR.MkBlockDescriptor <$> newUnique
-    pure MkBlockBuilder{descriptor, instructions = [], phis = MkPhis mempty}
+    phis <- newIORef (MkPhis mempty)
+    pure MkBlockBuilder{descriptor, instructions = [], phis}
 
 addPhis :: (Compile es) => MIR.Phis -> BlockBuilder -> Eff es BlockBuilder
 addPhis phis block = do
-    pure $ block{phis = mergePhis block.phis phis}
+    modifyIORef block.phis (`mergePhis` phis)
+    pure block
 
 mergePhis :: MIR.Phis -> MIR.Phis -> MIR.Phis
 mergePhis (MkPhis left) (MkPhis right) = do

@@ -6,7 +6,7 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import Data.Text qualified as Text
 import Data.Traversable (for)
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.State.Static.Local (State, execState, get, modify)
 import TextBuilder qualified
 import Vega.Compilation.Core.Syntax (CoreName, Representation (..))
@@ -24,6 +24,7 @@ type Monomorphize es =
     , ?arguments :: Seq Representation
     , State MonomorphizedDefinitions :> es
     , Trace :> es
+    , IOE :> es
     )
 
 -- We split MonomorphizedDefinitions up into the names of definitions we monomorphized and their actual
@@ -40,7 +41,7 @@ data MonomorphizedDefinitions = MkMonomorphizedDeclarations
     }
 
 {-# SCC monomorphize #-}
-monomorphize :: (Trace :> es) => MIR.Program -> Vega.GlobalName -> Eff es MIR.Program
+monomorphize :: (Trace :> es, IOE :> es) => MIR.Program -> Vega.GlobalName -> Eff es MIR.Program
 monomorphize program entryPoint = do
     let ?program = program
 
@@ -54,7 +55,11 @@ monomorphize program entryPoint = do
         monomorphizeDeclaration entryPoint []
     pure (MIR.MkProgram{declarations})
 
-monomorphizeDeclaration :: (State MonomorphizedDefinitions :> es, ?program :: MIR.Program, Trace :> es) => Vega.GlobalName -> Seq Representation -> Eff es Vega.GlobalName
+monomorphizeDeclaration ::
+    (State MonomorphizedDefinitions :> es, ?program :: MIR.Program, Trace :> es, IOE :> es) =>
+    Vega.GlobalName ->
+    Seq Representation ->
+    Eff es Vega.GlobalName
 monomorphizeDeclaration name argumentRepresentations
     | Vega.isInternalName name = pure name
     | otherwise = withTrace Monomorphization ("monomorphizeDeclaration " <> Vega.prettyGlobal Vega.VarKind name <> lparen "[" <> intercalateDoc ", " (fmap pretty argumentRepresentations) <> rparen "]") do
@@ -75,6 +80,7 @@ monomorphizeDeclaration name argumentRepresentations
 substituteMonomorphizedDeclaration ::
     ( State MonomorphizedDefinitions :> es
     , Trace :> es
+    , IOE :> es
     , ?program :: MIR.Program
     ) =>
     Vega.GlobalName ->
@@ -97,7 +103,8 @@ substituteMonomorphizedDeclaration instantiationName declaration arguments = do
 
 monomorphizeBlock :: (Monomorphize es) => MIR.Block -> Eff es MIR.Block
 monomorphizeBlock block = do
-    phis <- monomorphizePhis block.phis
+    oldPhis <- readIORef block.phis
+    phis <- newIORef =<< monomorphizePhis oldPhis
     instructions <- for block.instructions monomorphizeInstruction
     terminator <- monomorphizeTerminator block.terminator
     pure MIR.MkBlock{phis, instructions, terminator}

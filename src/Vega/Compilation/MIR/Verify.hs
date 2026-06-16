@@ -103,7 +103,7 @@ assertSameRep var1 var2 = do
 
 verifyBlock :: (Verify es) => MIR.Block -> Eff es ()
 verifyBlock block = do
-    let MIR.MkPhis phis = block.phis
+    MIR.MkPhis phis <- readIORef block.phis
     for_ (HashMap.toList phis) \(var, (rep, _)) ->
         insertVarRepresentation var rep
 
