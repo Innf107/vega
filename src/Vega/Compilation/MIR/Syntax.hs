@@ -22,11 +22,11 @@ import Data.Sequence qualified as Seq
 import Data.Unique (Unique, hashUnique)
 import GHC.Generics (Generically (..))
 import Relude hiding (Identity)
+import System.IO.Unsafe (unsafePerformIO)
 import Vega.Compilation.Core.Syntax (CoreName, LocalCoreName, Representation (..))
 import Vega.Panic (panic)
 import Vega.Pretty (Ann, Doc, Pretty, align, intercalateDoc, keyword, literal, localIdentText, lparen, number, pretty, rparen, (<+>))
 import Vega.Syntax qualified as Vega
-import System.IO.Unsafe (unsafePerformIO)
 
 data Program = MkProgram
     { declarations :: HashMap Vega.GlobalName Declaration
@@ -139,7 +139,7 @@ successors = \case
     TailCallDirect{} -> mempty
     TailCallClosure{} -> mempty
 
-representationAtPath :: HasCallStack => Representation -> Path -> Representation
+representationAtPath :: (HasCallStack) => Representation -> Path -> Representation
 representationAtPath baseRepresentation fullPath = go baseRepresentation fullPath
   where
     go representation = \case
@@ -193,25 +193,27 @@ prettyBlock descriptor MkBlock{phis, instructions, terminator} = do
     -- These should really all be written after MIR generation and this is all only
     -- for debugging anyway so this is fiiiine
     let MkPhis phiMap = unsafePerformIO $ readIORef phis
+    let phiDoc = case HashMap.toList phiMap of
+            [] -> ""
+            phis ->
+                intercalateDoc
+                    "\n"
+                    ( map
+                        ( \(result, (representation, inputs)) ->
+                            pretty result <+> keyword ":" <+> pretty representation <+> keyword "=" <+> keyword "φ" <> lparen "(" <> align (intercalateDoc "\n" (fmap (\(block, var) -> pretty block <+> keyword "->" <+> pretty var) $ HashMap.toList inputs) <> rparen ")")
+                        )
+                        phis
+                    )
+                    <> "\n"
     align $
         pretty descriptor
             <> keyword ":"
             <> "\n"
-            <> ( case HashMap.toList phiMap of
-                    [] -> ""
-                    phis ->
-                        intercalateDoc
-                            "\n"
-                            ( map
-                                ( \(result, (representation, inputs)) ->
-                                    pretty result <+> keyword ":" <+> pretty representation <> keyword " = " <> keyword "φ" <> arguments inputs
-                                )
-                                phis
-                            )
-                            <> "\n"
-               )
             <> "  "
-            <> align (intercalateDoc "\n" (fmap pretty instructions <> [pretty terminator]))
+            <> align
+                ( phiDoc
+                    <> intercalateDoc "\n" (fmap pretty instructions <> [pretty terminator])
+                )
 
 deriving via Generically PathSegment instance Pretty PathSegment
 

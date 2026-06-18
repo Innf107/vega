@@ -299,7 +299,10 @@ compileLet block local representation = \case
                 targetBlockBuilder <- get
                 parameterVariable <- newVarFromName name
 
-                let path = [MIR.SumConstructorPath index, MIR.ProductFieldPath productIndex]
+                let path = case parameters of
+                        -- If the constructor only has a single parameter, we don't have an internal product
+                        [_] -> [MIR.SumConstructorPath index]
+                        _ -> [MIR.SumConstructorPath index, MIR.ProductFieldPath productIndex]
                 let fieldRepresentation = MIR.representationAtPath scrutineeRepresentation path
                 registerVariable name parameterVariable fieldRepresentation
                 targetBlockBuilder <-

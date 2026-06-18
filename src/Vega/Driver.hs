@@ -360,10 +360,10 @@ compileBackend = do
                 LLVM.setTarget llvmModule triple
                 LLVM.Target.setModuleDataLayout llvmModule dataLayout
                 
+                debugEmit llvmModule
 
                 {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
 
-                debugEmit llvmModule
                 -- TODO: add proper optimization flags that control this
                 LLVM.runPasses llvmModule "default<O1>" (Just targetMachine) LLVM.defaultPassBuilderOptions
 

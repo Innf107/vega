@@ -2,7 +2,7 @@ module Vega.Compilation.PatternMatching (
     CaseTree (..),
     compileMatch,
     serializeSubPatterns,
-    traverseLeavesWithBoundVars,
+    traverseLeaves,
 ) where
 
 import Control.Exception (assert)
@@ -15,11 +15,14 @@ import Vega.Panic (panic)
 import Vega.Pretty (Ann, Doc, Pretty, align, indent, intercalateDoc, keyword, lparen, number, pretty, rparen, vsep, (<+>))
 import Vega.Seq.NonEmpty
 import Vega.Syntax
-import qualified Vega.VectorMap as VectorMap
 import Vega.Util (viaList)
+import Vega.VectorMap qualified as VectorMap
 
 data CaseTree goal
-    = Leaf goal
+    = Leaf
+        { boundVars :: Seq (LocalName, Representation)
+        , goal :: goal
+        }
     | ConstructorCase
         -- We use Map instead of HashMap to get a faster unionWith operation
         -- (with HashMap, merging would have been quadratic in the number of constructors)
@@ -42,8 +45,8 @@ data CaseTree goal
 
 merge :: forall goal. CaseTree goal -> CaseTree goal -> CaseTree goal
 merge tree1 tree2 = case (tree1, tree2) of
-    (Leaf leaf, _) -> Leaf leaf
-    (_, Leaf _) -> panic $ "trying to merge " <> showHeadConstructor (coerce @_ @(CaseTree (Identity goal)) tree1) <> " with leaf"
+    (leaf@Leaf{}, _) -> leaf
+    (_, Leaf{}) -> panic $ "trying to merge " <> showHeadConstructor (coerce @_ @(CaseTree (Identity goal)) tree1) <> " with leaf"
     (Ignore subTree1, Ignore subTree2) -> Ignore (merge subTree1 subTree2)
     (Ignore ignoreSubTree, ConstructorCase{scrutineeRepresentation, constructors, default_}) -> do
         let mergedConstructors =
@@ -157,67 +160,67 @@ mergeAll :: NonEmpty (CaseTree goal) -> CaseTree goal
 mergeAll caseTrees = foldl1' merge caseTrees
 
 compileMatch :: NonEmpty (Pattern Typed, goal) -> CaseTree goal
-compileMatch patterns = mergeAll $ fmap (\(pattern_, goal) -> compileSinglePattern pattern_ (Leaf goal)) patterns
+compileMatch patterns = mergeAll $ fmap (\(pattern_, goal) -> compileSinglePattern [] pattern_ (\boundVars -> Leaf boundVars goal)) patterns
 
-compileSinglePattern :: Pattern Typed -> CaseTree goal -> CaseTree goal
-compileSinglePattern pattern_ leaf = case pattern_ of
-    WildcardPattern{} -> Ignore leaf
-    VarPattern{loc = _, ext = rep, name, isShadowed = _} -> BindVar{name = name, representation = rep, next = Ignore leaf}
+compileSinglePattern :: Seq (LocalName, Representation) -> Pattern Typed -> (Seq (LocalName, Representation) -> CaseTree goal) -> CaseTree goal
+compileSinglePattern bound pattern_ leaf = case pattern_ of
+    WildcardPattern{} -> Ignore (leaf bound)
+    VarPattern{loc = _, ext = rep, name, isShadowed = _} -> BindVar{name = name, representation = rep, next = Ignore (leaf (bound :|> (name, rep)))}
     -- TODO: we assume that the intLiteral is in range for an Int here (we should probably enforce that in the renamer)
-    IntLiteralPattern{loc = _, intLiteral} -> IntCase{cases = [(fromIntegral intLiteral, leaf)], default_ = Nothing}
+    IntLiteralPattern{loc = _, intLiteral} -> IntCase{cases = [(fromIntegral intLiteral, leaf bound)], default_ = Nothing}
     StringLiteralPattern{} -> undefined
     DoubleLiteralPattern{} -> undefined
-    AsPattern _loc rep inner name -> BindVar{name = name, representation = rep, next = compileSinglePattern inner leaf}
+    AsPattern _loc rep inner name -> BindVar{name = name, representation = rep, next = compileSinglePattern (bound :|> (name, rep)) inner leaf}
     ConstructorPattern{constructorExt, constructor, subPatterns} -> assert (length constructorExt.parameterRepresentations == length subPatterns) do
-        let subTree = serializeSubPatternsWithLeaf subPatterns leaf
+        let subTree = serializeSubPatternsWithLeaf bound subPatterns leaf
         ConstructorCase
             { scrutineeRepresentation = constructorExt.returnRepresentation
             , constructors = [(constructor, (constructorExt.parameterRepresentations, subTree))]
             , default_ = Nothing
             }
     TuplePattern{loc = _, tupleSubPatterns} -> do
-        let subTree = serializeSubPatternsWithLeaf (fmap fst tupleSubPatterns) leaf
+        let subTree = serializeSubPatternsWithLeaf bound (fmap fst tupleSubPatterns) leaf
         TupleCase (fmap snd tupleSubPatterns) subTree
     RecordPattern{loc = _, fields} -> do
         -- TODO: this is kind of inefficient isn't it?
         let sortedSubPatterns = viaList $ VectorMap.sortedValues (VectorMap.fromList (toList fields))
-        let subTree = serializeSubPatternsWithLeaf (fmap fst sortedSubPatterns) leaf
+        let subTree = serializeSubPatternsWithLeaf bound (fmap fst sortedSubPatterns) leaf
         TupleCase (fmap snd sortedSubPatterns) subTree
-    TypePattern _ inner _ -> compileSinglePattern inner leaf
+    TypePattern _ inner _ -> compileSinglePattern bound inner leaf
     OrPattern _ alternatives -> do
-        mergeAll $ fmap (\pattern_ -> compileSinglePattern pattern_ leaf) alternatives
+        mergeAll $ fmap (\pattern_ -> compileSinglePattern bound pattern_ leaf) alternatives
 
-serializeSubPatternsWithLeaf :: Seq (Pattern Typed) -> CaseTree goal -> (CaseTree goal)
-serializeSubPatternsWithLeaf patterns leaf = case patterns of
-    Empty -> leaf
+serializeSubPatternsWithLeaf :: Seq (LocalName, Representation) -> Seq (Pattern Typed) -> (Seq (LocalName, Representation) -> CaseTree goal) -> (CaseTree goal)
+serializeSubPatternsWithLeaf bound patterns leaf = case patterns of
+    Empty -> leaf bound
     (rest :|> pattern_) -> do
-        serializeSubPatternsWithLeaf rest (compileSinglePattern pattern_ leaf)
+        serializeSubPatternsWithLeaf bound rest (\bound -> compileSinglePattern bound pattern_ leaf)
 
 serializeSubPatterns :: Seq (Pattern Typed) -> goal -> CaseTree goal
-serializeSubPatterns patterns goal = serializeSubPatternsWithLeaf patterns (Leaf goal)
+serializeSubPatterns patterns goal = serializeSubPatternsWithLeaf [] patterns (\bound -> Leaf bound goal)
 
-traverseLeavesWithBoundVars :: forall goal f. (Monad f) => CaseTree goal -> (Seq (LocalName, Representation) -> goal -> f ()) -> f ()
-traverseLeavesWithBoundVars tree onLeaf = go [] onLeaf tree
+traverseLeaves :: forall goal f. (Monad f) => CaseTree goal -> (Seq (LocalName, Representation) -> goal -> f ()) -> f ()
+traverseLeaves tree onLeaf = go onLeaf tree
   where
-    go :: forall goal. Seq (LocalName, Representation) -> (Seq (LocalName, Representation) -> goal -> f ()) -> CaseTree goal -> f ()
-    go boundVars onLeaf = \case
-        Leaf goal -> onLeaf boundVars goal
+    go :: forall goal. (Seq (LocalName, Representation) -> goal -> f ()) -> CaseTree goal -> f ()
+    go onLeaf = \case
+        Leaf boundVars goal -> onLeaf boundVars goal
         IntCase{cases, default_} -> do
             for_ cases \subTree -> do
-                go boundVars onLeaf subTree
-            for_ default_ (go boundVars onLeaf)
+                go onLeaf subTree
+            for_ default_ (go onLeaf)
         ConstructorCase{constructors, default_} -> do
             for_ constructors \(_, subTree) -> do
-                go boundVars onLeaf subTree
-            for_ default_ (go boundVars onLeaf)
-        TupleCase _ subTree -> go boundVars onLeaf subTree
-        BindVar name representation subTree -> do
-            go (boundVars :|> (name, representation)) onLeaf subTree
-        Ignore subTree -> go boundVars onLeaf subTree
+                go onLeaf subTree
+            for_ default_ (go onLeaf)
+        TupleCase _ subTree -> go onLeaf subTree
+        BindVar _name _representation subTree -> do
+            go onLeaf subTree
+        Ignore subTree -> go onLeaf subTree
 
 instance (Pretty goal) => Pretty (CaseTree goal) where
     pretty = \case
-        Leaf goal -> keyword "Leaf" <+> pretty goal
+        Leaf boundVars goal -> keyword "Leaf" <> lparen "[" <> intercalateDoc ", " (fmap (\(name, rep) -> prettyLocal VarKind name <+> keyword ":" <+> pretty rep) boundVars) <> rparen "]" <+> pretty goal
         BindVar name rep subTree -> keyword "BindVar" <+> prettyLocal VarKind name <+> keyword ":" <+> pretty rep <> prettySubTree subTree
         IntCase{cases, default_} -> do
             let prettyCase (int, subTree) = do

@@ -317,8 +317,11 @@ compilePhis builder (MIR.MkPhis phis) = do
         layout <- Layout.representationLayout representation
         case Layout.kind layout of
             Layout.ZeroSized -> pure ()
-            Layout.LLVMScalar _; Layout.AggregatePointer -> do
-                asVar_ targetVar layout $ LLVMBuilder.buildPhi builder (Layout.llvmType layout) incomingValues
+            kind@(Layout.LLVMScalar _; Layout.AggregatePointer) -> do
+                let llvmType = case kind of
+                        Layout.LLVMScalar scalar -> scalar
+                        Layout.AggregatePointer -> LLVM.pointerType
+                asVar_ targetVar layout $ LLVMBuilder.buildPhi builder llvmType incomingValues
 
 compileInstruction :: (Compile es) => LLVMBuilder.Builder -> MIR.Instruction -> Eff es ()
 compileInstruction builder = \case

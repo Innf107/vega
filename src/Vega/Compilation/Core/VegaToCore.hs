@@ -47,8 +47,9 @@ import Vega.Syntax qualified as Vega
 import Vega.Util (assert)
 import Vega.Util qualified as Util
 import Vega.VectorMap qualified as VectorMap
-import Witherable (wither)
+import Witherable (wither, Filterable (mapMaybe))
 import Effectful.State.Static.Local (runState, modify, get, put)
+import qualified Data.HashSet as HashSet
 
 type Compile es =
     ( GraphPersistence :> es
@@ -560,16 +561,27 @@ compileCaseTree compileGoal caseTree scrutinees = do
 
         go ::
             Seq Core.Value ->
-            Seq Core.LocalCoreName ->
+            Seq (Vega.LocalName, Core.LocalCoreName) ->
             CaseTree goal ->
             Eff es (Seq Core.Statement, Core.Expr, Core.Representation)
         go scrutinees boundValues = \case
-            PatternMatching.Leaf goal ->
+            PatternMatching.Leaf boundVars goal ->
                 case scrutinees of
                     Empty -> case HashMap.lookup goal joinPoints of
                         Nothing -> compileGoal goal
-                        Just (joinPointName, _, representation) ->
-                            pure ([], Core.JumpJoin joinPointName (fmap (\var -> Core.Var (Core.Local var)) boundValues), representation)
+                        Just (joinPointName, _, representation) -> do
+                            let boundVarSet = HashSet.fromList (fmap fst (toList boundVars))
+                            -- The bound values we accumulate during pattern matching might over-approximate the actual parameters here.
+                            -- Whenever we merge a BindVar subtree with one that doesn't bind that variable, the resulting tree keeps the
+                            -- BindVar, even though the leaves from the other tree don't actually use that variable.
+                            -- This means that we need to filter for only those variables that are actually being used by this leaf
+                            -- and ignore the rest.
+                            let actuallyBoundValues = boundValues & Witherable.mapMaybe \(originalVar, valueLocal) -> 
+                                    if originalVar `HashSet.member` boundVarSet then
+                                        Just $ Core.Var (Core.Local valueLocal)
+                                    else
+                                        Nothing
+                            pure ([], Core.JumpJoin joinPointName actuallyBoundValues, representation)
                     _ -> panic $ "Not all scrutinees consumed. Remaining: [" <> intercalateDoc ", " (fmap pretty scrutinees) <> "]"
             PatternMatching.ConstructorCase{constructors, scrutineeRepresentation, default_} -> do
                 let (scrutinee, rest) = consume scrutinees
@@ -676,7 +688,7 @@ compileCaseTree compileGoal caseTree scrutinees = do
                 pure (accessStatements <> subTreeStatements, subTreeExpr, representation)
             PatternMatching.BindVar name vegaRepresentation subTree -> do
                 let (scrutinee, _) = consume scrutinees
-                (subStatements, subExpr, representation) <- go scrutinees (boundValues :|> Core.UserProvided name) subTree
+                (subStatements, subExpr, representation) <- go scrutinees (boundValues :|> (name, Core.UserProvided name)) subTree
                 pure ([Core.Let (Core.UserProvided name) representation (Core.Value scrutinee)] <> subStatements, subExpr, representation)
             PatternMatching.Ignore subTree -> do
                 let (_, rest) = consume scrutinees
@@ -693,7 +705,7 @@ boundVarsAndFrequencies ::
     CaseTree goal ->
     Eff es (HashMap goal (Seq (Core.LocalCoreName, Core.Representation), Int))
 boundVarsAndFrequencies tree = fmap snd $ runState mempty $ do
-    PatternMatching.traverseLeavesWithBoundVars tree \locals goal -> do
+    PatternMatching.traverseLeaves tree \locals goal -> do
         state <- get
         next <- state & flip HashMap.alterF goal \case
             Nothing -> do

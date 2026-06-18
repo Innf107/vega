@@ -1,0 +1,18 @@
+-- type: print(1)
+
+import internal:Internal (debugInt)
+
+import std:List
+import std:List (List, Cons, Nil)
+
+aaaaaaa : (Int, List(UInt8)) -> Int
+aaaaaaa(remainingCapacity, remainingList) = match (remainingCapacity, remainingList) {
+        (0, x) -> 1
+        (_, Nil) -> 2
+        (_, Cons(_, _)) -> 3
+}
+
+main : () -> ()
+main() = {
+    debugInt(aaaaaaa(0, Nil))
+}
