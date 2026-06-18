@@ -46,3 +46,6 @@ abs(x) = if x < 0 then 0 - x else x
 
 compare : (Int, Int) -> Ordering
 compare(x, y) = if x == y then Equal else if x < y then Less else Greater
+
+min : (Int, Int) -> Int
+min(x, y) = if x <= y then x else y

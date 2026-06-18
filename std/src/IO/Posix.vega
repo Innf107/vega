@@ -1,13 +1,17 @@
 
-import internal:Internal (errno, int32ToInt, offsetPointerBytes, unsafeUninitializedMutableArray, unsafeMutableArrayContents, offsetPointerBytes, int32ToInt)
+import internal:Internal (errno, int32ToInt, offsetPointerBytes, replicateMutableArray, unsafeFreezeArray, unsafeUninitializedMutableArray, unsafeMutableArrayContents, offsetPointerBytes, int32ToInt)
 import std:Int
 import std:String (String)
 import std:String
 import std:IO/Posix/Raw 
 import std:IO/Posix/FileDescriptor (FileDescriptor, stdout)
+import std:Array
 import std:Array (unsafeWithPointerAtOffset)
 import std:ArrayList
 import std:Panic (panic)
+import std:Stream
+import std:Stream (Stream, SizeHint, Unbounded, Limited)
+import std:OutArray
 
 writeBytes : (FileDescriptor, Array(UInt8), Int, Int) -> ()
 writeBytes(FileDescriptor(fd), array, offset, length) = {
@@ -31,6 +35,32 @@ writeBytes(FileDescriptor(fd), array, offset, length) = {
 
 writeString : (FileDescriptor, String) -> ()
 writeString(fileDescriptor, String({content, offset, length})) = writeBytes(fileDescriptor, content, offset, length)
+
+
+
+writeStream : (FileDescriptor, Stream(UInt8)) -> ()
+writeStream(fileDescriptor, Stream(stream)) = {
+    -- There is probably a good value to choose here. No idea if this is it
+    let defaultWriteBufferSize = 4096
+
+    -- TODO: this could use a stack allocated OutArray now which would be pretty sick (but we don't have that quite yet)
+    let bufferSize = match stream.sizeHint {
+        Unbounded -> defaultWriteBufferSize
+        Limited(hintedSize) -> Int.min(hintedSize, defaultWriteBufferSize)
+    }
+
+    let buffer = replicateMutableArray(bufferSize, 0u8)
+
+    let go() = {
+        let ((), amountWritten) = Array.withOutArray(buffer, \outArray -> stream.run(outArray))
+        if (amountWritten > 0) then {
+            -- TODO: this unsafeFreeze will probably not stay safe with generational collection
+            writeBytes(fileDescriptor, unsafeFreezeArray(buffer), 0, amountWritten)
+            go()
+        } else {}
+    }
+    go()
+}
 
 printFD : (FileDescriptor, String) -> ()
 printFD(fileDescriptor, message) = {

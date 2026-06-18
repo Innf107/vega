@@ -1,0 +1,29 @@
+import std:OutArray
+import std:OutArray (OutArray)
+
+-- TODO: this should also take an effect parameter
+data Stream(a) = Stream({
+    -- TODO: This should actually be `forall (s : Region). OutArray(s, a) -> ())`
+    run : OutArray(a) -> (),
+    -- An upper bound on the number of values this will reasonably be able to fill at once.
+    -- Consumers can check this value to avoid allocating unnecessarily large buffers that won't be filled completely anyway
+    sizeHint : SizeHint
+})
+
+data SizeHint = Unbounded | Limited(Int)
+
+-- Create an infinite stream that always repeats the same value
+repeat : forall a. a -> Stream(a)
+repeat(value) = Stream({
+    sizeHint = Unbounded,
+
+    run = \array -> {
+        let go(capacity) = {
+            if capacity > 0 then {
+                OutArray.write(array, value)
+                go(capacity - 1)
+            } else {}
+        }
+        go(OutArray.remainingCapacity(array))
+    }
+})

@@ -18,6 +18,10 @@ import std:List
 import std:Int
 import std:String
 import std:Panic (panic)
+import std:OutArray
+import std:OutArray (OutArray)
+import std:Ref
+import std:Ref (Ref)
 
 read : forall a. (Array(a), Int) -> a
 read(array, index) = {
@@ -176,4 +180,24 @@ unsafeFreezeSlice({array, offset, length}) = {
             })
         unsafeFreezeArray(targetArray)
     }
+}
+
+-- Temporarily expose an Array as a write-only OutArray.
+-- This returns the number of elements that have actually been written
+withOutArray : forall a r. (MutableArray(a), OutArray(a) -> r) -> (r, Int)
+withOutArray(array, f) = withOutArraySlice({ array = array, offset = 0, length = mutableArrayLength(array) }, f)
+
+-- Temporarily expose part of an Array as a write-only OutArray.
+-- This returns the number of elements that have actually been written
+withOutArraySlice : forall a r. ({ array : MutableArray(a), offset : Int, length : Int }, OutArray(a) -> r) -> (r, Int)
+withOutArraySlice({array, offset, length}, f) = {
+    -- I don't love how this accesses the OutArray constructor here but i would still prefer for this function to be
+    -- defined in std:Array so...
+    let nextIndex = Ref.new(0)
+    let outArray = OutArray({ buffer = array, offset = offset, size = length, nextIndex = nextIndex })
+    let result = f(outArray)
+    
+    let countWritten = Ref.read(nextIndex)
+
+    (result, countWritten)
 }

@@ -3,6 +3,11 @@
 -- Their use cases should basically always be covered by Arrays, RRB vectors (or similar) and
 -- specialized builder types, but until we have those in place, Lists are useful because of
 -- how dead simple they are to implement
+import std:Stream
+import std:Stream (Stream, SizeHint, Unbounded)
+import std:OutArray
+import std:Ref
+import std:Ref (Ref)
 
 data List(a) =
     | Nil
@@ -39,4 +44,25 @@ length(list) = {
         Cons(_, rest) -> go(acc + 1, rest)
     }
     go(0, list)
+}
+
+toStream : forall a. List(a) -> Stream(a)
+toStream(list) = {
+    let remaining = Ref.new(list)
+    Stream({
+        sizeHint = Unbounded,
+        run = \outArray -> {
+            let capacity = OutArray.remainingCapacity(outArray)
+            let go(remainingCapacity, remainingList) = match (remainingCapacity, remainingList) {
+                (0, shadow remainingList) -> remainingList
+                (_, Nil) -> Nil
+                (shadow remainingCapacity, Cons(x, xs)) -> {
+                    OutArray.write(outArray, x)
+                    go(remainingCapacity - 1, xs)
+                }
+            }
+            let leftOver = go(capacity, Ref.read(remaining))
+            Ref.write(remaining, leftOver)
+        }
+    })
 }
