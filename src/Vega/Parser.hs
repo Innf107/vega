@@ -526,88 +526,90 @@ monomorphization =
 
 pattern_ :: Parser (Pattern Parsed)
 pattern_ = do
-    firstPattern <- pattern1
-    rest <- many (single Pipe *> pattern1)
+    firstPattern <- patternWithOperator
+    rest <- many (single Pipe *> patternWithOperator)
     case rest of
         Empty -> pure firstPattern
         (_ :|> lastPattern) -> pure (OrPattern (getLoc firstPattern <> getLoc lastPattern) (firstPattern :<|| rest))
+
+patternWithOperator :: Parser (Pattern Parsed)
+patternWithOperator = do
+    inner <- patternLeaf
+    choice
+        [ do
+            _ <- single As
+            (name, endLoc) <- unqualifiedIdentifierWithLoc
+            pure (AsPattern (getLoc inner <> endLoc) () inner name)
+        , do
+            _ <- single Colon
+            typeSignature <- type_
+            pure (TypePattern (getLoc inner <> getLoc typeSignature) inner typeSignature)
+        , pure inner
+        ]
+patternLeaf :: Parser (Pattern Parsed)
+patternLeaf =
+    choice
+        [ do
+            (name, loc) <- unqualifiedIdentifierWithLoc
+            pure (VarPattern{loc = loc, ext = (), name = name, isShadowed = False})
+        , do
+            startLoc <- single Lexer.Shadow
+            (name, endLoc) <- unqualifiedIdentifierWithLoc
+            pure (VarPattern{loc = startLoc <> endLoc, ext = (), name = name, isShadowed = True})
+        , do
+            (name, startLoc) <- constructorWithLoc
+            subPatterns <- optional (argumentsWithLoc pattern_)
+            case subPatterns of
+                Nothing ->
+                    pure $
+                        ConstructorPattern
+                            { loc = startLoc
+                            , constructorExt = ()
+                            , constructor = name
+                            , subPatterns = fromList []
+                            }
+                Just (subPatterns, endLoc) ->
+                    pure $
+                        ConstructorPattern
+                            { loc = (startLoc <> endLoc)
+                            , constructorExt = ()
+                            , constructor = name
+                            , subPatterns = subPatterns
+                            }
+        , do
+            (patterns, loc) <- argumentsWithLoc pattern_
+            case patterns of
+                (pattern_ :<| Empty) -> pure pattern_
+                _ -> pure $ TuplePattern loc patterns
+        , do
+            startLoc <- single LBrace
+            fields <- recordField `sepBy1` comma
+            _ <- optional semicolon
+            endLoc <- single RBrace
+            pure (RecordPattern (startLoc <> endLoc) fields)
+        , do
+            loc <- single Underscore
+            pure (WildcardPattern loc)
+        , do
+            (int, literalTypeInBits, loc) <- intLit
+            pure (IntLiteralPattern loc int literalTypeInBits)
+        , do
+            (string, loc) <- stringLit
+            pure (StringLiteralPattern loc string)
+        , do
+            (double, loc) <- doubleLit
+            pure (DoubleLiteralPattern loc double)
+        ]
   where
-    pattern1 = do
-        inner <- pattern2
+    recordField = do
+        (fieldName, loc) <- unqualifiedIdentifierWithLoc
         choice
             [ do
-                _ <- single As
-                (name, endLoc) <- unqualifiedIdentifierWithLoc
-                pure (AsPattern (getLoc inner <> endLoc) () inner name)
-            , do
-                _ <- single Colon
-                typeSignature <- type_
-                pure (TypePattern (getLoc inner <> getLoc typeSignature) inner typeSignature)
-            , pure inner
+                _ <- single Equals
+                fieldPattern <- pattern_
+                pure (fieldName, fieldPattern)
+            , pure (fieldName, VarPattern{loc, ext = (), name = fieldName, isShadowed = False})
             ]
-    pattern2 =
-        choice
-            [ do
-                (name, loc) <- unqualifiedIdentifierWithLoc
-                pure (VarPattern{loc = loc, ext = (), name = name, isShadowed = False})
-            , do
-                startLoc <- single Lexer.Shadow
-                (name, endLoc) <- unqualifiedIdentifierWithLoc
-                pure (VarPattern{loc = startLoc <> endLoc, ext = (), name = name, isShadowed = True})
-            , do
-                (name, startLoc) <- constructorWithLoc
-                subPatterns <- optional (argumentsWithLoc pattern_)
-                case subPatterns of
-                    Nothing ->
-                        pure $
-                            ConstructorPattern
-                                { loc = startLoc
-                                , constructorExt = ()
-                                , constructor = name
-                                , subPatterns = fromList []
-                                }
-                    Just (subPatterns, endLoc) ->
-                        pure $
-                            ConstructorPattern
-                                { loc = (startLoc <> endLoc)
-                                , constructorExt = ()
-                                , constructor = name
-                                , subPatterns = subPatterns
-                                }
-            , do
-                (patterns, loc) <- argumentsWithLoc pattern_
-                case patterns of
-                    (pattern_ :<| Empty) -> pure pattern_
-                    _ -> pure $ TuplePattern loc patterns
-            , do
-                startLoc <- single LBrace
-                fields <- recordField `sepBy1` comma
-                _ <- optional semicolon
-                endLoc <- single RBrace
-                pure (RecordPattern (startLoc <> endLoc) fields)
-            , do
-                loc <- single Underscore
-                pure (WildcardPattern loc)
-            , do
-                (int, literalTypeInBits, loc) <- intLit
-                pure (IntLiteralPattern loc int literalTypeInBits)
-            , do
-                (string, loc) <- stringLit
-                pure (StringLiteralPattern loc string)
-            , do
-                (double, loc) <- doubleLit
-                pure (DoubleLiteralPattern loc double)
-            ]
-      where
-        recordField = do
-            (fieldName, loc) <- unqualifiedIdentifierWithLoc
-            choice
-                [ do
-                    _ <- single Equals
-                    fieldPattern <- pattern_
-                    pure (fieldName, fieldPattern)
-                , pure (fieldName, VarPattern{loc, ext = (), name = fieldName, isShadowed = False})
-                ]
 
 expr :: Parser (Expr Parsed)
 expr = label "expression" exprLogical
@@ -779,7 +781,7 @@ statement =
 let_ :: Parser (Statement Parsed)
 let_ = do
     startLoc <- single Lexer.Let
-    boundPattern <- pattern_
+    boundPattern <- patternLeaf
     choice
         [ -- let x = e
           do
@@ -803,26 +805,35 @@ let_ = do
                             , body
                             }
                 _ -> customFailure (NonVarInFunctionDefinition (getLoc boundPattern))
-        , -- let f : Int -> Int; let f(x) = x
-          do
+        , do
+            -- let f : Int -> Int ???
             _ <- single Lexer.Colon
             typeSig <- type_
-            _ <- semicolon
-            _ <- single Lexer.Let
-            name <- unqualifiedIdentifier
-            parameters <- arguments pattern_
-            _ <- single Lexer.Equals
-            body <- expr
-            pure
-                ( Syntax.LetFunction
-                    { ext = ()
-                    , loc = (startLoc <> getLoc body)
-                    , name
-                    , typeSignature = (Just typeSig)
-                    , parameters = fmap (,()) parameters
-                    , body
-                    }
-                )
+            choice
+                [ do
+                    -- let f : Int -> Int = g
+                    _ <- single Lexer.Equals
+                    rhs <- expr
+                    pure (Syntax.Let (startLoc <> getLoc rhs) (TypePattern (startLoc <> getLoc typeSig) boundPattern typeSig) rhs)
+                , do
+                    -- let f : Int -> Int; let f(x) = x
+                    _ <- semicolon
+                    _ <- single Lexer.Let
+                    name <- unqualifiedIdentifier
+                    parameters <- arguments pattern_
+                    _ <- single Lexer.Equals
+                    body <- expr
+                    pure
+                        ( Syntax.LetFunction
+                            { ext = ()
+                            , loc = (startLoc <> getLoc body)
+                            , name
+                            , typeSignature = (Just typeSig)
+                            , parameters = fmap (,()) parameters
+                            , body
+                            }
+                        )
+                ]
         ]
 
 functionApplication :: Parser (Expr Parsed -> Expr Parsed)

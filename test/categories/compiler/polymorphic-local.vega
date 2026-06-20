@@ -1,0 +1,11 @@
+-- type: compile
+-- KNOWN
+
+main : () -> ()
+main() = {
+    let f : forall a. a -> a
+    let f(x) = x
+
+    let _ = f(5)
+    let _ = f("a")
+}
