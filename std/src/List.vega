@@ -50,6 +50,8 @@ toStream : forall a. List(a) -> Stream(a)
 toStream(list) = {
     let remaining = Ref.new(list)
     Stream({
+        -- This is a bit unfortunate since we will actually only write `length(list)` bytes, but
+        -- we cannot comptue that without traversing the entire list (which would break streaming)
         sizeHint = Unbounded,
         run = \outArray -> {
             let capacity = OutArray.remainingCapacity(outArray)

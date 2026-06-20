@@ -3,14 +3,14 @@ import std:OutArray (OutArray)
 
 -- TODO: this should also take an effect parameter
 data Stream(a) = Stream({
-    -- TODO: This should actually be `forall (s : Region). OutArray(s, a) -> ())`
+    -- TODO: This should actually be `forall (s : Region). OutArray(s, a) -{Write(s)}> ())`
     run : OutArray(a) -> (),
     -- An upper bound on the number of values this will reasonably be able to fill at once.
     -- Consumers can check this value to avoid allocating unnecessarily large buffers that won't be filled completely anyway
     sizeHint : SizeHint
 })
 
-data SizeHint = Unbounded | Limited(Int)
+data SizeHint = Unbounded | Bounded(Int)
 
 -- Create an infinite stream that always repeats the same value
 repeat : forall a. a -> Stream(a)
@@ -27,3 +27,4 @@ repeat(value) = Stream({
         go(OutArray.remainingCapacity(array))
     }
 })
+

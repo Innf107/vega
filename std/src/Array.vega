@@ -22,6 +22,7 @@ import std:OutArray
 import std:OutArray (OutArray)
 import std:Ref
 import std:Ref (Ref)
+import std:Stream(Stream, Bounded)
 
 read : forall a. (Array(a), Int) -> a
 read(array, index) = {
@@ -200,4 +201,20 @@ withOutArraySlice({array, offset, length}, f) = {
     let countWritten = Ref.read(nextIndex)
 
     (result, countWritten)
+}
+
+sliceToStream : forall a. { array : Array(a), offset : Int, length : Int } -> Stream(a)
+sliceToStream({ array, offset, length }) = {
+    let indexRef = Ref.new(offset)
+    Stream({
+        sizeHint = Bounded(length),
+        run = \outArray -> {
+            let index = Ref.read(indexRef)
+            if index < length then {
+                let lengthToWrite = Int.min(length - index, OutArray.remainingCapacity(outArray))
+                OutArray.writeArraySlice(outArray, { array = array, offset = offset + index, length = lengthToWrite })
+                Ref.write(indexRef, index + lengthToWrite)
+            } else {}
+        }
+    })
 }

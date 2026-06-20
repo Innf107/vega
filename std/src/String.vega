@@ -6,6 +6,7 @@ import std:Maybe (Maybe, Nothing, Just)
 import std:Ordering (Ordering, Less, Equal, Greater)
 import std:Int
 import std:Panic (panic)
+import std:Stream (Stream)
 
 import internal:Internal 
     ( replicateMutableArray
@@ -196,6 +197,20 @@ drop(string, droppedLength) = {
     }
 }
 
+-- Split the string at the first occurence of the given byte.
+-- Neither of the returned halves will contain the split byte.
+--
+-- Examples:
+-- splitAtFirstByte("abcXdef", 'X') = Just ("abc", "def")
+-- splitAtFirstByte("abcXdefXghi", 'X') = Just ("abc", "defXghi")
+--
+-- O(length of the split prefix)
+splitAtFirstByte : (String, UInt8) -> Maybe ((String, String))
+splitAtFirstByte(string, byte) = match findByteIndex(byte, string) {
+    Nothing -> Nothing
+    Just(index) -> Just((take(string, index), drop(string, index + 1)))
+}
+
 -- O(1)
 uncons : String -> Maybe((UInt8, String))
 uncons(string) = {
@@ -217,3 +232,6 @@ compare(string1, string2) = match (uncons(string1), uncons(string2)) {
         Equal -> compare(rest1, rest2)
     }
 }
+
+toByteStream : String -> Stream(UInt8)
+toByteStream(String({ content, offset, length })) = Array.sliceToStream({ array=content, offset=offset, length=length })

@@ -10,7 +10,7 @@ import std:Array (unsafeWithPointerAtOffset)
 import std:ArrayList
 import std:Panic (panic)
 import std:Stream
-import std:Stream (Stream, SizeHint, Unbounded, Limited)
+import std:Stream (Stream, SizeHint, Unbounded, Bounded)
 import std:OutArray
 
 writeBytes : (FileDescriptor, Array(UInt8), Int, Int) -> ()
@@ -46,7 +46,7 @@ writeStream(fileDescriptor, Stream(stream)) = {
     -- TODO: this could use a stack allocated OutArray now which would be pretty sick (but we don't have that quite yet)
     let bufferSize = match stream.sizeHint {
         Unbounded -> defaultWriteBufferSize
-        Limited(hintedSize) -> Int.min(hintedSize, defaultWriteBufferSize)
+        Bounded(hintedSize) -> Int.min(hintedSize, defaultWriteBufferSize)
     }
 
     let buffer = replicateMutableArray(bufferSize, 0u8)
