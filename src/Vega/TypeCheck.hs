@@ -1600,7 +1600,11 @@ unify loc env type1 type2 = withTrace Unify (pretty type1 <+> keyword "~" <+> pr
                                 _ <- zipWithSeqM go arguments1 arguments2
                                 pure ()
                         _ -> unificationFailure
-                    TypeVar name -> error $ "unsubstituted type variable in unification: " <> show name
+                    -- See Note [Unsubstituted type variables in unification]
+                    TypeVar name1 -> case type2 of
+                        TypeVar name2
+                            | name1 == name2 -> pure ()
+                        _ -> unificationFailure
                     Forall binders1 body1 -> case type2 of
                         Forall binders2 body -> do
                             undefined
@@ -1988,6 +1992,23 @@ solveHasField loc env recordType field expectedFieldType onMeta = do
         MetaVar meta -> onMeta meta
         nonRecordType -> do
             typeError (NonRecordTypeInFieldAccess{loc, nonRecordType, field})
+
+{- NOTE [Unsubstituted type variables in unification]:
+------------------------------------------------------
+Ideally, we would like to panic in unification if we hit a real type variable.
+In normal unification of types, these should always have been instantiated to either
+unification variables or skolems and finding a real one always indicates a bug.
+
+However, the story is not quite as simple for kind checking.
+If we are checking a type of the form `forall (a : k). τ`, we have to check the literal written type
+`τ` without skolemizing it first (because we cannot skolemize Type*Syntax*).
+Now, if τ contains uses of `a`, these will stay as real type variables and inferCheck will call `unify` on them.
+
+This is the only way that real type variables can sneak in, so it is safe to simply check them for equality like this
+without performing any sort of level checks or anything similar.
+It is however very unfortunate that we cannot catch the common class of type checker bugs
+where type variables are not instantiated correctly. 
+-}
 
 {- NOTE [Kinds of foralls]:
 ------------------------------

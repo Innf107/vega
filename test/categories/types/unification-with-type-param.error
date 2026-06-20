@@ -1,0 +1,8 @@
+$FILE:5:17: ERROR:
+Type mismatch
+  Unable to unify
+    expected type Boxed
+      actual type r$a
+  ┃ 
+5 ┃ f : forall a. A(a) -> ()
+  ┃                 ▔

@@ -1,0 +1,6 @@
+-- type: error
+
+data A((x : Type(Boxed)))
+
+f : forall a. A(a) -> ()
+f(_) = ()
