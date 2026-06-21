@@ -24,6 +24,11 @@ module Vega.Compilation.LLVM.Layout (
     parameterUnboxedIndex,
     identifier,
     details,
+    forContainedElements,
+    forContainedElementsAtSumConstructorIndex,
+    ElementPathSegment (..),
+    ElementPath,
+    elementPathFromMIRPath,
     returnConvention,
     ReturnConvention (..),
     scalarStructType,
@@ -91,6 +96,7 @@ import Vega.Alignment (Alignment)
 import Vega.Alignment qualified as Alignment
 import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
+import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Debug (showHeadConstructor)
 import Vega.Effect.ST (STE, runSTE)
 import Vega.OutArray (OutArray)
@@ -103,7 +109,7 @@ import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Size (Size)
 import Vega.Size qualified as Size
 import Vega.Syntax qualified as Vega
-import Vega.Util (forAccumLM, forIndexed, mapAccumLM, smallestPowerOfTwoFitting)
+import Vega.Util (forAccumLM, forIndexed, forIndexed_, mapAccumLM, smallestPowerOfTwoFitting)
 import Vega.Util qualified as Util
 import Witherable (catMaybes, mapMaybe, wither)
 
@@ -212,6 +218,48 @@ returnConvention layout = case (boxedCount layout, decomposedScalars layout, Siz
     (_, _, 0) -> ScalarStruct
     _ -> SRetPointer
 
+forContainedElements :: Layout -> (ElementPath -> ElementLocation -> Eff es ()) -> Eff es ()
+forContainedElements layout run = case details layout of
+    Simple inner -> forContainedElementsNested [] inner run
+    TopLevelSumLayout{tagSize = _, tagLocation, constructors} -> do
+        run [SumTag] tagLocation
+        forIndexed_ constructors \details index ->
+            forContainedElementsNested [SumConstructor index] details run
+
+forContainedElementsAtSumConstructorIndex :: (HasCallStack) => Int -> Layout -> (ElementPath -> ElementLocation -> Eff es ()) -> Eff es ()
+forContainedElementsAtSumConstructorIndex index layout run = case details layout of
+    Simple _ -> panic "Trying to access elements of Non-TopLevelSum constructor"
+    TopLevelSumLayout{constructors} -> do
+        forContainedElementsNested [] (constructors `NonEmpty.index` index) run
+
+forContainedElementsNested :: (HasCallStack) => ElementPath -> NestedLayoutDetails -> (ElementPath -> ElementLocation -> Eff es ()) -> Eff es ()
+forContainedElementsNested pathSoFar details run = case details of
+    Primitive location -> run pathSoFar location
+    ProductLayout subLayouts -> forIndexed_ subLayouts \details index -> do
+        forContainedElementsNested (pathSoFar :|> ProductField index) details run
+    NestedSumLayout{boxedIndices, decomposedIndices, unboxedOffset, layout} -> do
+        forContainedElements layout \innerPath innerLocation -> do
+            let realLocation = case innerLocation of
+                    BoxedScalar innerIndex -> BoxedScalar{inFlightIndex = (boxedIndices `Seq.index` innerIndex)}
+                    DecomposedScalar innerIndex -> DecomposedScalar{inFlightIndex = (decomposedIndices `Seq.index` innerIndex)}
+                    UnboxedOffset innerOffset size alignment -> case unboxedOffset of
+                        Nothing -> panic "NestedSumLayout without unboxed segment contained element at unboxed offset"
+                        Just outerOffset -> UnboxedOffset{inFlightOffsetInBytes = (outerOffset + innerOffset), size, alignment}
+            run (pathSoFar <> innerPath) realLocation
+
+data ElementPathSegment
+    = ProductField Int
+    | SumConstructor Int
+    | SumTag
+    deriving (Show)
+
+type ElementPath = Seq ElementPathSegment
+
+elementPathFromMIRPath :: MIR.Path -> ElementPath
+elementPathFromMIRPath = fmap \case
+    MIR.ProductFieldPath index -> ProductField index
+    MIR.SumConstructorPath index -> SumConstructor index
+
 data ReturnConvention
     = SingleBoxed
     | SingleScalar LLVM.Type
@@ -284,14 +332,20 @@ buildAtRestAlloca builder layout varName = case atRestLLVMType layout of
     Just llvmType -> LLVMBuilder.buildAlloca builder llvmType varName
 
 -- | The index of the function parameter corresponding to the i-th boxed component
-parameterBoxedIndex :: Layout -> Int -> Int
-parameterBoxedIndex layout index = assert (index >= 0 && index < boxedCount layout) do
+parameterBoxedIndex :: HasCallStack => Layout -> Int -> Int
+parameterBoxedIndex layout index = assertInBounds index (boxedCount layout) do
     index
 
 -- | The index of the function parameter corresponding to the i-th decomposed scalar
-parameterDecomposedScalarIndex :: Layout -> Int -> Int
-parameterDecomposedScalarIndex layout index = assert (index > 0 && index < length (decomposedScalars layout)) do
+parameterDecomposedScalarIndex :: HasCallStack => Layout -> Int -> Int
+parameterDecomposedScalarIndex layout index = assertInBounds index (length (decomposedScalars layout)) do
     boxedCount layout + index
+
+assertInBounds :: HasCallStack => Int -> Int -> a -> a
+assertInBounds value size result
+    | value >= 0 && value < size = result
+    | otherwise = panic $ "Access at index " <> number value <> " out of bounds for size " <> number size
+
 
 {- | The index of the pointer corresponding to the unboxed segment of the layout when passed as a function parameter
 This is 'Nothing' if the layout does not have an unboxed segment
@@ -397,7 +451,7 @@ buildValue builder = do
 data ElementLocation
     = BoxedScalar {inFlightIndex :: Int}
     | DecomposedScalar {inFlightIndex :: Int}
-    | UnboxedOffset {inFlightOffsetInBytes :: Int}
+    | UnboxedOffset {inFlightOffsetInBytes :: Int, size :: Size, alignment :: Alignment}
     deriving (Generic, Show)
 
 atRestOffsetInBytes :: ElementLocation -> Layout -> Int
@@ -477,7 +531,12 @@ representationLayout representation = do
             let tagSize = Size.fromBits (smallestPowerOfTwoFitting (length constructors))
             -- It's extremely unlikely for this to not be 1 but we still need to cover the case where it isn't
             let tagAlignment = Alignment.fromValue (Size.inBytes tagSize)
-            let tagLocation = UnboxedOffset{inFlightOffsetInBytes = combinedContext.inFlightUnboxedOffsetSoFar}
+            let tagLocation =
+                    UnboxedOffset
+                        { inFlightOffsetInBytes = combinedContext.inFlightUnboxedOffsetSoFar
+                        , size = tagSize
+                        , alignment = tagAlignment
+                        }
 
             -- We don't currently use the fact that the tag size can be smaller than a byte
             let contextWithTag =
@@ -557,7 +616,7 @@ representationLayout representation = do
                 , --
                   boxedCountSoFar = context.boxedCountSoFar
                 }
-            , Primitive (UnboxedOffset{inFlightOffsetInBytes = ownInFlightUnboxedOffset})
+            , Primitive (UnboxedOffset{inFlightOffsetInBytes = ownInFlightUnboxedOffset, size, alignment})
             )
 
 tryDecomposedRepresentationLayout :: (?context :: LLVM.Context) => Representation -> Maybe Layout

@@ -17,9 +17,9 @@ import Data.Sequence qualified as Seq
 import Data.Text qualified as Text
 import Data.Traversable (for)
 import Data.Unique (hashUnique, newUnique)
-import Data.Vector.Storable qualified as Storable
-import Data.Vector.Strict qualified as Strict
-import Data.Vector.Strict qualified as Vector
+import Data.Vector.Storable qualified as Storable hiding ((!))
+import Data.Vector.Strict qualified as Strict hiding ((!))
+import Data.Vector.Generic qualified as Vector
 import Effectful (Eff, IOE, (:>))
 import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import GHC.Records (HasField, getField)
@@ -45,11 +45,11 @@ import Vega.Compilation.LLVM.Runtime.ToLLVMConstant (ToLLVMConstant (toLLVMConst
 import Vega.Compilation.LLVM.Runtime.ToLLVMConstant qualified as ToLLVMConstant
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Debug (showHeadConstructor)
-import Vega.Effect.ST (liftST, runSTE)
+import Vega.Effect.ST (STE, liftST, runSTE)
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.OutArray qualified as OutArray
 import Vega.Panic (panic, prettyCallStack)
-import Vega.Pretty (pretty)
+import Vega.Pretty (Ann, Doc, pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Seq.NonEmpty (NonEmpty ((:<||)), pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
@@ -140,7 +140,7 @@ functionLLVMType parameters returnLayout = do
             alignmentAttribute <- alignAttribute (Layout.alignment returnLayout)
             pure ((LLVM.pointerType, [sretAttribute, alignmentAttribute]) :<| baseParameterTypes, LLVM.voidType, True)
         Layout.ScalarStruct -> do
-            assert (Layout.unboxedSize returnLayout == 0)
+            assert (Size.inBits (Layout.unboxedSize returnLayout) == 0)
             pure (baseParameterTypes, Layout.scalarStructType returnLayout, False)
 
     -- The sret parameter is always the first one
@@ -260,12 +260,13 @@ compileDeclaration = \case
                     Empty -> pure ()
                     (parameter, layout) :<| rest -> do
                         let unboxedPointer = LLVM.getParam function <$> Layout.parameterUnboxedIndex layout
-                        valueBuilder <- Layout.newBuilderWithUnboxedPointer layout unboxedPointer
-                        for_ @[] [0 .. Layout.boxedCount layout - 1] \boxedIndex -> do
-                            Layout.fillBoxed valueBuilder boxedIndex (LLVM.getParam function (Layout.parameterBoxedIndex layout boxedIndex))
-                        forIndexed_ (Layout.decomposedScalars layout) \_scalar scalarIndex -> do
-                            Layout.fillBoxed valueBuilder scalarIndex (LLVM.getParam function (Layout.parameterBoxedIndex layout scalarIndex))
-                        value <- Layout.buildValue valueBuilder
+                        value <- runSTE \s -> do
+                            valueBuilder <- Layout.newBuilderWithUnboxedPointer @s layout unboxedPointer
+                            for_ @[] [0 .. Layout.boxedCount layout - 1] \boxedIndex -> do
+                                Layout.fillBoxed valueBuilder boxedIndex (LLVM.getParam function (Layout.parameterBoxedIndex layout boxedIndex))
+                            forIndexed_ (Layout.decomposedScalars layout) \_scalar scalarIndex -> do
+                                Layout.fillDecomposed valueBuilder scalarIndex (LLVM.getParam function (Layout.parameterDecomposedScalarIndex layout scalarIndex))
+                            Layout.buildValue valueBuilder
                         insertVarMapping parameter value layout
                         addParameterMappings (currentIndex + Layout.parameterCount layout) rest
 
@@ -317,9 +318,9 @@ compileRegisteredBlock builder descriptor block = do
 
 compilePhis :: (Compile es) => LLVMBuilder.Builder -> MIR.Phis -> Eff es ()
 compilePhis builder (MIR.MkPhis phis) = do
-    for_ (HashMap.toList phis) \(targetVar, (representation, incoming)) -> do
+    for_ (HashMap.toList phis) \(targetVar, (representation, incoming)) -> runSTE \s -> do
         incomingValues <-
-            fromList @(Vector.Vector _) <$> for (HashMap.toList incoming) \(block, variable) -> do
+            fromList @(Strict.Vector _) <$> for (HashMap.toList incoming) \(block, variable) -> do
                 (value, _) <- lookupVar variable
                 block <- lookupBlock block
 
@@ -335,7 +336,7 @@ compilePhis builder (MIR.MkPhis phis) = do
                             Nothing -> panic "Compound value without unboxed pointer has a layout with a non-empty unboxed segment"
                             Just unboxedPointer -> (unboxedPointer, block)
                 Just <$> LLVMBuilder.buildPhi builder (LLVM.arrayType LLVM.int8Type size) incoming (varName <> ".unboxed")
-        valueBuilder <- Layout.newBuilderWithUnboxedPointer layout unboxedSegment
+        valueBuilder <- Layout.newBuilderWithUnboxedPointer @s layout unboxedSegment
 
         for_ @[] [0 .. Layout.boxedCount layout - 1] \boxedIndex -> do
             let incoming = fmap (\(compound, block) -> (Layout.boxedValues compound Vector.! boxedIndex, block)) incomingValues
@@ -358,40 +359,18 @@ compileInstruction builder = \case
     MIR.ArithmeticOperator var operator -> do
         (value, layout) <- compileArithmeticOperator builder operator (renderVariable var)
         insertVarMapping var (Layout.scalarCompoundValue value) layout
-    MIR.AccessField{var, path, target = parent, fieldRepresentation} -> do
+    MIR.AccessField{var, path, target = parent, fieldRepresentation} -> runSTE \s -> do
         (parentValue, parentLayout) <- lookupVar parent
         fieldLayout <- Layout.representationLayout fieldRepresentation
 
-        case path of
-            Empty -> insertVarMapping var parentValue parentLayout
-            NonEmpty path -> runSTE \_ -> do
-                let detailsInParent = followLayoutPath path (Layout.details parentLayout)
-                let detailsInField = Layout.details fieldLayout
+        fieldBuilder <- Layout.newBuilder @s builder fieldLayout
 
-                builder <- Layout.newBuilder builder fieldLayout
-
-                let copyAllFields detailsInParent detailsInField = case detailsInParent of
-                        Layout.Primitive parentLocation -> case detailsInField of
-                            Layout.Primitive fieldLocation -> do
-                                undefined
-                            _ -> mismatch
-                        Layout.ProductLayout parentSubLayouts -> case detailsInField of
-                            Layout.ProductLayout fieldSubLayouts -> do
-                                zipWithM_ copyAllFields (toList parentSubLayouts) (toList fieldSubLayouts)
-                            _ -> mismatch
-                        Layout.NestedSumLayout{} -> case detailsInField of
-                            Layout.NestedSumLayout{} -> undefined
-                            _ -> mismatch
-                      where
-                        mismatch = panic $ "mismatched layout details in parent vs field: " <> showHeadConstructor detailsInParent <> " vs " <> showHeadConstructor detailsInField
-
-                case detailsInField of
-                    Layout.Simple simpleDetails -> do
-                        copyAllFields detailsInParent simpleDetails
-                    Layout.TopLevelSumLayout{} -> undefined
-
-                readValue <- Layout.buildValue builder
-                insertVarMapping var readValue fieldLayout
+        let basePath = Layout.elementPathFromMIRPath path
+        Layout.forContainedElements fieldLayout \elementPath targetLocation -> do
+            let sourceLocation = accessElementByPath (basePath <> elementPath) parentLayout
+            copyElement builder sourceLocation parentValue targetLocation fieldBuilder            
+        fieldValue <- Layout.buildValue fieldBuilder
+        insertVarMapping var fieldValue fieldLayout
     MIR.Box{var, target} -> do
         -- TODO: we should probably inline the fast path for minor heap allocations here
         (targetValue, targetLayout) <- lookupVar target
@@ -405,7 +384,7 @@ compileInstruction builder = \case
         buildComplexStore builder targetLayout targetValue memoryPointer
     MIR.Unbox{var, boxedTarget, representation} -> do
         (targetValue, _) <- lookupVar boxedTarget
-        let layout = Layout.representationLayout representation
+        layout <- Layout.representationLayout representation
 
         Util.assert (Vector.null (Layout.decomposedScalarValues targetValue))
         Util.assert (isNothing (Layout.unboxedPointer targetValue))
@@ -413,77 +392,50 @@ compileInstruction builder = \case
             [pointerValue] -> asVar_ var layout $ buildComplexLoad builder layout pointerValue
             _ -> panic $ "Trying to unbox non-boxed compound value " <> pretty targetValue
     MIR.ProductConstructor{var, values, representation} -> runSTE \s -> do
-        llvmValues <- for values lookupVarValue
-        let layout = Layout.representationLayout representation
+        llvmValuesWithLayouts <- for values lookupVar
+        layout <- Layout.representationLayout representation
 
-        valueBuilder <- Layout.newBuilder builder layout
-        let valuesWithDetails = case Layout.details layout of
-                Layout.ProductLayout elementDetails
-                    | length elementDetails == length values -> Seq.zip llvmValues elementDetails
-                    | otherwise -> panic $ "Product details of length " <> Pretty.number (length elementDetails) <> " don't match product constructor arguments [" <> Pretty.intercalateDoc ", " (fmap pretty values) <> "]"
-                details -> panic $ "Non-product layout details in product constructor: " <> showHeadConstructor details
+        valueBuilder <- Layout.newBuilder @s builder layout
 
-        -- (int, (bool, string)) ~~~ (bool, int, string)
-        --
-        -- x = (bool, string)
-        -- y = 5
-        -- z = (y, x)
-        let writeValue path rootValue details = case details of
-                Layout.Primitive (Layout.BoxedScalar{inFlightIndex}) -> do
-                    scalarValue <- accessScalarField builder layout rootValue path
-                    Layout.fillBoxed valueBuilder inFlightIndex scalarValue
-                Layout.Primitive (Layout.DecomposedScalar{inFlightIndex}) -> do
-                    scalarValue <- accessScalarField builder layout rootValue path
-                    Layout.fillDecomposed valueBuilder inFlightIndex scalarValue
-                Layout.Primitive (Layout.UnboxedOffset{inFlightOffsetInBytes}) -> do
-                    scalarValue <- accessScalarField builder layout rootValue path
-                    let unboxedPointer = case Layout.unboxedBuilderPointer valueBuilder of
-                            Nothing -> panic "Trying to access unboxed pointer on a layout without an unboxed segment"
-                            Just pointer -> pointer
-                    pointer <- buildGEPOffset builder unboxedPointer inFlightOffsetInBytes ""
-                    -- TODO: it might be nice if we could add an alignment annotation here
-                    _ <- LLVMBuilder.buildStore builder pointer scalarValue
-                    pure ()
-                Layout.ProductLayout elementDetails -> do
-                    forIndexed_ elementDetails \details index -> writeValue (path :|> MIR.ProductFieldPath index) rootValue details
-                Layout.NestedSumLayout{} -> do
-                    undefined
-        for_ valuesWithDetails \(value, details) -> writeValue [] value details
+        Layout.forContainedElements layout \path targetLocation -> do
+            case path of
+                (Layout.ProductField index :<| sourcePath) -> do
+                    let (sourceValue, sourceLayout) = llvmValuesWithLayouts `Seq.index` index
+                    let sourceLocation = accessElementByPath sourcePath sourceLayout
+                    copyElement builder sourceLocation sourceValue targetLocation valueBuilder
+                _ -> panic $ "Element with non-ProductField path in product layout: " <> show path
 
         builtValue <- Layout.buildValue valueBuilder
         insertVarMapping var builtValue layout
-    MIR.SumConstructor{var, tag, payload, representation} -> do
-        (value, _) <- lookupVar payload
+    MIR.SumConstructor{var, tag, payload, representation} -> runSTE \s -> do
+        (payload, payloadLayout) <- lookupVar payload
         layout <- Layout.representationLayout representation
+        valueBuilder <- Layout.newBuilder @s builder layout
 
-        sumPointer <- asVar var layout $ buildLayoutAlloca builder layout
+        let (tagLocation, tagSize) = case Layout.details layout of
+                Layout.TopLevelSumLayout{tagSize, tagLocation} -> (tagLocation, tagSize)
+                _ -> panic "Non-TopLevelSum layout in SumConstructor instruction"
+        -- We currently round up the tag size to the nearest number of bytes here.
+        -- This might change in the future, especially if we implement some form of
+        -- niche filling optimization
+        let tagValue = LLVM.constInt (LLVM.intType (Size.inBytes tagSize)) (fromIntegral tag) False
+        fillLocation builder valueBuilder tagLocation tagValue
 
-        let tagLLVMType = LLVM.intType (Layout.sumTagSizeInBits layout)
-        let tagValue = LLVM.constInt tagLLVMType (fromIntegral tag) False
-        case Layout.sumTagOffset layout of
-            Nothing -> do
-                -- This sum is directly represented by its tag
-                insertVarMapping var tagValue layout
-            Just tagOffset -> do
-                -- Store the tag
-                tagPointer <- buildGEPOffset builder sumPointer tagOffset ""
-                _ <- LLVMBuilder.buildStore builder tagValue tagPointer
-
-                -- Storing the payload currently involves a single contiguous copy. This may change in the future
-                -- if we add support for non-contiguous payloads.
-                -- See NOTE: [Sum tags] in Vega.Compilation.LLVM.Layout for details.
-                let (payloadOffset, payloadLayout) = Layout.sumOffsetAndLayout tag layout
-
-                payloadPointer <- buildGEPOffset builder sumPointer payloadOffset ""
-                buildComplexStore builder payloadLayout value payloadPointer
-    MIR.LoadFunctionPointer{var, functionName} -> do
+        Layout.forContainedElementsAtSumConstructorIndex tag layout \path targetLocation -> do
+            let sourceLocation = accessElementByPath path payloadLayout
+            copyElement builder sourceLocation payload targetLocation valueBuilder
+        value <- Layout.buildValue valueBuilder
+        insertVarMapping var value layout
+    MIR.LoadFunctionPointer{var, functionName, asGlobalClosure, representationArguments} -> do
+        assert (representationArguments == [])
+        let llvmFunctionName = case asGlobalClosure of
+                False -> renderLLVMName functionName
+                True -> closureWrapperNameForFunction functionName
         functionPointer <-
-            LLVM.getNamedFunction ?module_ (renderLLVMName functionName) >>= \case
-                Nothing -> panic $ "Trying to create closure for non-existent top-level function: " <> Vega.prettyGlobal Vega.VarKind functionName
+            LLVM.getNamedFunction ?module_ llvmFunctionName >>= \case
+                Nothing -> panic $ "Trying to create function pointer for non-existent function: " <> Vega.prettyGlobal Vega.VarKind functionName
                 Just function_ -> pure function_
-        insertVarMapping var (Layout.boxedCompoundValue functionPointer) Layout.rawPointerLayout
-    MIR.LoadGlobalClosure{var, functionName} -> do
-        asVar_ var Layout.closureLayout $ buildClosure builder functionName Layout.boxedLayout LLVM.constNullPointer
+        insertVarMapping var (Layout.scalarCompoundValue functionPointer) Layout.rawPointerLayout
     MIR.LoadGlobal{var, globalName, representation} -> undefined
     MIR.LoadIntLiteral{var, literal, sizeInBits}
         | sizeInBits `mod` 8 /= 0 -> panic "Int layouts with non-byte sizes are not supported yet"
@@ -505,6 +457,8 @@ compileInstruction builder = \case
 
         let tagLayout = Layout.intLayout tagSize
         asVar_ var tagLayout $ accessLocation builder sumValue tagLayout tagLocation
+    MIR.LoadBoxedNull{var} -> do
+        insertVarMapping var (Layout.boxedCompoundValue (LLVM.constNullPointer)) Layout.boxedLayout
     MIR.CallDirect{var, functionName, arguments, representationArguments, returnRepresentation}
         | Just primop <- Builtins.asPrimop functionName -> do
             returnLayout <- Layout.representationLayout returnRepresentation
@@ -940,7 +894,7 @@ buildCCCCall builder functionType functionValue arguments returnLayout varName =
 constructScalarStruct :: (Compile es) => LLVMBuilder.Builder -> Layout -> CompoundValue -> Text -> Eff es LLVM.Value
 constructScalarStruct builder layout value varName = do
     assert (isNothing (Layout.unboxedPointer value))
-    assert (Layout.unboxedSize layout == 0)
+    assert (Size.inBits (Layout.unboxedSize layout) == 0)
     assert (Layout.boxedCount layout == length (Layout.boxedValues value))
     assert (length (Layout.decomposedScalars layout) == length (Layout.decomposedScalarValues value))
 
@@ -1044,16 +998,6 @@ buildRuntimeCall builder name arguments varName = do
     let (function, functionType) = getField @name ?runtimeDefinitions
     buildCallWithAttributes builder functionType function arguments varName
 
-buildClosure :: (Compile es) => LLVMBuilder.Builder -> Vega.GlobalName -> Layout -> LLVM.Value -> Text -> Eff es CompoundValue
-buildClosure builder functionName payloadLayout closureValue varName = do
-    functionPointer <-
-        -- We need to use the closure wrapper instead of the actual function here. See Note: [Closure Representation].
-        LLVM.getNamedFunction ?module_ (closureWrapperNameForFunction functionName) >>= \case
-            Nothing -> panic $ "Trying to create closure for non-existent top-level function: " <> Vega.prettyGlobal Vega.VarKind functionName
-            Just function_ -> pure function_
-    let combinedLayout = Layout.closureLayout
-    buildProduct builder [functionPointer, closureValue] combinedLayout varName
-
 accessLocation :: (HasCallStack, Compile es) => LLVMBuilder.Builder -> CompoundValue -> Layout -> Layout.ElementLocation -> Text -> Eff es CompoundValue
 accessLocation builder value layout location varName = case location of
     Layout.BoxedScalar index -> pure $ Layout.boxedCompoundValue $ Layout.boxedValues value Vector.! index
@@ -1065,31 +1009,78 @@ accessLocation builder value layout location varName = case location of
         elementPointer <- buildGEPOffset builder unboxedPointer inFlightOffsetInBytes ""
         buildComplexLoad builder layout elementPointer varName
 
-followLayoutPath :: NonEmpty MIR.PathSegment -> Layout.TopLevelLayoutDetails -> Layout.NestedLayoutDetails
-followLayoutPath path topLevelDetails = case (path, topLevelDetails) of
-    (MIR.SumConstructorPath index :<|| subPath, Layout.TopLevelSumLayout{constructors}) ->
-        followNested subPath (constructors `NonEmpty.index` index)
-    (MIR.SumConstructorPath index :<|| _, details) -> do
-        panic $ "Trying to access sum constructor " <> Pretty.number index <> " in non-TopLevelSumLayout layout " <> showHeadConstructor details
-    (MIR.ProductFieldPath index :<|| _, Layout.TopLevelSumLayout{}) -> do
-        panic $ "Trying to access product field " <> Pretty.number index <> " in TopLevelSumLayout"
-    (path, Layout.Simple details) -> followNested (NonEmpty.toSeq path) details
+accessElementByPath :: (HasCallStack) => Layout.ElementPath -> Layout -> Layout.ElementLocation
+accessElementByPath path layout = case Layout.details layout of
+    Layout.TopLevelSumLayout{tagSize = _, tagLocation, constructors} -> case path of
+        Layout.SumConstructor index :<| rest -> go rest (constructors `NonEmpty.index` index)
+        Layout.SumTag :<| Empty -> tagLocation
+        Layout.SumTag :<| _ -> panic $ "non-final sum tag in elment path: " <> show path
+        Layout.ProductField _ :<| _ -> panic $ "Trying to access element at product path on TopLevelSumLayout: " <> show path
+        Empty -> panic "Trying to access non-primitive path as element"
+    Layout.Simple nestedLayout -> go path nestedLayout
   where
-    followNested path details = case (path, details) of
-        (MIR.SumConstructorPath index :<| subPath, Layout.NestedSumLayout{}) -> undefined -- ughhhhhhhh
+    go path nestedLayout = case path of
+        Empty -> case nestedLayout of
+            Layout.Primitive location -> location
+            _ -> panic $ "Trying to access non-primitive path as element"
+        path@(Layout.SumConstructor _ :<| _) -> case nestedLayout of
+            Layout.NestedSumLayout{boxedIndices, decomposedIndices, unboxedOffset, layout} -> do
+                let innerElement = accessElementByPath path layout
+                case innerElement of
+                    Layout.BoxedScalar innerIndex -> Layout.BoxedScalar (boxedIndices `Seq.index` innerIndex)
+                    Layout.DecomposedScalar innerIndex -> Layout.DecomposedScalar (decomposedIndices `Seq.index` innerIndex)
+                    Layout.UnboxedOffset offset size alignment -> case unboxedOffset of
+                        Nothing -> panic $ "Returned UnboxedOffset location for a layout without an unboxed segment"
+                        Just innerOffset -> Layout.UnboxedOffset (innerOffset + offset) size alignment
+            _ -> mismatched "sum"
+        Layout.ProductField index :<| rest -> case nestedLayout of
+            Layout.ProductLayout inner -> go rest (inner `Seq.index` index)
+            _ -> mismatched "product"
+        Layout.SumTag :<| _ -> panic "Trying to access nested sum layout with a SumTag path"
+    mismatched :: (HasCallStack) => Doc Ann -> a
+    mismatched kind = panic $ "Trying to use a " <> kind <> " path to access a non-" <> kind <> " layout"
 
-buildProduct :: (Compile es) => LLVMBuilder.Builder -> Seq LLVM.Value -> Layout -> Text -> Eff es CompoundValue
-buildProduct builder values layout varName = do
-    productPointer <- buildLayoutAlloca builder layout varName
-
-    forIndexed_ values \value index -> do
-        let (offset, subLayout) = Layout.productOffsetAndLayout index layout
-        pointer <- case offset of
-            0 -> pure productPointer
-            _ -> buildGEPOffset builder productPointer offset ""
-        buildComplexStore builder subLayout value pointer
-
-    pure productPointer
+copyElement ::
+    (STE s :> es, Compile es) =>
+    LLVMBuilder.Builder ->
+    Layout.ElementLocation ->
+    Layout.CompoundValue ->
+    Layout.ElementLocation ->
+    Layout.CompoundValueBuilder s ->
+    Eff es ()
+copyElement builder sourceLocation sourceValue targetLocation targetValueBuilder = case (sourceLocation, targetLocation) of
+    (Layout.UnboxedOffset sourceOffset sourceSize sourceAlignment, Layout.UnboxedOffset targetOffset targetSize targetAlignment) -> do
+        assert (Size.inBits sourceSize == Size.inBits targetSize)
+        case (Layout.unboxedPointer sourceValue, Layout.unboxedBuilderPointer targetValueBuilder) of
+            (Just sourceUnboxedPointer, Just targetUnboxedPointer) -> do
+                sourcePointer <- buildGEPOffset builder sourceUnboxedPointer sourceOffset "source"
+                targetPointer <- buildGEPOffset builder targetUnboxedPointer targetOffset "target"
+                _ <-
+                    LLVMBuilder.buildMemCpy
+                        builder
+                        targetPointer
+                        (Alignment.toInt sourceAlignment)
+                        sourcePointer
+                        (Alignment.toInt targetAlignment)
+                        (LLVM.constInt LLVM.int64Type (fromIntegral (Size.inBytes sourceSize)) False)
+                pure ()
+            _ -> panic "Trying to copy from/to unboxed offset in non-existent unboxed segment"
+    _ -> do
+        elementValue <- case sourceLocation of
+            Layout.BoxedScalar index -> pure $ Layout.boxedValues sourceValue Vector.! index
+            Layout.DecomposedScalar index -> pure $ Layout.decomposedScalarValues sourceValue Vector.! index
+            Layout.UnboxedOffset{inFlightOffsetInBytes, size, alignment} -> do
+                undefined
+        case targetLocation of
+            Layout.BoxedScalar index -> Layout.fillBoxed targetValueBuilder index elementValue
+            Layout.DecomposedScalar index -> Layout.fillDecomposed targetValueBuilder index elementValue
+            Layout.UnboxedOffset{inFlightOffsetInBytes, size, alignment} -> case Layout.unboxedBuilderPointer targetValueBuilder of
+                Nothing -> panic "Trying to copy to unboxed offset of a value builder without an unboxed segment"
+                Just basePointer -> do
+                    targetPointer <- buildGEPOffset builder basePointer inFlightOffsetInBytes "target"
+                    storeInstruction <- LLVMBuilder.buildStore builder elementValue targetPointer
+                    LLVM.setAlignment storeInstruction (Alignment.toInt alignment)
+                    pure ()
 
 buildAtRestAlloca :: (Compile es) => LLVMBuilder.Builder -> Layout -> Text -> Eff es LLVM.Value
 buildAtRestAlloca builder layout varName = do
@@ -1112,7 +1103,7 @@ buildComplexStore builder layout value baseTargetPointer = do
     for_ @Maybe (Layout.unboxedPointer value) \unboxedSourcePointer -> do
         targetPointer <- buildGEPOffset builder baseTargetPointer (Layout.atRestUnboxedOffset layout) "target_ptr.unboxed"
         let alignment = Alignment.toInt (Layout.unboxedAlignment layout)
-        let size = LLVM.constInt LLVM.int64Type (fromIntegral (Layout.unboxedSize layout)) False
+        let size = LLVM.constInt LLVM.int64Type (fromIntegral (Size.inBytes (Layout.unboxedSize layout))) False
 
         LLVMBuilder.buildMemCpy builder unboxedSourcePointer alignment targetPointer alignment size
 
@@ -1156,10 +1147,10 @@ buildComplexReturn builder layout value = case Layout.returnConvention layout of
 This is only valid if the pointee lives at least as long as the value returned from this
 -}
 buildLoadAsReference :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Text -> Eff es CompoundValue
-buildLoadAsReference builder layout basePointer varName = runSTE \_ -> do
+buildLoadAsReference builder layout basePointer varName = runSTE \s -> do
     unboxedPointer <- buildGEPOffset builder basePointer (Layout.atRestUnboxedOffset layout) (varName <> ".unboxed_ref")
 
-    valueBuilder <- Layout.newBuilderWithUnboxedPointer layout (Just unboxedPointer)
+    valueBuilder <- Layout.newBuilderWithUnboxedPointer @s layout (Just unboxedPointer)
 
     for_ @[] [0 .. Layout.boxedCount layout - 1] \boxedIndex -> do
         boxPointer <- buildGEPOffset builder basePointer (Layout.atRestBoxedOffset layout boxedIndex) (varName <> ".boxed")
@@ -1175,7 +1166,7 @@ buildLoadAsReference builder layout basePointer varName = runSTE \_ -> do
 
 buildComplexLoad :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Text -> Eff es CompoundValue
 buildComplexLoad builder layout basePointer varName = runSTE \s -> do
-    valueBuilder <- Layout.newBuilder builder layout
+    valueBuilder <- Layout.newBuilder @s builder layout
 
     for_ @[] [0 .. Layout.boxedCount layout - 1] \boxedIndex -> do
         boxPointer <- buildGEPOffset builder basePointer (Layout.atRestBoxedOffset layout boxedIndex) (varName <> ".boxed")
@@ -1193,6 +1184,19 @@ buildComplexLoad builder layout basePointer varName = runSTE \s -> do
         LLVMBuilder.buildMemCpy builder targetPointer alignment sourcePointer alignment size
 
     Layout.buildValue valueBuilder
+
+fillLocation :: (STE s :> es, Compile es, HasCallStack) => LLVMBuilder.Builder -> Layout.CompoundValueBuilder s -> Layout.ElementLocation -> LLVM.Value -> Eff es ()
+fillLocation builder valueBuilder location value = case location of
+    Layout.BoxedScalar index -> Layout.fillBoxed valueBuilder index value
+    Layout.DecomposedScalar index -> Layout.fillDecomposed valueBuilder index value
+    Layout.UnboxedOffset offset _size alignment -> case Layout.unboxedBuilderPointer valueBuilder of
+        Nothing -> panic "Trying to fill unboxed offset location of a value builder without an unboxed segment"
+        Just pointer -> do
+            contentPointer <- buildGEPOffset builder pointer offset ""
+            storeInstruction <- LLVMBuilder.buildStore builder contentPointer value
+            -- We don't need the size here, but the alignment could be higher than the natural alignment that
+            -- LLVM expects so we can set it explicitly
+            LLVM.setAlignment storeInstruction (Alignment.toInt alignment)
 
 {- | Build a @getelementptr@ instruction pointing at a constant offset given in bytes.
 The offset is assumed to be in-bounds.

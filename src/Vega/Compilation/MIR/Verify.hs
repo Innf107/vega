@@ -146,12 +146,9 @@ verifyInstruction = \case
                 Nothing -> verificationError $ "SumConstructor tag" <+> pretty tag <+> "is out of bounds for representation" <+> pretty representation
                 Just expectedRepresentation -> checkVarRepresentation payload expectedRepresentation var
             _ -> verificationError $ "Invalid non-sum representation for SumConstructor: " <> pretty representation
-    MIR.LoadFunctionPointer{var, functionName = _} -> do
+    MIR.LoadFunctionPointer{var, functionName = _, asGlobalClosure=_, representationArguments=_} -> do
         -- TODO: check that functionName exists
         insertVarRepresentation var (Core.PrimitiveRep (Vega.PointerRep))
-    MIR.LoadGlobalClosure{var, functionName = _} -> do
-        -- TODO: check that functionName exists
-        insertVarRepresentation var Core.functionRepresentation
     MIR.LoadGlobal{var, globalName, representation} -> do
         -- TODO: check that the global has the correct representation
         insertVarRepresentation var representation
@@ -166,6 +163,8 @@ verifyInstruction = \case
                 let sumTagSizeInBytes = smallestPowerOfTwoFitting (length constructors)
                 insertVarRepresentation var (PrimitiveRep (IntRep sumTagSizeInBytes))
             Just rep -> verificationError $ "LoadSumTag on variable " <> pretty var <> " of non-sum representation " <> pretty rep
+    MIR.LoadBoxedNull{var} -> do
+        insertVarRepresentation var (PrimitiveRep BoxedRep)
     MIR.CallDirect{var, functionName, arguments, representationArguments, returnRepresentation} -> do
         (expectedArgumentRepresentations, expectedReturnRepresentation) <- case Builtins.asPrimop functionName of
             Just primop -> pure (Builtins.primopRepresentation primop representationArguments)

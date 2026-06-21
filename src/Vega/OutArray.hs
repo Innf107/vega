@@ -1,11 +1,16 @@
-module Vega.OutArray where
+module Vega.OutArray (
+    OutArray,
+    new,
+    fill,
+    initializedToVector,
+) where
 
 import Relude
 
 import Control.Monad.ST.Strict (ST)
+import Data.Vector.Generic qualified as Vector
 import Data.Vector.Strict (MVector, Vector)
-import Data.Vector.Strict qualified as Vector
-import Data.Vector.Strict.Mutable qualified as Vector.Mutable
+import Data.Vector.Generic.Mutable qualified as Vector.Mutable
 import Effectful (Eff, (:>))
 import Vega.Effect.ST (STE, liftST)
 import Vega.Panic (panic)

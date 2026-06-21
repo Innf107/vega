@@ -176,7 +176,17 @@ compileClosureAccesses block entries = go mempty block entries
             (closure, closureRep) <- getLocal closureParameter
             functionPointer <- newVar "fp"
             let representationArguments = fmap Core.ParameterRep (DeBruijn.all ?currentRepresentationParameters)
-            block <- addInstruction block (MIR.LoadFunctionPointer functionPointer globalFunctionName representationArguments)
+            block <-
+                addInstruction
+                    block
+                    ( MIR.LoadFunctionPointer
+                        { var =
+                            functionPointer
+                        , functionName = globalFunctionName
+                        , asGlobalClosure = False
+                        , representationArguments
+                        }
+                    )
             var <- newVarFromName variableName
 
             let varRepresentation = Core.ProductRep [Core.PrimitiveRep Vega.PointerRep, closureRep]
@@ -496,7 +506,20 @@ compileVarInstantiation block var representationArguments = do
                         block <- addInstruction block (MIR.LoadGlobal{var, representationArguments, globalName, representation})
                         pure (block, var)
                     GlobalClosure -> do
-                        block <- addInstruction block (MIR.LoadGlobalClosure{var, representationArguments, functionName = globalName})
+                        pointerVar <- newVar "fp"
+                        block <-
+                            addInstruction
+                                block
+                                ( MIR.LoadFunctionPointer
+                                    { var = pointerVar
+                                    , asGlobalClosure = True
+                                    , representationArguments
+                                    , functionName = globalName
+                                    }
+                                )
+                        nullPointerVar <- newVar "null"
+                        block <- addInstruction block (MIR.LoadBoxedNull nullPointerVar)
+                        block <- addInstruction block (MIR.ProductConstructor{var, values = [pointerVar, nullPointerVar], representation = Core.functionRepresentation})
                         pure (block, var)
 
 compileValue :: (Compile es) => BlockBuilder -> Core.Value -> Eff es (BlockBuilder, MIR.Variable)
@@ -618,6 +641,7 @@ compileLocalFunction block functionName var parameters returnRepresentation stat
             block
             ( MIR.LoadFunctionPointer
                 { var = functionPointerVar
+                , asGlobalClosure = False
                 , functionName = lambdaName
                 , representationArguments = (fmap Core.ParameterRep $ DeBruijn.all ?currentRepresentationParameters)
                 }
