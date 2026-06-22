@@ -430,10 +430,7 @@ compileInstruction builder = \case
         let (tagLocation, tagSize) = case Layout.details layout of
                 Layout.TopLevelSumLayout{tagSize, tagLocation} -> (tagLocation, tagSize)
                 _ -> panic "Non-TopLevelSum layout in SumConstructor instruction"
-        -- We currently round up the tag size to the nearest number of bytes here.
-        -- This might change in the future, especially if we implement some form of
-        -- niche filling optimization
-        let tagValue = LLVM.constInt (LLVM.intType (Size.inBytes tagSize)) (fromIntegral tag) False
+        let tagValue = LLVM.constInt (LLVM.intType (Size.inBits tagSize)) (fromIntegral tag) False
         fillLocation builder valueBuilder tagLocation tagValue
 
         Layout.forContainedElementsAtSumConstructorIndex tag layout \path targetLocation -> do
