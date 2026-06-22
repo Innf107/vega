@@ -11,7 +11,9 @@ import Relude hiding (show)
 
 newtype Size = MkSize {sizeInBits :: Int}
 instance Show Size where
-    show (MkSize{sizeInBits}) = "fromBits " <> show sizeInBits
+    show size@(MkSize{sizeInBits})
+        | sizeInBits `mod` 8 == 0 = "fromBytes " <> show (inBytes size)
+        | otherwise = "fromBits " <> show (inBits size)
 
 fromBits :: Int -> Size
 fromBits sizeInBits = MkSize{sizeInBits}

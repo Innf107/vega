@@ -666,7 +666,9 @@ tryDecomposedRepresentationLayout representation = case representation of
                         , details = Primitive (BoxedScalar boxedIndex)
                         }
             Vega.PointerRep -> scalarAsLayout unboxedIndex (Size.fromBytes 8) (Alignment.fromValue 8) LLVM.pointerType
-            Vega.IntRep{sizeInBits} -> scalarAsLayout unboxedIndex (Size.fromBits sizeInBits) (Alignment.fromValue (8 * sizeInBits)) (LLVM.intType sizeInBits)
+            Vega.IntRep{sizeInBits} -> do
+                let size = Size.fromBits sizeInBits
+                scalarAsLayout unboxedIndex size (Alignment.fromValue (Size.inBytes size)) (LLVM.intType sizeInBits)
             Vega.DoubleRep -> scalarAsLayout unboxedIndex (Size.fromBytes 8) (Alignment.fromValue 8) LLVM.doubleType
         -- It's important that we include this here so that `((), Int)` will be decomposed to a single `i64` scalar
         Core.ProductRep Empty -> Just partialUnitLayout

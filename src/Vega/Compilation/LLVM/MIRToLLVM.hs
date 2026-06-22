@@ -1022,35 +1022,38 @@ accessLocation builder value layout location varName = case location of
         buildComplexLoad builder layout elementPointer varName
 
 accessElementByPath :: (HasCallStack) => Layout.ElementPath -> Layout -> Layout.ElementLocation
-accessElementByPath path layout = case Layout.details layout of
-    Layout.TopLevelSumLayout{tagSize = _, tagLocation, constructors} -> case path of
+accessElementByPath fullPath layout = case Layout.details layout of
+    Layout.TopLevelSumLayout{tagSize = _, tagLocation, constructors} -> case fullPath of
         Layout.SumConstructor index :<| rest -> go rest (constructors `NonEmpty.index` index)
         Layout.SumTag :<| Empty -> tagLocation
-        Layout.SumTag :<| _ -> panic $ "non-final sum tag in elment path: " <> show path
-        Layout.ProductField _ :<| _ -> panic $ "Trying to access element at product path on TopLevelSumLayout: " <> show path
+        Layout.SumTag :<| _ -> panic $ "non-final sum tag in elment path: " <> show fullPath
+        Layout.ProductField _ :<| _ -> panic $ "Trying to access element at product path on TopLevelSumLayout: " <> show fullPath
         Empty -> panic "Trying to access non-primitive path as element"
-    Layout.Simple nestedLayout -> go path nestedLayout
+    Layout.Simple nestedLayout -> go fullPath nestedLayout
   where
     go path nestedLayout = case path of
         Empty -> case nestedLayout of
             Layout.Primitive location -> location
             _ -> panic $ "Trying to access non-primitive path as element"
-        path@(Layout.SumConstructor _ :<| _) -> case nestedLayout of
-            Layout.NestedSumLayout{boxedIndices, decomposedIndices, unboxedOffset, layout} -> do
-                let innerElement = accessElementByPath path layout
-                case innerElement of
-                    Layout.BoxedScalar innerIndex -> Layout.BoxedScalar (boxedIndices `Seq.index` innerIndex)
-                    Layout.DecomposedScalar innerIndex -> Layout.DecomposedScalar (decomposedIndices `Seq.index` innerIndex)
-                    Layout.UnboxedOffset offset size alignment -> case unboxedOffset of
-                        Nothing -> panic $ "Returned UnboxedOffset location for a layout without an unboxed segment"
-                        Just innerOffset -> Layout.UnboxedOffset (innerOffset + offset) size alignment
-            _ -> mismatched "sum"
         Layout.ProductField index :<| rest -> case nestedLayout of
             Layout.ProductLayout inner -> go rest (inner `Seq.index` index)
             _ -> mismatched "product"
-        Layout.SumTag :<| _ -> panic "Trying to access nested sum layout with a SumTag path"
+        path@(Layout.SumConstructor _ :<| _) -> accessInNestedSumLayout nestedLayout path
+        path@(Layout.SumTag :<| _) -> accessInNestedSumLayout nestedLayout path
     mismatched :: (HasCallStack) => Doc Ann -> a
     mismatched kind = panic $ "Trying to use a " <> kind <> " path to access a non-" <> kind <> " layout"
+
+    accessInNestedSumLayout :: Layout.NestedLayoutDetails -> Layout.ElementPath -> Layout.ElementLocation
+    accessInNestedSumLayout nestedLayout path = case nestedLayout of
+        Layout.NestedSumLayout{boxedIndices, decomposedIndices, unboxedOffset, layout} -> do
+            let innerElement = accessElementByPath path layout
+            case innerElement of
+                Layout.BoxedScalar innerIndex -> Layout.BoxedScalar (boxedIndices `Seq.index` innerIndex)
+                Layout.DecomposedScalar innerIndex -> Layout.DecomposedScalar (decomposedIndices `Seq.index` innerIndex)
+                Layout.UnboxedOffset offset size alignment -> case unboxedOffset of
+                    Nothing -> panic $ "Returned UnboxedOffset location for a layout without an unboxed segment"
+                    Just innerOffset -> Layout.UnboxedOffset (innerOffset + offset) size alignment
+        _ -> mismatched "sum"
 
 copyElement ::
     (STE s :> es, Compile es) =>
