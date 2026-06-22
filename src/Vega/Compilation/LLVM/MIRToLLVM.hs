@@ -241,6 +241,7 @@ compileDeclaration = \case
             parametersWithLayouts <- for parameters \(parameter, representation) -> (parameter,) <$> Layout.representationLayout representation
             let parameterLayouts = fmap snd parametersWithLayouts
             returnLayout <- Layout.representationLayout returnRepresentation
+            -- TODO: that's a bit of an inefficient way of getting the sret parameter...
             (_functionType, sretParameter) <- functionLLVMType parameterLayouts returnLayout
 
             function <-
@@ -256,16 +257,18 @@ compileDeclaration = \case
                                 Nothing -> Nothing
                         }
 
-            let addParameterMappings currentIndex = \case
+            let addParameterMappings (currentIndex :: Int) = \case
                     Empty -> pure ()
                     (parameter, layout) :<| rest -> do
-                        let unboxedPointer = LLVM.getParam function <$> Layout.parameterUnboxedIndex layout
+                        let unboxedPointer = case Layout.parameterUnboxedIndex layout of
+                                Nothing -> Nothing
+                                Just unboxedIndex -> Just (LLVM.getParam function (currentIndex + unboxedIndex))
                         value <- runSTE \s -> do
                             valueBuilder <- Layout.newBuilderWithUnboxedPointer @s layout unboxedPointer
                             for_ @[] [0 .. Layout.boxedCount layout - 1] \boxedIndex -> do
-                                Layout.fillBoxed valueBuilder boxedIndex (LLVM.getParam function (Layout.parameterBoxedIndex layout boxedIndex))
+                                Layout.fillBoxed valueBuilder boxedIndex (LLVM.getParam function (currentIndex + Layout.parameterBoxedIndex layout boxedIndex))
                             forIndexed_ (Layout.decomposedScalars layout) \_scalar scalarIndex -> do
-                                Layout.fillDecomposed valueBuilder scalarIndex (LLVM.getParam function (Layout.parameterDecomposedScalarIndex layout scalarIndex))
+                                Layout.fillDecomposed valueBuilder scalarIndex (LLVM.getParam function (currentIndex + Layout.parameterDecomposedScalarIndex layout scalarIndex))
                             Layout.buildValue valueBuilder
                         insertVarMapping parameter value layout
                         addParameterMappings (currentIndex + Layout.parameterCount layout) rest
