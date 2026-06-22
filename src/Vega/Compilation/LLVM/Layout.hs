@@ -297,7 +297,7 @@ decomposedStride layout =
 
 -- | Return a 'Text' identifier that uniquely identifies this layout for the purposes of info-table generation
 identifier :: Layout -> Text
-identifier layout = "layout[size=" <> Relude.show layout.size <> ",boxed=" <> Relude.show layout.boxedCount <> "]"
+identifier layout = "layout[size=" <> Relude.show @_ @Int (Size.inBytes layout.size) <> ",boxed=" <> Relude.show @_ @Int layout.boxedCount <> "]"
 
 atRestBoxedOffset :: Layout -> Int -> Int
 -- See Note [At-rest vs in-flight] for why we can compute these offsets this way
@@ -607,7 +607,9 @@ representationLayout representation = do
                         }
                     , Primitive (BoxedScalar{inFlightIndex = context.boxedCountSoFar})
                     )
-            Vega.IntRep{sizeInBits} -> pure $ asUnboxedPrimitive context (Size.fromBits sizeInBits) (Alignment.fromValue (8 * sizeInBits))
+            Vega.IntRep{sizeInBits} -> do
+                let size = Size.fromBits sizeInBits
+                pure $ asUnboxedPrimitive context size (Alignment.fromValue (Size.inBytes size))
             Vega.PointerRep -> pure $ asUnboxedPrimitive context pointerSize pointerAlignment
             Vega.DoubleRep -> pure $ asUnboxedPrimitive context (Size.fromBytes 8) (Alignment.fromValue 8)
         rep@Core.ParameterRep{} -> panic $ "Non-monomorphized parameter representation in layout generation: " <> pretty rep

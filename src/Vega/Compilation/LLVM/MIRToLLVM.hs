@@ -1120,7 +1120,7 @@ buildComplexStore builder layout value baseTargetPointer = do
         let alignment = Alignment.toInt (Layout.unboxedAlignment layout)
         let size = LLVM.constInt LLVM.int64Type (fromIntegral (Size.inBytes (Layout.unboxedSize layout))) False
 
-        LLVMBuilder.buildMemCpy builder unboxedSourcePointer alignment targetPointer alignment size
+        LLVMBuilder.buildMemCpy builder targetPointer alignment unboxedSourcePointer alignment size
 
 buildArrayStore :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> LLVM.Value -> CompoundValue -> Eff es ()
 buildArrayStore builder layout array index value = do
