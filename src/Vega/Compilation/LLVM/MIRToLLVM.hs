@@ -17,9 +17,9 @@ import Data.Sequence qualified as Seq
 import Data.Text qualified as Text
 import Data.Traversable (for)
 import Data.Unique (hashUnique, newUnique)
+import Data.Vector.Generic qualified as Vector
 import Data.Vector.Storable qualified as Storable hiding ((!))
 import Data.Vector.Strict qualified as Strict hiding ((!))
-import Data.Vector.Generic qualified as Vector
 import Effectful (Eff, IOE, (:>))
 import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import GHC.Records (HasField, getField)
@@ -368,7 +368,7 @@ compileInstruction builder = \case
         let basePath = Layout.elementPathFromMIRPath path
         Layout.forContainedElements fieldLayout \elementPath targetLocation -> do
             let sourceLocation = accessElementByPath (basePath <> elementPath) parentLayout
-            copyElement builder sourceLocation parentValue targetLocation fieldBuilder            
+            copyElement builder sourceLocation parentValue targetLocation fieldLayout fieldBuilder
         fieldValue <- Layout.buildValue fieldBuilder
         insertVarMapping var fieldValue fieldLayout
     MIR.Box{var, target} -> do
@@ -402,7 +402,7 @@ compileInstruction builder = \case
                 (Layout.ProductField index :<| sourcePath) -> do
                     let (sourceValue, sourceLayout) = llvmValuesWithLayouts `Seq.index` index
                     let sourceLocation = accessElementByPath sourcePath sourceLayout
-                    copyElement builder sourceLocation sourceValue targetLocation valueBuilder
+                    copyElement builder sourceLocation sourceValue targetLocation layout valueBuilder
                 _ -> panic $ "Element with non-ProductField path in product layout: " <> show path
 
         builtValue <- Layout.buildValue valueBuilder
@@ -423,7 +423,7 @@ compileInstruction builder = \case
 
         Layout.forContainedElementsAtSumConstructorIndex tag layout \path targetLocation -> do
             let sourceLocation = accessElementByPath path payloadLayout
-            copyElement builder sourceLocation payload targetLocation valueBuilder
+            copyElement builder sourceLocation payload targetLocation layout valueBuilder
         value <- Layout.buildValue valueBuilder
         insertVarMapping var value layout
     MIR.LoadFunctionPointer{var, functionName, asGlobalClosure, representationArguments} -> do
@@ -1046,40 +1046,52 @@ copyElement ::
     Layout.ElementLocation ->
     Layout.CompoundValue ->
     Layout.ElementLocation ->
+    Layout ->
     Layout.CompoundValueBuilder s ->
     Eff es ()
-copyElement builder sourceLocation sourceValue targetLocation targetValueBuilder = case (sourceLocation, targetLocation) of
-    (Layout.UnboxedOffset sourceOffset sourceSize sourceAlignment, Layout.UnboxedOffset targetOffset targetSize targetAlignment) -> do
-        assert (Size.inBits sourceSize == Size.inBits targetSize)
-        case (Layout.unboxedPointer sourceValue, Layout.unboxedBuilderPointer targetValueBuilder) of
-            (Just sourceUnboxedPointer, Just targetUnboxedPointer) -> do
-                sourcePointer <- buildGEPOffset builder sourceUnboxedPointer sourceOffset "source"
-                targetPointer <- buildGEPOffset builder targetUnboxedPointer targetOffset "target"
-                _ <-
-                    LLVMBuilder.buildMemCpy
-                        builder
-                        targetPointer
-                        (Alignment.toInt sourceAlignment)
-                        sourcePointer
-                        (Alignment.toInt targetAlignment)
-                        (LLVM.constInt LLVM.int64Type (fromIntegral (Size.inBytes sourceSize)) False)
-                pure ()
-            _ -> panic "Trying to copy from/to unboxed offset in non-existent unboxed segment"
-    _ -> do
-        elementValue <- case sourceLocation of
-            Layout.BoxedScalar index -> pure $ Layout.boxedValues sourceValue Vector.! index
-            Layout.DecomposedScalar index -> pure $ Layout.decomposedScalarValues sourceValue Vector.! index
-            Layout.UnboxedOffset{inFlightOffsetInBytes, size, alignment} -> do
-                undefined
-        case targetLocation of
-            Layout.BoxedScalar index -> Layout.fillBoxed targetValueBuilder index elementValue
-            Layout.DecomposedScalar index -> Layout.fillDecomposed targetValueBuilder index elementValue
-            Layout.UnboxedOffset{inFlightOffsetInBytes, size, alignment} -> case Layout.unboxedBuilderPointer targetValueBuilder of
-                Nothing -> panic "Trying to copy to unboxed offset of a value builder without an unboxed segment"
-                Just basePointer -> do
-                    targetPointer <- buildGEPOffset builder basePointer inFlightOffsetInBytes "target"
+copyElement builder sourceLocation sourceValue targetLocation targetLayout targetValueBuilder = do
+    elementValueOrOffset <- case sourceLocation of
+        Layout.BoxedScalar index -> pure $ Left $ Layout.boxedValues sourceValue Vector.! index
+        Layout.DecomposedScalar index -> pure $ Left $ Layout.decomposedScalarValues sourceValue Vector.! index
+        Layout.UnboxedOffset{inFlightOffsetInBytes, size, alignment} -> case Layout.unboxedPointer sourceValue of
+            Nothing -> panic "Trying to copy from unboxed offset in layout without unboxed segment"
+            Just basePointer -> do
+                pointer <- buildGEPOffset builder basePointer inFlightOffsetInBytes ""
+                pure $ Right (pointer, size, alignment)
+    case targetLocation of
+        Layout.BoxedScalar index -> case elementValueOrOffset of
+            Left elementValue -> Layout.fillBoxed targetValueBuilder index elementValue
+            Right (pointer, _size, alignment) -> do
+                elementValue <- LLVMBuilder.buildLoad builder LLVM.pointerType pointer "source"
+                LLVM.setAlignment elementValue (Alignment.toInt alignment)
+                Layout.fillBoxed targetValueBuilder index elementValue
+        Layout.DecomposedScalar index -> case elementValueOrOffset of
+            Left elementValue -> Layout.fillDecomposed targetValueBuilder index elementValue
+            Right (pointer, _size, alignment) -> do
+                let llvmType = Layout.decomposedScalars targetLayout `Seq.index` index
+
+                elementValue <- LLVMBuilder.buildLoad builder llvmType pointer "source"
+                LLVM.setAlignment elementValue (Alignment.toInt alignment)
+                Layout.fillDecomposed targetValueBuilder index elementValue
+        Layout.UnboxedOffset{inFlightOffsetInBytes=targetOffset, size=targetSize, alignment=targetAlignment} -> case Layout.unboxedBuilderPointer targetValueBuilder of
+            Nothing -> panic "Trying to copy to unboxed offset of a value builder without an unboxed segment"
+            Just targetBasePointer -> case elementValueOrOffset of
+                Left elementValue -> do
+                    targetPointer <- buildGEPOffset builder targetBasePointer targetOffset "target"
                     storeInstruction <- LLVMBuilder.buildStore builder elementValue targetPointer
-                    LLVM.setAlignment storeInstruction (Alignment.toInt alignment)
+                    LLVM.setAlignment storeInstruction (Alignment.toInt targetAlignment)
+                    pure ()
+                Right (sourcePointer, sourceSize, sourceAlignment) -> do
+                    assert (Size.inBits sourceSize == Size.inBits targetSize)
+                    targetPointer <- buildGEPOffset builder targetBasePointer targetOffset "target"
+                    _ <-
+                        LLVMBuilder.buildMemCpy
+                            builder
+                            targetPointer
+                            (Alignment.toInt sourceAlignment)
+                            sourcePointer
+                            (Alignment.toInt targetAlignment)
+                            (LLVM.constInt LLVM.int64Type (fromIntegral (Size.inBytes sourceSize)) False)
                     pure ()
 
 buildAtRestAlloca :: (Compile es) => LLVMBuilder.Builder -> Layout -> Text -> Eff es LLVM.Value
@@ -1176,7 +1188,7 @@ buildComplexLoad builder layout basePointer varName = runSTE \s -> do
     forIndexed_ (Layout.decomposedScalars layout) \scalarType scalarIndex -> do
         scalarPointer <- buildGEPOffset builder basePointer (Layout.atRestDecomposedScalarOffset layout scalarIndex) (varName <> ".scalar")
         value <- LLVMBuilder.buildLoad builder scalarType scalarPointer ""
-        Layout.fillBoxed valueBuilder scalarIndex value
+        Layout.fillDecomposed valueBuilder scalarIndex value
     for_ @Maybe (Layout.unboxedBuilderPointer valueBuilder) \targetPointer -> do
         sourcePointer <- buildGEPOffset builder basePointer (Layout.atRestUnboxedOffset layout) ""
         let alignment = Alignment.toInt (Layout.unboxedAlignment layout)

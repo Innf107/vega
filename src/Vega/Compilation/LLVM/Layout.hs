@@ -15,6 +15,7 @@ module Vega.Compilation.LLVM.Layout (
     atRestBoxedOffset,
     atRestDecomposedScalarOffset,
     atRestUnboxedOffset,
+    atRestOffsetInBytes,
     atRestLLVMType,
     buildAtRestAlloca,
     llvmParameters,
@@ -445,7 +446,7 @@ fillDecomposed builder index value = OutArray.fill builder.decomposedScalars ind
 unboxedBuilderPointer :: CompoundValueBuilder s -> Maybe LLVM.Value
 unboxedBuilderPointer builder = builder.unboxedPointer
 
-buildValue :: (STE s :> es) => CompoundValueBuilder s -> Eff es CompoundValue
+buildValue :: (STE s :> es, HasCallStack) => CompoundValueBuilder s -> Eff es CompoundValue
 buildValue builder = do
     boxed <- OutArray.initializedToVector builder.boxed
     decomposedScalars <- OutArray.initializedToVector builder.decomposedScalars
