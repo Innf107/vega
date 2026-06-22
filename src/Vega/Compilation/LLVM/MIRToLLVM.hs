@@ -427,6 +427,8 @@ compileInstruction builder = \case
         Layout.forContainedElementsAtSumConstructorIndex tag layout \path targetLocation -> do
             let sourceLocation = accessElementByPath path payloadLayout
             copyElement builder sourceLocation payload targetLocation layout valueBuilder
+
+        Layout.fillRemainingBoxedWithNull valueBuilder
         value <- Layout.buildValue valueBuilder
         insertVarMapping var value layout
     MIR.LoadFunctionPointer{var, functionName, asGlobalClosure, representationArguments} -> do
@@ -1208,7 +1210,7 @@ fillLocation builder valueBuilder location value = case location of
         Nothing -> panic "Trying to fill unboxed offset location of a value builder without an unboxed segment"
         Just pointer -> do
             contentPointer <- buildGEPOffset builder pointer offset ""
-            storeInstruction <- LLVMBuilder.buildStore builder contentPointer value
+            storeInstruction <- LLVMBuilder.buildStore builder value contentPointer
             -- We don't need the size here, but the alignment could be higher than the natural alignment that
             -- LLVM expects so we can set it explicitly
             LLVM.setAlignment storeInstruction (Alignment.toInt alignment)

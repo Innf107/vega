@@ -49,6 +49,7 @@ module Vega.Compilation.LLVM.Layout (
     newBuilder,
     newBuilderWithUnboxedPointer,
     fillBoxed,
+    fillRemainingBoxedWithNull,
     fillDecomposed,
     unboxedBuilderPointer,
     buildValue,
@@ -439,6 +440,9 @@ newBuilder builder layout = do
 
 fillBoxed :: (STE s :> es, HasCallStack) => CompoundValueBuilder s -> Int -> LLVM.Value -> Eff es ()
 fillBoxed builder index value = OutArray.fill builder.boxed index value
+
+fillRemainingBoxedWithNull :: (STE s :> es, HasCallStack, ?context :: LLVM.Context) => CompoundValueBuilder s -> Eff es ()
+fillRemainingBoxedWithNull builder = OutArray.fillRemaining builder.boxed LLVM.constNullPointer
 
 fillDecomposed :: (STE s :> es, HasCallStack) => CompoundValueBuilder s -> Int -> LLVM.Value -> Eff es ()
 fillDecomposed builder index value = OutArray.fill builder.decomposedScalars index value
