@@ -378,22 +378,29 @@ compileInstruction builder = \case
         -- TODO: we should probably inline the fast path for minor heap allocations here
         (targetValue, targetLayout) <- lookupVar target
 
-        layoutInfoTablePointer <- getOrCreateLayoutInfoTablePointer targetLayout
+        case Size.inBytes (Layout.sizeAtRest targetLayout) of
+            -- We special case `box(())` to return a null pointer since there is no information stored in a trivial target like this anyway
+            -- and we don't have pointer comparisons or anything like that
+            0 -> insertVarMapping var (Layout.boxedCompoundValue LLVM.constNullPointer) Layout.boxedLayout
+            _ -> do
+                layoutInfoTablePointer <- getOrCreateLayoutInfoTablePointer targetLayout
 
-        memoryPointer <- buildRuntimeCall builder "vega_allocate_boxed" [layoutInfoTablePointer] (renderVariable var)
-        let boxedCompoundValue = Layout.boxedCompoundValue memoryPointer
-        insertVarMapping var boxedCompoundValue Layout.boxedLayout
+                memoryPointer <- buildRuntimeCall builder "vega_allocate_boxed" [layoutInfoTablePointer] (renderVariable var)
+                let boxedCompoundValue = Layout.boxedCompoundValue memoryPointer
+                insertVarMapping var boxedCompoundValue Layout.boxedLayout
 
-        buildComplexStore builder targetLayout targetValue memoryPointer
+                buildComplexStore builder targetLayout targetValue memoryPointer
     MIR.Unbox{var, boxedTarget, representation} -> do
         (targetValue, _) <- lookupVar boxedTarget
         layout <- Layout.representationLayout representation
-
-        Util.assert (Vector.null (Layout.decomposedScalarValues targetValue))
-        Util.assert (isNothing (Layout.unboxedPointer targetValue))
-        case Layout.boxedValues targetValue of
-            [pointerValue] -> asVar_ var layout $ buildComplexLoad builder layout pointerValue
-            _ -> panic $ "Trying to unbox non-boxed compound value " <> pretty targetValue
+        case Size.inBytes (Layout.sizeAtRest layout) of
+            0 -> insertVarMapping var (Layout.unitCompoundValue) layout
+            _ -> do
+                Util.assert (Vector.null (Layout.decomposedScalarValues targetValue))
+                Util.assert (isNothing (Layout.unboxedPointer targetValue))
+                case Layout.boxedValues targetValue of
+                    [pointerValue] -> asVar_ var layout $ buildComplexLoad builder layout pointerValue
+                    _ -> panic $ "Trying to unbox non-boxed compound value " <> pretty targetValue
     MIR.ProductConstructor{var, values, representation} -> runSTE \s -> do
         llvmValuesWithLayouts <- for values lookupVar
         layout <- Layout.representationLayout representation
@@ -1078,7 +1085,7 @@ copyElement builder sourceLocation sourceValue targetLocation targetLayout targe
                 elementValue <- LLVMBuilder.buildLoad builder llvmType pointer "source"
                 LLVM.setAlignment elementValue (Alignment.toInt alignment)
                 Layout.fillDecomposed targetValueBuilder index elementValue
-        Layout.UnboxedOffset{inFlightOffsetInBytes=targetOffset, size=targetSize, alignment=targetAlignment} -> case Layout.unboxedBuilderPointer targetValueBuilder of
+        Layout.UnboxedOffset{inFlightOffsetInBytes = targetOffset, size = targetSize, alignment = targetAlignment} -> case Layout.unboxedBuilderPointer targetValueBuilder of
             Nothing -> panic "Trying to copy to unboxed offset of a value builder without an unboxed segment"
             Just targetBasePointer -> case elementValueOrOffset of
                 Left elementValue -> do
