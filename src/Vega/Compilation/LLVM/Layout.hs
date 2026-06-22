@@ -84,7 +84,7 @@ import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Data.Vector.Storable qualified as Storable
 import Data.Vector.Strict (Vector)
-import Data.Vector.Strict qualified as Vector
+import Data.Vector.Generic qualified as Vector
 import Effectful (Eff, IOE, runPureEff, (:>))
 import LLVM.Core qualified as LLVM
 import LLVM.Core.Context qualified as LLVM
@@ -142,7 +142,9 @@ data Layout = MkLayout
     { size :: Size
     , alignment :: Alignment
     , boxedCount :: Int
-    , decomposedScalars :: Seq (LLVM.Type, Size, Alignment)
+    , -- decomposed scalars store their LLVM type and at rest offset *from the decomposed section*
+      -- (see Note [At-rest vs in-flight])
+      decomposedScalars :: Seq (LLVM.Type, Int)
     , unboxedAlignment :: Alignment
     , unboxedSize :: Size
     , details :: TopLevelLayoutDetails
@@ -185,8 +187,8 @@ so we can use this to calculate offsets into arrays or other homogenous structur
 strideAtRest :: Layout -> Size
 strideAtRest layout = Size.fromBytes (Alignment.align (alignment layout) (Size.inBytes (sizeAtRest layout)))
 
-decomposedScalars :: Layout -> Seq (LLVM.Type, Size, Alignment)
-decomposedScalars layout = layout.decomposedScalars
+decomposedScalars :: Layout -> Seq LLVM.Type
+decomposedScalars layout = fmap fst layout.decomposedScalars
 
 details :: Layout -> TopLevelLayoutDetails
 -- I don't love having to expose the entirity of LayoutDetails here but i'm not sure how else we would do nested product/sum constructors
@@ -195,7 +197,7 @@ details layout = layout.details
 llvmParameters :: (?context :: LLVM.Context) => Layout -> Seq (LLVM.Type, Seq LLVM.Attribute)
 llvmParameters layout = do
     let boxedParameters = Seq.replicate (boxedCount layout) (LLVM.pointerType, [])
-    let scalarParameters = fmap (\(type_, _, _) -> (type_, [])) (decomposedScalars layout)
+    let scalarParameters = fmap (\type_ -> (type_, [])) (decomposedScalars layout)
     let unboxedParameter = case Size.inBytes (unboxedSize layout) of
             0 -> []
             _ -> do
@@ -211,10 +213,10 @@ byvalAttribute llvmType = unsafePerformIO do
 
 -- | Specifies how values of this layout should be returned by functions
 returnConvention :: Layout -> ReturnConvention
-returnConvention layout = case (boxedCount layout, decomposedScalars layout, Size.inBytes (unboxedSize layout)) of
+returnConvention layout = case (boxedCount layout, layout.decomposedScalars, Size.inBytes (unboxedSize layout)) of
     (0, [], 0) -> Void
     (1, [], 0) -> SingleBoxed
-    (0, [(scalarType, _, _)], 0) -> SingleScalar scalarType
+    (0, [(scalarType, _)], 0) -> SingleScalar scalarType
     (_, _, 0) -> ScalarStruct
     _ -> SRetPointer
 
@@ -280,7 +282,7 @@ scalarStructType :: (?context :: LLVM.Context) => Layout -> LLVM.Type
 scalarStructType layout = assert (case returnConvention layout of ScalarStruct -> True; _ -> False) do
     LLVM.structType
         ( Storable.replicate (boxedCount layout) LLVM.pointerType
-            <> Util.viaList (fmap (\(type_, _, _) -> type_) (decomposedScalars layout))
+            <> Util.viaList (decomposedScalars layout)
         )
         False
 
@@ -301,7 +303,9 @@ atRestBoxedOffset :: Layout -> Int -> Int
 atRestBoxedOffset layout boxedIndex = boxedIndex * Size.inBytes pointerSize
 
 atRestDecomposedScalarOffset :: Layout -> Int -> Int
-atRestDecomposedScalarOffset layout scalarIndex = layout.boxedCount * Size.inBytes pointerSize + undefined
+atRestDecomposedScalarOffset layout scalarIndex = do
+    let (_, scalarSegmentOffset) = layout.decomposedScalars `Seq.index` scalarIndex
+    layout.boxedCount * Size.inBytes pointerSize + scalarSegmentOffset
 
 atRestUnboxedOffset :: Layout -> Int
 atRestUnboxedOffset layout = layout.boxedCount * Size.inBytes pointerSize + Size.inBytes (decomposedStride layout)
@@ -332,20 +336,19 @@ buildAtRestAlloca builder layout varName = case atRestLLVMType layout of
     Just llvmType -> LLVMBuilder.buildAlloca builder llvmType varName
 
 -- | The index of the function parameter corresponding to the i-th boxed component
-parameterBoxedIndex :: HasCallStack => Layout -> Int -> Int
+parameterBoxedIndex :: (HasCallStack) => Layout -> Int -> Int
 parameterBoxedIndex layout index = assertInBounds index (boxedCount layout) do
     index
 
 -- | The index of the function parameter corresponding to the i-th decomposed scalar
-parameterDecomposedScalarIndex :: HasCallStack => Layout -> Int -> Int
+parameterDecomposedScalarIndex :: (HasCallStack) => Layout -> Int -> Int
 parameterDecomposedScalarIndex layout index = assertInBounds index (length (decomposedScalars layout)) do
     boxedCount layout + index
 
-assertInBounds :: HasCallStack => Int -> Int -> a -> a
+assertInBounds :: (HasCallStack) => Int -> Int -> a -> a
 assertInBounds value size result
     | value >= 0 && value < size = result
     | otherwise = panic $ "Access at index " <> number value <> " out of bounds for size " <> number size
-
 
 {- | The index of the pointer corresponding to the unboxed segment of the layout when passed as a function parameter
 This is 'Nothing' if the layout does not have an unboxed segment
@@ -634,7 +637,7 @@ tryDecomposedRepresentationLayout representation = case representation of
                     { size = totalSize $ fmap (\layout -> (layout.size, layout.alignment)) layouts
                     , alignment = maximum (fmap (\layout -> layout.alignment) layouts)
                     , boxedCount
-                    , decomposedScalars = foldMap (\layout -> layout.decomposedScalars) layouts
+                    , decomposedScalars = computeScalarOffsets $ foldMap (\layout -> layout.decomposedScalars) layouts
                     , unboxedAlignment = Alignment.fromValue 1
                     , unboxedSize = Size.fromBytes 0
                     , details = Simple $ ProductLayout (fmap (\layout -> layout.details) (NonEmpty.toSeq layouts))
@@ -656,7 +659,7 @@ tryDecomposedRepresentationLayout representation = case representation of
                         , details = Primitive (BoxedScalar boxedIndex)
                         }
             Vega.PointerRep -> scalarAsLayout unboxedIndex (Size.fromBytes 8) (Alignment.fromValue 8) LLVM.pointerType
-            Vega.IntRep{sizeInBits} -> scalarAsLayout unboxedIndex (Size.fromBits sizeInBits) (Alignment.fromValue (8 * sizeInBits)) (LLVM.intType (8 * sizeInBits))
+            Vega.IntRep{sizeInBits} -> scalarAsLayout unboxedIndex (Size.fromBits sizeInBits) (Alignment.fromValue (8 * sizeInBits)) (LLVM.intType sizeInBits)
             Vega.DoubleRep -> scalarAsLayout unboxedIndex (Size.fromBytes 8) (Alignment.fromValue 8) LLVM.doubleType
         -- It's important that we include this here so that `((), Int)` will be decomposed to a single `i64` scalar
         Core.ProductRep Empty -> Just partialUnitLayout
@@ -698,7 +701,23 @@ completeLayout MkPartialLayout{size, alignment, boxedCount, decomposedScalars, u
     case details of
         -- Nested sums already store their own representation so we can skip the partial layout information we have in that case
         NestedSumLayout{layout} -> layout
-        _ -> MkLayout{size, alignment, boxedCount, decomposedScalars, unboxedAlignment, unboxedSize, details = Simple details}
+        _ ->
+            MkLayout
+                { size
+                , alignment
+                , boxedCount
+                , decomposedScalars = computeScalarOffsets decomposedScalars
+                , unboxedAlignment
+                , unboxedSize
+                , details = Simple details
+                }
+
+computeScalarOffsets :: Seq (LLVM.Type, Size, Alignment) -> Seq (LLVM.Type, Int)
+computeScalarOffsets partialScalars = flip evalState 0 $ for partialScalars \(type_, size, alignment) -> do
+    currentOffset <- get
+    let offset = Alignment.align alignment currentOffset
+    put $ currentOffset + Size.inBytes size
+    pure (type_, offset)
 
 totalSize :: (Foldable f) => f (Size, Alignment) -> Size
 totalSize foldable = Size.fromBytes $ foldl' addElement 0 foldable
@@ -747,7 +766,7 @@ boolLayout =
         { size = Size.fromBytes 1
         , alignment = Alignment.fromValue 1
         , boxedCount = 0
-        , decomposedScalars = [(LLVM.int1Type, Size.fromBits 1, Alignment.fromValue 1)]
+        , decomposedScalars = [(LLVM.int1Type, 0)]
         , unboxedAlignment = Alignment.fromValue 1
         , unboxedSize = Size.fromBytes 0
         , details =

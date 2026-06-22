@@ -343,7 +343,7 @@ compilePhis builder (MIR.MkPhis phis) = do
             boxedValue <- LLVMBuilder.buildPhi builder LLVM.pointerType incoming (varName <> ".boxed")
             Layout.fillBoxed valueBuilder boxedIndex boxedValue
             registerGCRoot boxedValue
-        forIndexed_ (Layout.decomposedScalars layout) \(type_, _, _) scalarIndex -> do
+        forIndexed_ (Layout.decomposedScalars layout) \type_ scalarIndex -> do
             let incoming = fmap (\(compound, block) -> (Layout.decomposedScalarValues compound Vector.! scalarIndex, block)) incomingValues
             scalarValue <- LLVMBuilder.buildPhi builder type_ incoming (varName <> ".scalar")
             Layout.fillDecomposed valueBuilder scalarIndex scalarValue
@@ -1157,7 +1157,7 @@ buildLoadAsReference builder layout basePointer varName = runSTE \s -> do
         value <- LLVMBuilder.buildLoad builder LLVM.pointerType boxPointer ""
         registerGCRoot value
         Layout.fillBoxed valueBuilder boxedIndex value
-    forIndexed_ (Layout.decomposedScalars layout) \(scalarType, _scalarSize, _scalarOffset) scalarIndex -> do
+    forIndexed_ (Layout.decomposedScalars layout) \scalarType scalarIndex -> do
         scalarPointer <- buildGEPOffset builder basePointer (Layout.atRestDecomposedScalarOffset layout scalarIndex) (varName <> ".scalar")
         value <- LLVMBuilder.buildLoad builder scalarType scalarPointer ""
         Layout.fillBoxed valueBuilder scalarIndex value
@@ -1173,7 +1173,7 @@ buildComplexLoad builder layout basePointer varName = runSTE \s -> do
         value <- LLVMBuilder.buildLoad builder LLVM.pointerType boxPointer ""
         registerGCRoot value
         Layout.fillBoxed valueBuilder boxedIndex value
-    forIndexed_ (Layout.decomposedScalars layout) \(scalarType, _scalarSize, _scalarOffset) scalarIndex -> do
+    forIndexed_ (Layout.decomposedScalars layout) \scalarType scalarIndex -> do
         scalarPointer <- buildGEPOffset builder basePointer (Layout.atRestDecomposedScalarOffset layout scalarIndex) (varName <> ".scalar")
         value <- LLVMBuilder.buildLoad builder scalarType scalarPointer ""
         Layout.fillBoxed valueBuilder scalarIndex value
