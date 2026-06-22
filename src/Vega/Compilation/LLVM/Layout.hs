@@ -114,6 +114,8 @@ import Vega.Syntax qualified as Vega
 import Vega.Util (forAccumLM, forIndexed, forIndexed_, mapAccumLM, smallestPowerOfTwoFitting)
 import Vega.Util qualified as Util
 import Witherable (catMaybes, mapMaybe, wither)
+import Effectful.Dispatch.Static (unsafeEff_)
+import qualified Data.HashMap.Strict as HashMap
 
 {- Note [At-rest vs in-flight]:
 -------------------------------
@@ -486,9 +488,20 @@ data LayoutContext = MkLayoutContext
     , unboxedAlignmentSoFar :: Alignment
     }
 
--- TODO: cache this
+--TODO: do something smarter:
+-- - this should probably be controlled by graph persistence (it *might* even make sense to serialize very complex layouts to disk)
+-- - we should use some sort of LRU mechanism so this doesn't eat up all memory (although we should probably measure the actual usage first)
+-- - we should try using a (compressed) trie instead of a dumb hash map
+cached :: IORef (HashMap Representation Layout)
+cached = unsafePerformIO $ newIORef mempty
+{-# NOINLINE cached #-}
+
 representationLayout :: (?context :: LLVM.Context) => Representation -> Eff es Layout
 representationLayout representation = do
+ cache <- unsafeEff_ $ readIORef cached
+ case HashMap.lookup representation cache of
+  Just layout -> pure layout
+  Nothing -> do
     case tryDecomposedRepresentationLayout representation of
         Just layout -> pure layout
         Nothing -> do
