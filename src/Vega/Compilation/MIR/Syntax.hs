@@ -87,15 +87,23 @@ data Instruction
     | Unbox {var :: Variable, boxedTarget :: Variable, representation :: Representation}
     | ProductConstructor {var :: Variable, values :: Seq Variable, representation :: Representation}
     | SumConstructor {var :: Variable, tag :: Int, payload :: Variable, representation :: Representation}
-    | LoadFunctionPointer {var :: Variable, functionName :: Vega.GlobalName, representationArguments :: Seq Representation}
-    | -- TODO: we should probably replace LoadGlobalClosure with LoadFunctionPointer and ProductConstructor.
-      -- This will also let us remove the awkward LLVM bits where layout generation only has implicit knowledge of
-      -- the MIR representation of closures
-      LoadGlobalClosure {var :: Variable, functionName :: Vega.GlobalName, representationArguments :: Seq Representation}
+    | {- | Load a pointer to the (given instantiation of the) given function. If 'asGlobalClosure' is True,
+      this will load a function to its generated wrapper that takes an ignored Boxed dummy payload argument
+      and tail calls into the actual function.
+
+      This is only valid for top-level functions since local functions always take a closure argument anyway.
+      -}
+      LoadFunctionPointer
+        { var :: Variable
+        , functionName :: Vega.GlobalName
+        , asGlobalClosure :: Bool
+        , representationArguments :: Seq Representation
+        }
     | LoadGlobal {var :: Variable, representationArguments :: Seq Representation, globalName :: Vega.GlobalName, representation :: Representation}
     | LoadIntLiteral {var :: Variable, literal :: Int, sizeInBits :: Int}
     | LoadByteArrayLiteral {var :: Variable, bytes :: ByteString}
     | LoadSumTag {var :: Variable, sum :: Variable}
+    | LoadBoxedNull {var :: Variable}
     | CallDirect
         { var :: Variable
         , functionName :: Vega.GlobalName
@@ -234,16 +242,12 @@ instance Pretty Instruction where
             pretty var <+> keyword "=" <+> keyword "product" <+> arguments values <+> keyword ":" <+> pretty representation
         SumConstructor{var, tag, payload, representation} ->
             pretty var <+> keyword "=" <+> keyword "sum" <+> lparen "[" <> number tag <> rparen "]" <> lparen "(" <> pretty payload <> rparen ")" <+> keyword ":" <+> pretty representation
-        LoadFunctionPointer{var, functionName, representationArguments} -> do
+        LoadFunctionPointer{var, functionName, asGlobalClosure, representationArguments} -> do
             let instantiation = case representationArguments of
                     [] -> mempty
                     _ -> lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty representationArguments) <> rparen "]"
-            keywordInstruction "loadFunctionPointer" var [Vega.prettyGlobal Vega.VarKind functionName <> instantiation]
-        LoadGlobalClosure{var, functionName, representationArguments} -> do
-            let instantiation = case representationArguments of
-                    [] -> mempty
-                    _ -> lparen "[" <> intercalateDoc (keyword ", ") (fmap pretty representationArguments) <> rparen "]"
-            keywordInstruction "loadGlobalClosure" var [Vega.prettyGlobal Vega.VarKind functionName <> instantiation]
+            let closureSpecifier = if asGlobalClosure then [keyword "closure"] else []
+            keywordInstruction "loadFunctionPointer" var (closureSpecifier <> [Vega.prettyGlobal Vega.VarKind functionName <> instantiation])
         LoadGlobal var representationArguments globalName representation -> do
             let instantiation = case representationArguments of
                     [] -> mempty
@@ -254,6 +258,7 @@ instance Pretty Instruction where
         LoadByteArrayLiteral var content ->
             keywordInstruction "loadByteArrayLiteral" var [literal (show content)]
         LoadSumTag{var, sum} -> keywordInstruction "loadSumTag" var [pretty sum]
+        LoadBoxedNull{var} -> keywordInstruction "loadBoxedNull" var []
         CallDirect{var, representationArguments, functionName, arguments = callArguments} -> do
             let instantiation = case representationArguments of
                     [] -> mempty

@@ -13,6 +13,7 @@ module Vega.Seq.NonEmpty (
     mapWithIndex,
     foldl1',
     maximum,
+    index,
 ) where
 
 import Relude hiding (NonEmpty, first, last, unzip)
@@ -87,3 +88,6 @@ foldl1' f (x :<|| xs) = foldl' f x xs
 
 maximum :: (Ord a) => NonEmpty a -> a
 maximum nonEmpty = Prelude.maximum (toSeq nonEmpty)
+
+index :: HasCallStack => NonEmpty a -> Int -> a
+index (MkNonEmpty seq) index = seq `Seq.index` index

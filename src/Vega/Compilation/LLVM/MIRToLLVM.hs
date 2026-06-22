@@ -5,19 +5,21 @@
 
 module Vega.Compilation.LLVM.MIRToLLVM (compile, addMainFunction) where
 
-import Relude hiding (State, evalState, get, modify, prettyCallStack, put, trace)
+import Relude hiding (NonEmpty, State, evalState, get, modify, prettyCallStack, put, trace)
 
 import Data.ByteString qualified as ByteString
 import Data.HashMap.Strict qualified as HashMap
 import Data.HashSet (HashSet)
 import Data.HashSet qualified as HashSet
+import Data.IntMap.Strict qualified as IntMap
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Text qualified as Text
 import Data.Traversable (for)
 import Data.Unique (hashUnique, newUnique)
-import Data.Vector.Storable qualified as Storable
-import Data.Vector.Strict qualified as Strict
+import Data.Vector.Generic qualified as Vector
+import Data.Vector.Storable qualified as Storable hiding ((!))
+import Data.Vector.Strict qualified as Strict hiding ((!))
 import Effectful (Eff, IOE, (:>))
 import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import GHC.Records (HasField, getField)
@@ -35,7 +37,7 @@ import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, addFunctionWithAttributes, attributeFunctionType, buildCallWithAttributes, parametersWithAttributes, rawFunctionType, returnTypeWithAttributes)
 import Vega.Compilation.LLVM.AttributeFunctionType qualified as AttributeFunctionType
-import Vega.Compilation.LLVM.Layout (Layout)
+import Vega.Compilation.LLVM.Layout (CompoundValue (..), Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
 import Vega.Compilation.LLVM.Runtime (RuntimeDefinitions (..), declareRuntimeDefinitions)
 import Vega.Compilation.LLVM.Runtime.Heap qualified as Heap
@@ -43,20 +45,25 @@ import Vega.Compilation.LLVM.Runtime.ToLLVMConstant (ToLLVMConstant (toLLVMConst
 import Vega.Compilation.LLVM.Runtime.ToLLVMConstant qualified as ToLLVMConstant
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Debug (showHeadConstructor)
+import Vega.Effect.ST (STE, liftST, runSTE)
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
+import Vega.OutArray qualified as OutArray
 import Vega.Panic (panic, prettyCallStack)
-import Vega.Pretty (pretty)
+import Vega.Pretty (Ann, Doc, pretty)
 import Vega.Pretty qualified as Pretty
+import Vega.Seq.NonEmpty (NonEmpty ((:<||)), pattern NonEmpty)
+import Vega.Seq.NonEmpty qualified as NonEmpty
+import Vega.Size qualified as Size
 import Vega.Syntax (renderPackageName)
 import Vega.Syntax qualified as Vega
-import Vega.Util (Sign (..), forIndexed_, viaList, type (?))
+import Vega.Util (Sign (..), assert, forIndexed_, viaList, type (?))
 import Vega.Util qualified as Util
 import Witherable qualified
 
 data DeclarationState = MkDeclarationState
     { registeredBlocks :: HashMap MIR.BlockDescriptor LLVM.BasicBlock
     , outstandingBlocks :: Seq MIR.BlockDescriptor
-    , variableMappings :: HashMap MIR.Variable (LLVM.Value, Layout)
+    , variableMappings :: HashMap MIR.Variable (Layout.CompoundValue, Layout)
     }
 
 data FunctionEnv = MkFunctionEnv
@@ -116,19 +123,23 @@ functionLLVMType ::
     Layout ->
     Eff es (AttributeFunctionType, "sretParameter" ? Maybe (Int, Layout))
 functionLLVMType parameters returnLayout = do
-    let baseParameterTypes = Witherable.mapMaybe Layout.llvmParameterType parameters
+    let baseParameterTypes = foldMap Layout.llvmParameters parameters
 
-    (parameterTypes, returnType, usesSRet) <- case Layout.kind returnLayout of
-        Layout.AggregatePointer -> do
-            -- If we return a complex (AggregatePointer) value, we can't return it directly
-            -- but instead we need to assign it to an sret parameter. This always needs to be the *first* parameter.
-            --
-            -- TODO: alignment?
-            sretAttribute <- sretAttribute (Layout.llvmType returnLayout)
+    (parameterTypes, returnType, usesSRet) <- case Layout.returnConvention returnLayout of
+        Layout.Void -> pure (baseParameterTypes, LLVM.voidType, False)
+        Layout.SingleBoxed -> pure (baseParameterTypes, LLVM.pointerType, False)
+        Layout.SingleScalar scalar -> pure (baseParameterTypes, scalar, False)
+        Layout.SRetPointer -> do
+            let returnLLVMType = case Layout.atRestLLVMType returnLayout of
+                    Nothing -> panic "Trying to return zero-sized layout via an sret pointer"
+                    Just llvmType -> llvmType
+            -- The sret parameter always has to be the first parameter
+            sretAttribute <- sretAttribute returnLLVMType
             alignmentAttribute <- alignAttribute (Layout.alignment returnLayout)
             pure ((LLVM.pointerType, [sretAttribute, alignmentAttribute]) :<| baseParameterTypes, LLVM.voidType, True)
-        Layout.LLVMScalar scalar -> pure (baseParameterTypes, scalar, False)
-        Layout.ZeroSized -> pure (baseParameterTypes, LLVM.voidType, False)
+        Layout.ScalarStruct -> do
+            assert (Size.inBits (Layout.unboxedSize returnLayout) == 0)
+            pure (baseParameterTypes, Layout.scalarStructType returnLayout, False)
 
     -- The sret parameter is always the first one
     let sretParameter = if usesSRet then Just (0, returnLayout) else Nothing
@@ -169,16 +180,13 @@ forwardDeclareDeclaration = \case
         result <- buildCallWithAttributes builder functionTypeWithAttributes function arguments ""
         LLVM.setTailCallKind result LLVM.TailCallKindTail
         LLVM.setInstructionCallConv result LLVM.tailCallConv
-        case Layout.kind returnLayout of
-            Layout.LLVMScalar _ -> do
+
+        case Layout.returnConvention returnLayout of
+            Layout.Void; Layout.SRetPointer -> do
+                _ <- LLVMBuilder.buildRetVoid builder
+                pure ()
+            Layout.SingleScalar _; Layout.SingleBoxed; Layout.ScalarStruct -> do
                 _ <- LLVMBuilder.buildRet builder result
-                pure ()
-            -- AggregatePointers are returned in sret parameters anyway so we are already passing that along correctly anyway
-            Layout.AggregatePointer -> do
-                _ <- LLVMBuilder.buildRetVoid builder
-                pure ()
-            Layout.ZeroSized -> do
-                _ <- LLVMBuilder.buildRetVoid builder
                 pure ()
     MIR.DefineExternalFunction{name, externalName, parameterRepresentations, returnRepresentation} -> do
         externalParameterTypes <- for parameterRepresentations externalTypeForRepresentation
@@ -209,12 +217,11 @@ forwardDeclareDeclaration = \case
         LLVMBuilder.positionBuilderAtEnd builder block
 
         result <- buildCallWithAttributes builder externalFunctionType externalFunction (viaList $ Seq.mapWithIndex (\i _ -> LLVM.getParam wrapperFunction i) parameterLayouts) ""
-        case Layout.kind returnLayout of
-            Layout.AggregatePointer -> undefined
-            Layout.ZeroSized -> do
+        case Layout.returnConvention returnLayout of
+            Layout.Void; Layout.SRetPointer -> do
                 _ <- LLVMBuilder.buildRetVoid builder
                 pure ()
-            Layout.LLVMScalar _ -> do
+            Layout.SingleScalar _; Layout.SingleBoxed; Layout.ScalarStruct -> do
                 _ <- LLVMBuilder.buildRet builder result
                 pure ()
 
@@ -235,8 +242,10 @@ compileDeclaration = \case
         , init
         , blocks
         } -> do
-            parameterLayouts <- for parameters \(_, representation) -> Layout.representationLayout representation
+            parametersWithLayouts <- for parameters \(parameter, representation) -> (parameter,) <$> Layout.representationLayout representation
+            let parameterLayouts = fmap snd parametersWithLayouts
             returnLayout <- Layout.representationLayout returnRepresentation
+            -- TODO: that's a bit of an inefficient way of getting the sret parameter...
             (_functionType, sretParameter) <- functionLLVMType parameterLayouts returnLayout
 
             function <-
@@ -252,18 +261,27 @@ compileDeclaration = \case
                                 Nothing -> Nothing
                         }
 
-            let isZeroSized layout = case Layout.kind layout of
-                    Layout.ZeroSized -> True
-                    _ -> False
-            let (zeroSizedParameters, realParameters) = Seq.partition (isZeroSized . snd) (Seq.zip parameters parameterLayouts)
-            for_ zeroSizedParameters \((variable, _), layout) -> do
-                insertVarMapping variable zeroSizedDummyValue layout
-            forIndexed_ realParameters \((variable, _representation), layout) index -> do
-                let llvmValue = case sretParameter of
-                        Nothing -> LLVM.getParam function index
-                        -- The sret parameter is always the first one so we need to skip it
-                        Just{} -> LLVM.getParam function (index + 1)
-                insertVarMapping variable llvmValue layout
+            let addParameterMappings (currentIndex :: Int) = \case
+                    Empty -> pure ()
+                    (parameter, layout) :<| rest -> do
+                        let unboxedPointer = case Layout.parameterUnboxedIndex layout of
+                                Nothing -> Nothing
+                                Just unboxedIndex -> Just (LLVM.getParam function (currentIndex + unboxedIndex))
+                        value <- runSTE \s -> do
+                            valueBuilder <- Layout.newBuilderWithUnboxedPointer @s layout unboxedPointer
+                            for_ @[] [0 .. Layout.boxedCount layout - 1] \boxedIndex -> do
+                                Layout.fillBoxed valueBuilder boxedIndex (LLVM.getParam function (currentIndex + Layout.parameterBoxedIndex layout boxedIndex))
+                            forIndexed_ (Layout.decomposedScalars layout) \_scalar scalarIndex -> do
+                                Layout.fillDecomposed valueBuilder scalarIndex (LLVM.getParam function (currentIndex + Layout.parameterDecomposedScalarIndex layout scalarIndex))
+                            Layout.buildValue valueBuilder
+                        insertVarMapping parameter value layout
+                        addParameterMappings (currentIndex + Layout.parameterCount layout) rest
+
+            let initialIndex = case sretParameter of
+                    Nothing -> 0
+                    -- The sret parameter is always the first parameter so our actual parameters start at 1
+                    Just{} -> 1
+            addParameterMappings initialIndex parametersWithLayouts
 
             builder <- LLVMBuilder.createBuilder
 
@@ -308,20 +326,38 @@ compileRegisteredBlock builder descriptor block = do
 
 compilePhis :: (Compile es) => LLVMBuilder.Builder -> MIR.Phis -> Eff es ()
 compilePhis builder (MIR.MkPhis phis) = do
-    for_ (HashMap.toList phis) \(targetVar, (representation, incoming)) -> do
+    for_ (HashMap.toList phis) \(targetVar, (representation, incoming)) -> runSTE \s -> do
         incomingValues <-
-            fromList <$> for (HashMap.toList incoming) \(block, variable) -> do
+            fromList @(Strict.Vector _) <$> for (HashMap.toList incoming) \(block, variable) -> do
                 (value, _) <- lookupVar variable
                 block <- lookupBlock block
+
                 pure (value, block)
         layout <- Layout.representationLayout representation
-        case Layout.kind layout of
-            Layout.ZeroSized -> pure ()
-            kind@(Layout.LLVMScalar _; Layout.AggregatePointer) -> do
-                let llvmType = case kind of
-                        Layout.LLVMScalar scalar -> scalar
-                        Layout.AggregatePointer -> LLVM.pointerType
-                asVar_ targetVar layout $ LLVMBuilder.buildPhi builder llvmType incomingValues
+
+        let varName = renderVariable targetVar
+        unboxedSegment <- case Size.inBytes (Layout.unboxedSize layout) of
+            0 -> pure Nothing
+            _ -> do
+                let incoming =
+                        incomingValues & fmap \(compound, block) -> case Layout.unboxedPointer compound of
+                            Nothing -> panic "Compound value without unboxed pointer has a layout with a non-empty unboxed segment"
+                            Just unboxedPointer -> (unboxedPointer, block)
+                Just <$> LLVMBuilder.buildPhi builder LLVM.pointerType incoming (varName <> ".unboxed")
+        valueBuilder <- Layout.newBuilderWithUnboxedPointer @s layout unboxedSegment
+
+        for_ @[] [0 .. Layout.boxedCount layout - 1] \boxedIndex -> do
+            let incoming = fmap (\(compound, block) -> (Layout.boxedValues compound Vector.! boxedIndex, block)) incomingValues
+            boxedValue <- LLVMBuilder.buildPhi builder LLVM.pointerType incoming (varName <> ".boxed")
+            Layout.fillBoxed valueBuilder boxedIndex boxedValue
+            registerGCRoot boxedValue
+        forIndexed_ (Layout.decomposedScalars layout) \type_ scalarIndex -> do
+            let incoming = fmap (\(compound, block) -> (Layout.decomposedScalarValues compound Vector.! scalarIndex, block)) incomingValues
+            scalarValue <- LLVMBuilder.buildPhi builder type_ incoming (varName <> ".scalar")
+            Layout.fillDecomposed valueBuilder scalarIndex scalarValue
+
+        targetCompoundValue <- Layout.buildValue valueBuilder
+        insertVarMapping targetVar targetCompoundValue layout
 
 compileInstruction :: (Compile es) => LLVMBuilder.Builder -> MIR.Instruction -> Eff es ()
 compileInstruction builder = \case
@@ -330,114 +366,124 @@ compileInstruction builder = \case
         insertVarMapping var targetValue targetLayout
     MIR.ArithmeticOperator var operator -> do
         (value, layout) <- compileArithmeticOperator builder operator (renderVariable var)
-        insertVarMapping var value layout
-    MIR.AccessField{var, path, target, fieldRepresentation} -> do
-        (targetValue, targetLayout) <- lookupVar target
+        insertVarMapping var (Layout.scalarCompoundValue value) layout
+    MIR.AccessField{var, path, target = parent, fieldRepresentation} -> runSTE \s -> do
+        (parentValue, parentLayout) <- lookupVar parent
         fieldLayout <- Layout.representationLayout fieldRepresentation
 
-        let go currentOffset layout = \case
-                Empty -> currentOffset
-                MIR.ProductFieldPath index :<| rest -> do
-                    let (offset, innerLayout) = Layout.productOffsetAndLayout index layout
-                    go (currentOffset + offset) innerLayout rest
-                MIR.SumConstructorPath index :<| rest -> do
-                    let (offset, innerLayout) = Layout.sumOffsetAndLayout index layout
-                    go (currentOffset + offset) innerLayout rest
-        let offset = go 0 targetLayout path
+        fieldBuilder <- Layout.newBuilder @s builder fieldLayout
 
-        pointer <- buildGEPOffset builder targetValue offset ""
-        asVar_ var fieldLayout $ buildLoadOrKeepPointer builder fieldLayout pointer
+        let basePath = Layout.elementPathFromMIRPath path
+        Layout.forContainedElements fieldLayout \elementPath targetLocation -> do
+            let sourceLocation = accessElementByPath (basePath <> elementPath) parentLayout
+            copyElement builder sourceLocation parentValue targetLocation fieldLayout fieldBuilder
+        fieldValue <- Layout.buildValue fieldBuilder
+        insertVarMapping var fieldValue fieldLayout
     MIR.Box{var, target} -> do
         -- TODO: we should probably inline the fast path for minor heap allocations here
         (targetValue, targetLayout) <- lookupVar target
 
-        layoutInfoTablePointer <- getOrCreateLayoutInfoTablePointer targetLayout
+        case Size.inBytes (Layout.sizeAtRest targetLayout) of
+            -- We special case `box(())` to return a null pointer since there is no information stored in a trivial target like this anyway
+            -- and we don't have pointer comparisons or anything like that
+            0 -> insertVarMapping var (Layout.boxedCompoundValue LLVM.constNullPointer) Layout.boxedLayout
+            _ -> do
+                layoutInfoTablePointer <- getOrCreateLayoutInfoTablePointer targetLayout
 
-        memoryPointer <- asVar var Layout.boxedLayout $ buildRuntimeCall builder "vega_allocate_boxed" [layoutInfoTablePointer]
-        buildComplexStore builder targetLayout targetValue memoryPointer
+                memoryPointer <- buildRuntimeCall builder "vega_allocate_boxed" [layoutInfoTablePointer] (renderVariable var)
+                let boxedCompoundValue = Layout.boxedCompoundValue memoryPointer
+                insertVarMapping var boxedCompoundValue Layout.boxedLayout
+
+                buildComplexStore builder targetLayout targetValue memoryPointer
     MIR.Unbox{var, boxedTarget, representation} -> do
         (targetValue, _) <- lookupVar boxedTarget
         layout <- Layout.representationLayout representation
-
-        asVar_ var layout $ buildComplexLoad builder layout targetValue
-    MIR.ProductConstructor{var, values, representation} -> do
-        llvmValues <- for values lookupVarValue
+        case Size.inBytes (Layout.sizeAtRest layout) of
+            0 -> insertVarMapping var (Layout.unitCompoundValue) layout
+            _ -> do
+                Util.assert (Vector.null (Layout.decomposedScalarValues targetValue))
+                Util.assert (isNothing (Layout.unboxedPointer targetValue))
+                case Layout.boxedValues targetValue of
+                    [pointerValue] -> asVar_ var layout $ buildComplexLoad builder layout pointerValue
+                    _ -> panic $ "Trying to unbox non-boxed compound value " <> pretty targetValue
+    MIR.ProductConstructor{var, values, representation} -> runSTE \s -> do
+        llvmValuesWithLayouts <- for values lookupVar
         layout <- Layout.representationLayout representation
 
-        case Layout.kind layout of
-            Layout.ZeroSized -> insertVarMapping var zeroSizedDummyValue layout
-            Layout.LLVMScalar{} -> panic "Trying to construct an LLVM scalar from a product constructor"
-            Layout.AggregatePointer -> do
-                productPointer <- asVar var layout $ buildLayoutAlloca builder layout
-                forIndexed_ llvmValues \value index -> do
-                    let (offset, subLayout) = Layout.productOffsetAndLayout index layout
-                    pointer <- case offset of
-                        0 -> pure productPointer
-                        _ -> buildGEPOffset builder productPointer offset ""
-                    buildComplexStore builder subLayout value pointer
-    MIR.SumConstructor{var, tag, payload, representation} -> do
-        (value, _) <- lookupVar payload
+        valueBuilder <- Layout.newBuilder @s builder layout
+
+        Layout.forContainedElements layout \path targetLocation -> do
+            case path of
+                (Layout.ProductField index :<| sourcePath) -> do
+                    let (sourceValue, sourceLayout) = llvmValuesWithLayouts `Seq.index` index
+                    let sourceLocation = accessElementByPath sourcePath sourceLayout
+                    copyElement builder sourceLocation sourceValue targetLocation layout valueBuilder
+                _ -> panic $ "Element with non-ProductField path in product layout: " <> show path
+
+        builtValue <- Layout.buildValue valueBuilder
+        insertVarMapping var builtValue layout
+    MIR.SumConstructor{var, tag, payload, representation} -> runSTE \s -> do
+        (payload, payloadLayout) <- lookupVar payload
         layout <- Layout.representationLayout representation
+        valueBuilder <- Layout.newBuilder @s builder layout
 
-        sumPointer <- asVar var layout $ buildLayoutAlloca builder layout
+        let (tagLocation, tagSize) = case Layout.details layout of
+                Layout.TopLevelSumLayout{tagSize, tagLocation} -> (tagLocation, tagSize)
+                _ -> panic "Non-TopLevelSum layout in SumConstructor instruction"
+        -- We currently round up the tag size to the nearest number of bytes here.
+        -- This might change in the future, especially if we implement some form of
+        -- niche filling optimization
+        let tagValue = LLVM.constInt (LLVM.intType (Size.inBytes tagSize)) (fromIntegral tag) False
+        fillLocation builder valueBuilder tagLocation tagValue
 
-        let tagLLVMType = LLVM.intType (Layout.sumTagSizeInBits layout)
-        let tagValue = LLVM.constInt tagLLVMType (fromIntegral tag) False
-        case Layout.sumTagOffset layout of
-            Nothing -> do
-                -- This sum is directly represented by its tag
-                insertVarMapping var tagValue layout
-            Just tagOffset -> do
-                -- Store the tag
-                tagPointer <- buildGEPOffset builder sumPointer tagOffset ""
-                _ <- LLVMBuilder.buildStore builder tagValue tagPointer
+        Layout.forContainedElementsAtSumConstructorIndex tag layout \path targetLocation -> do
+            let sourceLocation = accessElementByPath path payloadLayout
+            copyElement builder sourceLocation payload targetLocation layout valueBuilder
 
-                -- Storing the payload currently involves a single contiguous copy. This may change in the future
-                -- if we add support for non-contiguous payloads.
-                -- See NOTE: [Sum tags] in Vega.Compilation.LLVM.Layout for details.
-                let (payloadOffset, payloadLayout) = Layout.sumOffsetAndLayout tag layout
-
-                payloadPointer <- buildGEPOffset builder sumPointer payloadOffset ""
-                buildComplexStore builder payloadLayout value payloadPointer
-    MIR.LoadFunctionPointer{var, functionName} -> do
+        Layout.fillRemainingBoxedWithNull valueBuilder
+        value <- Layout.buildValue valueBuilder
+        insertVarMapping var value layout
+    MIR.LoadFunctionPointer{var, functionName, asGlobalClosure, representationArguments} -> do
+        assert (representationArguments == [])
+        let llvmFunctionName = case asGlobalClosure of
+                False -> renderLLVMName functionName
+                True -> closureWrapperNameForFunction functionName
         functionPointer <-
-            LLVM.getNamedFunction ?module_ (renderLLVMName functionName) >>= \case
-                Nothing -> panic $ "Trying to create closure for non-existent top-level function: " <> Vega.prettyGlobal Vega.VarKind functionName
+            LLVM.getNamedFunction ?module_ llvmFunctionName >>= \case
+                Nothing -> panic $ "Trying to create function pointer for non-existent function: " <> Vega.prettyGlobal Vega.VarKind functionName
                 Just function_ -> pure function_
-        insertVarMapping var functionPointer Layout.rawPointerLayout
-    MIR.LoadGlobalClosure{var, functionName} -> do
-        asVar_ var (Layout.closureLayout Layout.boxedLayout) $ buildClosure builder functionName Layout.boxedLayout LLVM.constNullPointer
+        insertVarMapping var (Layout.scalarCompoundValue functionPointer) Layout.rawPointerLayout
     MIR.LoadGlobal{var, globalName, representation} -> undefined
     MIR.LoadIntLiteral{var, literal, sizeInBits}
         | sizeInBits `mod` 8 /= 0 -> panic "Int layouts with non-byte sizes are not supported yet"
         | otherwise -> do
-            let sizeInBytes = sizeInBits `div` 8
-            insertVarMapping var (LLVM.constInt (LLVM.intType sizeInBits) (fromIntegral literal) True) (Layout.intLayoutInBytes sizeInBytes)
+            let value = Layout.scalarCompoundValue (LLVM.constInt (LLVM.intType sizeInBits) (fromIntegral literal) True)
+            insertVarMapping var value (Layout.intLayout (Size.fromBits sizeInBits))
     MIR.LoadByteArrayLiteral{var, bytes} -> do
         global <- createStaticByteArray bytes
 
         -- The vega pointer should point after the header object
         pointer <- buildGEPOffset builder (LLVM.globalAsValue global) Heap.headerSize "bytes"
 
-        insertVarMapping var pointer Layout.byteArrayLayout
+        insertVarMapping var (Layout.boxedCompoundValue pointer) Layout.byteArrayLayout
     MIR.LoadSumTag{var, sum} -> do
         (sumValue, sumLayout) <- lookupVar sum
-        let tagLayout = Layout.intLayoutInBytes (Layout.sumTagSizeInBytes sumLayout)
-        case Layout.sumTagOffset sumLayout of
-            Just offset -> do
-                tagPointer <- buildGEPOffset builder sumValue offset "tagptr"
-                asVar_ var tagLayout $ LLVMBuilder.buildLoad builder (Layout.llvmType tagLayout) tagPointer
-            Nothing -> insertVarMapping var sumValue sumLayout
+        let (tagSize, tagLocation) = case Layout.details sumLayout of
+                Layout.Simple nested -> panic $ "Trying to load a sum tag from a non-sum and non-primitive layout: " <> showHeadConstructor nested
+                Layout.TopLevelSumLayout{tagSize, tagLocation} -> (tagSize, tagLocation)
+
+        let tagLayout = Layout.intLayout tagSize
+        asVar_ var tagLayout $ accessLocation builder sumValue tagLayout tagLocation
+    MIR.LoadBoxedNull{var} -> do
+        insertVarMapping var (Layout.boxedCompoundValue (LLVM.constNullPointer)) Layout.boxedLayout
     MIR.CallDirect{var, functionName, arguments, representationArguments, returnRepresentation}
         | Just primop <- Builtins.asPrimop functionName -> do
             returnLayout <- Layout.representationLayout returnRepresentation
             asVar_ var returnLayout $ compilePrimopCall builder primop arguments representationArguments returnRepresentation
         | otherwise -> do
-            let isNotZeroSized (_, layout) = case Layout.kind layout of
-                    Layout.ZeroSized -> False
-                    _ -> True
-            (argumentValueSeq, argumentLayouts) <- Seq.unzip . Seq.filter isNotZeroSized <$> for arguments lookupVar
-            let argumentValues = viaList argumentValueSeq
+            argumentsWithLayouts <- for arguments lookupVar
+            let (argumentValues, argumentLayouts) = Seq.unzip argumentsWithLayouts
+
             returnLayout <- Layout.representationLayout returnRepresentation
 
             function <-
@@ -447,67 +493,25 @@ compileInstruction builder = \case
 
             (functionType, _) <- functionLLVMType argumentLayouts returnLayout
 
-            callInstr <- case Layout.kind returnLayout of
-                Layout.ZeroSized -> do
-                    insertVarMapping var zeroSizedDummyValue returnLayout
-                    buildCallWithAttributes builder functionType function argumentValues ""
-                Layout.LLVMScalar _ -> asVar var returnLayout $ buildCallWithAttributes builder functionType function argumentValues
-                Layout.AggregatePointer -> do
-                    returnPointer <- asVar var returnLayout $ buildLayoutAlloca builder returnLayout
-                    -- The sret parameter is always the first parameter
-                    buildCallWithAttributes builder functionType function ([returnPointer] <> argumentValues) ""
-            LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
+            compileNonTailCall builder var returnLayout functionType function argumentValues
     MIR.CallClosure{var, closure, arguments, returnRepresentation} -> do
         (closureValue, closureLayout) <- lookupVar closure
-        let (functionPointerOffset, _functionPointerLayout) = Layout.productOffsetAndLayout 0 closureLayout
-        pointerToFunctionPointer <- buildGEPOffset builder closureValue functionPointerOffset ""
-        functionPointer <- LLVMBuilder.buildLoad builder LLVM.pointerType pointerToFunctionPointer ""
 
-        let (payloadOffset, payloadLayout) = Layout.productOffsetAndLayout 1 closureLayout
-        pointerToPayload <- buildGEPOffset builder closureValue payloadOffset ""
-        payload <- buildLoadOrKeepPointer builder payloadLayout pointerToPayload "payload"
+        functionPointer <- Layout.assertScalar <$> accessLocation builder closureValue closureLayout Layout.closureFunctionPointer "functionPointer"
+        payload <- accessLocation builder closureValue closureLayout Layout.closurePayload "payload"
 
-        let isNotZeroSized (_, layout) = case Layout.kind layout of
-                Layout.ZeroSized -> False
-                _ -> True
-        (argumentValuesWithoutPayload, argumentLayoutsWithoutPayload) <- Seq.unzip . Seq.filter isNotZeroSized <$> for arguments lookupVar
+        baseArgumentsWithLayouts <- for arguments lookupVar
+        let (baseArguments, baseArgumentLayouts) = Seq.unzip baseArgumentsWithLayouts
 
-        let argumentLayouts = viaList $ argumentLayoutsWithoutPayload <> [Layout.boxedLayout]
+        let argumentLayouts = viaList $ baseArgumentLayouts <> [Layout.boxedLayout]
 
         returnLayout <- Layout.representationLayout returnRepresentation
 
         (closureFunctionType, _) <- functionLLVMType argumentLayouts returnLayout
 
-        case Layout.kind returnLayout of
-            Layout.ZeroSized -> do
-                callInstr <-
-                    buildCallWithAttributes
-                        builder
-                        closureFunctionType
-                        functionPointer
-                        (viaList $ argumentValuesWithoutPayload <> [payload])
-                        ""
-                LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
-                insertVarMapping var zeroSizedDummyValue returnLayout
-            Layout.LLVMScalar _ -> do
-                callInstr <-
-                    asVar var returnLayout $
-                        buildCallWithAttributes
-                            builder
-                            closureFunctionType
-                            functionPointer
-                            (viaList $ argumentValuesWithoutPayload <> [payload])
-                LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
-            Layout.AggregatePointer -> do
-                returnPointer <- asVar var returnLayout $ buildLayoutAlloca builder returnLayout
-                callInstr <-
-                    buildCallWithAttributes
-                        builder
-                        closureFunctionType
-                        functionPointer
-                        (viaList $ [returnPointer] <> argumentValuesWithoutPayload <> [payload])
-                        ""
-                LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
+        let arguments = baseArguments <> [payload]
+
+        compileNonTailCall builder var returnLayout closureFunctionType functionPointer arguments
 
 compileTerminator :: (Compile es) => LLVMBuilder.Builder -> MIR.Terminator -> Eff es ()
 compileTerminator builder = \case
@@ -516,13 +520,13 @@ compileTerminator builder = \case
 
         buildComplexReturn builder layout value
     MIR.SwitchInt scrutinee alternatives default_ -> do
-        (scrutineeValue, layout) <- lookupVar scrutinee
-        let llvmType = Layout.llvmType layout
+        scrutineeValue <- Layout.assertScalar <$> lookupVarValue scrutinee
+        let scrutineeType = LLVM.typeOf scrutineeValue
 
         cases <-
             viaList <$> for alternatives \(int, target) -> do
                 targetLLVMBlock <- registerNewBlock target
-                pure (LLVM.constInt llvmType (fromIntegral int) False, targetLLVMBlock)
+                pure (LLVM.constInt scrutineeType (fromIntegral int) False, targetLLVMBlock)
 
         defaultBlock <- case default_ of
             Just block -> registerNewBlock block
@@ -536,11 +540,9 @@ compileTerminator builder = \case
             result <- compilePrimopCall builder primop arguments representationArguments returnRepresentation "ret"
             buildComplexReturn builder resultLayout result
         | otherwise -> do
-            let isNotZeroSized (_, layout) = case Layout.kind layout of
-                    Layout.ZeroSized -> False
-                    _ -> True
-            (argumentValueSeq, argumentLayouts) <- Seq.unzip . Seq.filter isNotZeroSized <$> for arguments lookupVar
-            let argumentValues = viaList argumentValueSeq
+            argumentsWithLayouts <- for arguments lookupVar
+            let (argumentCompounds, argumentLayouts) = Seq.unzip argumentsWithLayouts
+
             returnLayout <- Layout.representationLayout returnRepresentation
 
             function <-
@@ -550,25 +552,7 @@ compileTerminator builder = \case
 
             (functionType, _) <- functionLLVMType argumentLayouts returnLayout
 
-            callInstr <- case Layout.kind returnLayout of
-                Layout.ZeroSized -> do
-                    callInstr <- buildCallWithAttributes builder functionType function argumentValues ""
-                    _ <- LLVMBuilder.buildRetVoid builder
-                    pure callInstr
-                Layout.LLVMScalar _ -> do
-                    result <- buildCallWithAttributes builder functionType function argumentValues "ret"
-                    _ <- LLVMBuilder.buildRet builder result
-                    pure result
-                Layout.AggregatePointer -> do
-                    let sretPointer = case ?functionEnv.sretVariable of
-                            Nothing -> panic "Trying to return AggregatePointer from function without sret variable"
-                            Just (variable, _) -> variable
-
-                    callInstr <- buildCallWithAttributes builder functionType function ([sretPointer] <> argumentValues) ""
-                    _ <- LLVMBuilder.buildRetVoid builder
-                    pure callInstr
-            LLVM.setTailCallKind callInstr LLVM.TailCallKindTail
-            LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
+            compileTailCall builder returnLayout functionType function argumentCompounds
     MIR.Jump targetBlock -> do
         targetLLVMBlock <- registerNewBlock targetBlock
         _ <- LLVMBuilder.buildBr builder targetLLVMBlock
@@ -578,62 +562,95 @@ compileTerminator builder = \case
         pure ()
     MIR.TailCallClosure{closure, arguments, returnRepresentation} -> do
         (closureValue, closureLayout) <- lookupVar closure
-        let (functionPointerOffset, _functionPointerLayout) = Layout.productOffsetAndLayout 0 closureLayout
-        pointerToFunctionPointer <- buildGEPOffset builder closureValue functionPointerOffset ""
-        functionPointer <- LLVMBuilder.buildLoad builder LLVM.pointerType pointerToFunctionPointer ""
 
-        let (payloadOffset, payloadLayout) = Layout.productOffsetAndLayout 1 closureLayout
-        pointerToPayload <- buildGEPOffset builder closureValue payloadOffset ""
-        payload <- buildLoadOrKeepPointer builder payloadLayout pointerToPayload "payload"
+        functionPointer <- Layout.assertScalar <$> accessLocation builder closureValue closureLayout Layout.closureFunctionPointer "functionPointer"
+        payload <- accessLocation builder closureValue closureLayout Layout.closurePayload "payload"
 
-        let isNotZeroSized (_, layout) = case Layout.kind layout of
-                Layout.ZeroSized -> False
-                _ -> True
-        (argumentValuesWithoutPayload, argumentLayoutsWithoutPayload) <- Seq.unzip . Seq.filter isNotZeroSized <$> for arguments lookupVar
+        baseArgumentsWithLayouts <- for arguments lookupVar
+        let (baseArguments, baseArgumentLayouts) = Seq.unzip baseArgumentsWithLayouts
 
-        let argumentLayouts = viaList $ argumentLayoutsWithoutPayload <> [Layout.boxedLayout]
+        let argumentLayouts = viaList $ baseArgumentLayouts <> [Layout.boxedLayout]
 
         returnLayout <- Layout.representationLayout returnRepresentation
 
         (closureFunctionType, _) <- functionLLVMType argumentLayouts returnLayout
 
-        callInstr <- case Layout.kind returnLayout of
-            Layout.ZeroSized -> do
-                callInstr <-
-                    buildCallWithAttributes
-                        builder
-                        closureFunctionType
-                        functionPointer
-                        (viaList $ argumentValuesWithoutPayload <> [payload])
-                        ""
-                _ <- LLVMBuilder.buildRetVoid builder
-                pure callInstr
-            Layout.LLVMScalar _ -> do
-                result <-
-                    buildCallWithAttributes
-                        builder
-                        closureFunctionType
-                        functionPointer
-                        (viaList $ argumentValuesWithoutPayload <> [payload])
-                        "ret"
+        let arguments = baseArguments <> [payload]
+
+        compileTailCall builder returnLayout closureFunctionType functionPointer arguments
+
+compileNonTailCall ::
+    (Compile es) =>
+    LLVMBuilder.Builder ->
+    MIR.Variable ->
+    Layout ->
+    AttributeFunctionType ->
+    LLVM.Value ->
+    Seq CompoundValue ->
+    Eff es ()
+compileNonTailCall builder var returnLayout functionType function argumentCompounds = do
+    let argumentValues = viaList $ foldMap Layout.compoundAsFunctionArguments argumentCompounds
+    callInstr <- case Layout.returnConvention returnLayout of
+        Layout.Void -> do
+            insertVarMapping var Layout.unitCompoundValue returnLayout
+            buildCallWithAttributes builder functionType function argumentValues ""
+        Layout.SingleScalar _ -> do
+            result <- buildCallWithAttributes builder functionType function argumentValues (renderVariable var)
+            insertVarMapping var (Layout.scalarCompoundValue result) returnLayout
+            pure result
+        Layout.SingleBoxed -> do
+            result <- buildCallWithAttributes builder functionType function argumentValues (renderVariable var)
+            insertVarMapping var (Layout.boxedCompoundValue result) returnLayout
+            pure result
+        Layout.ScalarStruct -> do
+            struct <- buildCallWithAttributes builder functionType function argumentValues (renderVariable var)
+            asVar_ var returnLayout $ deconstructScalarStruct builder returnLayout struct
+            pure struct
+        Layout.SRetPointer -> do
+            -- sret pointers return a value *at rest* so we first need to store this value in an alloca
+            -- (and we *cannot* use the automatic CompoundValueBuilder alloca since that is used for values
+            -- in-flight and will only allocate for the unboxed segment)
+            returnedValueAtRestPointer <- Layout.buildAtRestAlloca builder returnLayout "sret"
+            -- The sret parameter is always the first parameter
+            callInstr <- buildCallWithAttributes builder functionType function ([returnedValueAtRestPointer] <> argumentValues) ""
+
+            -- We can keep the alloca for the unboxed segment here since it's gointo hg ave the exact same lifetime as the loaded value anyway
+            asVar_ var returnLayout $ buildLoadAsReference builder returnLayout returnedValueAtRestPointer
+
+            pure callInstr
+    LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
+
+compileTailCall ::
+    (Compile es) =>
+    LLVMBuilder.Builder ->
+    Layout ->
+    AttributeFunctionType ->
+    LLVM.Value ->
+    Seq CompoundValue ->
+    Eff es ()
+compileTailCall builder returnLayout functionType function argumentCompounds = do
+    let argumentValues = viaList $ foldMap Layout.compoundAsFunctionArguments argumentCompounds
+    callInstr <- case Layout.returnConvention returnLayout of
+        Layout.Void -> do
+            callInstr <- buildCallWithAttributes builder functionType function argumentValues ""
+            _ <- LLVMBuilder.buildRetVoid builder
+            pure callInstr
+        Layout.SingleScalar _
+        Layout.SingleBoxed
+        Layout.ScalarStruct -> do
+                result <- buildCallWithAttributes builder functionType function argumentValues "ret"
                 _ <- LLVMBuilder.buildRet builder result
                 pure result
-            Layout.AggregatePointer -> do
-                let sretPointer = case ?functionEnv.sretVariable of
-                        Nothing -> panic "Trying to return AggregatePointer from function without sret variable"
-                        Just (variable, _) -> variable
+        Layout.SRetPointer -> do
+            let sretPointer = case ?functionEnv.sretVariable of
+                    Nothing -> panic "Trying to return via SRretPointer from function without sret variable"
+                    Just (variable, _) -> variable
 
-                callInstr <-
-                    buildCallWithAttributes
-                        builder
-                        closureFunctionType
-                        functionPointer
-                        (viaList $ [sretPointer] <> argumentValuesWithoutPayload <> [payload])
-                        ""
-                _ <- LLVMBuilder.buildRetVoid builder
-                pure callInstr
-        LLVM.setTailCallKind callInstr LLVM.TailCallKindTail
-        LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
+            callInstr <- buildCallWithAttributes builder functionType function ([sretPointer] <> argumentValues) ""
+            _ <- LLVMBuilder.buildRetVoid builder
+            pure callInstr
+    LLVM.setTailCallKind callInstr LLVM.TailCallKindTail
+    LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
 
 externalTypeForRepresentation :: (?context :: LLVM.Context) => Representation -> Eff es LLVM.Type
 externalTypeForRepresentation representation = case representation of
@@ -659,15 +676,17 @@ compilePrimopCall ::
     Seq Representation ->
     Representation ->
     Text ->
-    Eff es LLVM.Value
+    Eff es CompoundValue
 compilePrimopCall builder primop arguments representationArguments returnRepresentation varName = do
     argumentValues <- for arguments lookupVarValue
+    let ~simpleArgumentValues = fmap Layout.assertSingleValue argumentValues
     case primop of
         ReplicateMutableArray -> compileReplicateArray builder arguments returnRepresentation varName
         UnsafeUninitializedMutableArray -> compileUnsafeUninitializedMutableArray builder arguments representationArguments returnRepresentation varName
         EmptyArray -> do
+            -- TODO: it's a bit silly to re-create a new array here every time
             global <- createStaticByteArray mempty
-            buildGEPOffset builder (LLVM.globalAsValue global) Heap.headerSize varName
+            Layout.boxedCompoundValue <$> buildGEPOffset builder (LLVM.globalAsValue global) Heap.headerSize varName
         UnsafeReadArray -> compileUnsafeReadArray builder arguments returnRepresentation varName
         UnsafeReadMutableArray -> compileUnsafeReadArray builder arguments returnRepresentation varName
         UnsafeWriteMutableArray -> compileUnsafeWriteArray builder arguments returnRepresentation varName
@@ -677,7 +696,7 @@ compilePrimopCall builder primop arguments representationArguments returnReprese
         UnsafeFreezeArray -> compileUnsafeFreezeArray builder arguments returnRepresentation varName
         UnsafeThawArray -> compileUnsafeThawArray builder arguments returnRepresentation varName
         UnsafeMutableArrayContents -> compileUnsafeArrayContents builder arguments returnRepresentation varName
-        NullPointer -> pure LLVM.constNullPointer
+        NullPointer -> pure $ Layout.scalarCompoundValue LLVM.constNullPointer
         OffsetPointerBytes -> compileOffsetPointerBytes builder arguments returnRepresentation varName
         CodePoints -> undefined
         Int8ToInt -> compileIntConversion Signed 64 builder arguments returnRepresentation varName
@@ -695,46 +714,47 @@ compilePrimopCall builder primop arguments representationArguments returnReprese
         IntToUInt32 -> compileIntConversion Unsigned 32 builder arguments returnRepresentation varName
         IntToUInt -> identity
         UnsafeRem -> compileUnsafeRem builder arguments returnRepresentation varName
-        Errno -> outOfLineBuiltin builder "vega_errno" argumentValues returnRepresentation varName
-        DebugInt -> outOfLineBuiltin builder "vega_debug_int" argumentValues returnRepresentation varName
+        Errno -> outOfLineBuiltin builder "vega_errno" simpleArgumentValues returnRepresentation varName
+        DebugInt -> outOfLineBuiltin builder "vega_debug_int" simpleArgumentValues returnRepresentation varName
         Panic -> undefined
         UnsafeCoerce -> identity
   where
     identity = case arguments of
         [argument] -> lookupVarValue argument
         _ -> panic $ "identity operation called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
-compileUnsafeReadArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeReadArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es CompoundValue
 compileUnsafeReadArray builder arguments returnRepresentation varName = case arguments of
     [array, index] -> do
         valueLayout <- Layout.representationLayout returnRepresentation
-        array <- lookupVarValue array
-        index <- lookupVarValue index
+        array <- Layout.assertBoxed <$> lookupVarValue array
+        index <- Layout.assertScalar <$> lookupVarValue index
 
         buildArrayLoad builder valueLayout array index varName
     _ -> panic $ "unsafeReadArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
-compileUnsafeWriteArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeWriteArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es CompoundValue
 compileUnsafeWriteArray builder arguments _returnRepresentation _varName = case arguments of
     [array, index, value] -> do
-        array <- lookupVarValue array
-        index <- lookupVarValue index
+        array <- Layout.assertBoxed <$> lookupVarValue array
+        index <- Layout.assertScalar <$> lookupVarValue index
         (value, valueLayout) <- lookupVar value
 
         buildArrayStore builder valueLayout array index value
-        pure zeroSizedDummyValue
+        pure Layout.unitCompoundValue
     _ -> panic $ "unsafeReadArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
-compileReplicateArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileReplicateArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es CompoundValue
 compileReplicateArray builder arguments returnRepresentation varName = case arguments of
     [size, initialMIRValue] -> do
-        sizeValue <- lookupVarValue size
+        sizeValue <- Layout.assertScalar <$> lookupVarValue size
         (initialValue, valueLayout) <- lookupVar initialMIRValue
 
         incomingBlock <- LLVMBuilder.getInsertBlock builder
 
         infoTable <- getOrCreateArrayInfoTablePointer False valueLayout
 
-        array <- outOfLineBuiltin builder "vega_allocate_uninitialized_array" [infoTable, sizeValue] returnRepresentation varName
+        array <- Layout.assertBoxed <$> outOfLineBuiltin builder "vega_allocate_uninitialized_array" [infoTable, sizeValue] returnRepresentation varName
+        registerGCRoot array
         loopBlock <- LLVM.appendBasicBlock ?function "replicate"
         completedBlock <- LLVM.appendBasicBlock ?function ""
         isZero <- LLVMBuilder.buildICmp builder LLVM.IntEQ sizeValue (LLVM.constInt LLVM.int64Type 0 False) "isZero"
@@ -752,13 +772,13 @@ compileReplicateArray builder arguments returnRepresentation varName = case argu
         _ <- LLVMBuilder.buildCondBr builder isInRange loopBlock completedBlock
 
         LLVMBuilder.positionBuilderAtEnd builder completedBlock
-        pure array
+        pure $ Layout.boxedCompoundValue array
     _ -> panic $ "replicateArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
-compileUnsafeUninitializedMutableArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Seq Representation -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeUninitializedMutableArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Seq Representation -> Representation -> Text -> Eff es CompoundValue
 compileUnsafeUninitializedMutableArray builder arguments representationArguments returnRepresentation varName = case arguments of
     [size] -> do
-        sizeValue <- lookupVarValue size
+        sizeValue <- Layout.assertScalar <$> lookupVarValue size
         elementRepresentation <- case representationArguments of
             [elementRepresentation] -> pure elementRepresentation
             _ -> panic $ "compileUnsafeUninitializedMutableArray called with incorrect number of representation arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty representationArguments) <> "]"
@@ -770,36 +790,36 @@ compileUnsafeUninitializedMutableArray builder arguments representationArguments
         pure array
     _ -> panic $ "unsafeUninitializedMutableArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
-compileArrayLength :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileArrayLength :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es CompoundValue
 compileArrayLength builder arguments _returnRepresentation varName = case arguments of
     [array] -> do
-        array <- lookupVarValue array
+        array <- Layout.assertBoxed <$> lookupVarValue array
         lengthPointer <- buildGEPOffset builder array Heap.arrayLengthOffset "lengthPtr"
-        LLVMBuilder.buildLoad builder LLVM.int64Type lengthPointer varName
+        Layout.scalarCompoundValue <$> LLVMBuilder.buildLoad builder LLVM.int64Type lengthPointer varName
     _ -> panic $ "arrayLength called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
-compileUnsafeArrayContents :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeArrayContents :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es CompoundValue
 compileUnsafeArrayContents builder arguments _returnRepresentation varName = case arguments of
     [array] -> do
         -- TODO: this might need to do a bitcast to turn this into an *unmanaged* pointer once we track GC roots
-        array <- lookupVarValue array
-        buildGEPOffset builder array (Heap.arrayContentOffset) varName
+        array <- Layout.assertBoxed <$> lookupVarValue array
+        Layout.scalarCompoundValue <$> buildGEPOffset builder array (Heap.arrayContentOffset) varName
     _ -> panic $ "unsafeReadArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
-compileOffsetPointerBytes :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileOffsetPointerBytes :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es CompoundValue
 compileOffsetPointerBytes builder arguments _returnRepresentation varName = case arguments of
     [pointer, offset] -> do
-        pointer <- lookupVarValue pointer
-        offset <- lookupVarValue offset
-        LLVMBuilder.buildGetElementPtr builder LLVM.int8Type pointer [offset] varName
+        pointer <- Layout.assertScalar <$> lookupVarValue pointer
+        offset <- Layout.assertScalar <$> lookupVarValue offset
+        Layout.scalarCompoundValue <$> LLVMBuilder.buildGetElementPtr builder LLVM.int8Type pointer [offset] varName
     _ -> panic $ "offsetPointerBytes called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
-compileUnsafeFreezeArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeFreezeArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es CompoundValue
 compileUnsafeFreezeArray _builder arguments _returnRepresentation _varName = case arguments of
     [array] -> lookupVarValue array
     _ -> panic $ "unsafeFreezeArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
-compileUnsafeThawArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeThawArray :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es CompoundValue
 compileUnsafeThawArray _builder arguments _returnRepresentation _varName = case arguments of
     [array] -> lookupVarValue array
     _ -> panic $ "unsafeThawArray called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
@@ -812,23 +832,23 @@ compileIntConversion ::
     Seq MIR.Variable ->
     Representation ->
     Text ->
-    Eff es LLVM.Value
+    Eff es CompoundValue
 compileIntConversion sign width builder arguments _returnRepresentation varName = case arguments of
     [value] -> do
-        value <- lookupVarValue value
+        value <- Layout.assertScalar <$> lookupVarValue value
         let isSigned = case sign of
                 Signed -> True
                 Unsigned -> False
 
-        LLVMBuilder.buildIntCast builder value (LLVM.intType width) isSigned varName
+        Layout.scalarCompoundValue <$> LLVMBuilder.buildIntCast builder value (LLVM.intType width) isSigned varName
     _ -> panic $ "integer conversion primop called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
-compileUnsafeRem :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es LLVM.Value
+compileUnsafeRem :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es CompoundValue
 compileUnsafeRem builder arguments _returnRepresentation varName = case arguments of
     [dividend, divisor] -> do
-        dividend <- lookupVarValue dividend
-        divisor <- lookupVarValue divisor
-        LLVMBuilder.buildSRem builder dividend divisor varName
+        dividend <- Layout.assertScalar <$> lookupVarValue dividend
+        divisor <- Layout.assertScalar <$> lookupVarValue divisor
+        Layout.scalarCompoundValue <$> LLVMBuilder.buildSRem builder dividend divisor varName
     _ -> panic $ "unsafeRem called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
 {- | Generate a call to a builtin function that is defined in the rust runtime rather than inline
@@ -843,7 +863,7 @@ outOfLineBuiltin ::
     Seq LLVM.Value ->
     Representation ->
     Text ->
-    Eff es LLVM.Value
+    Eff es CompoundValue
 outOfLineBuiltin builder functionName arguments returnRepresentation varName = do
     let (llvmFunctionValue, llvmFunctionType) = getField @functionName ?runtimeDefinitions
     returnLayout <- Layout.representationLayout returnRepresentation
@@ -858,23 +878,63 @@ buildCCCCall ::
     Storable.Vector LLVM.Value ->
     Layout ->
     Text ->
-    Eff es LLVM.Value
+    Eff es CompoundValue
 buildCCCCall builder functionType functionValue arguments returnLayout varName = do
-    (returnValue, callInstr) <- case Layout.kind returnLayout of
-        Layout.ZeroSized -> do
+    (returnValue, callInstr) <- case Layout.returnConvention returnLayout of
+        Layout.Void -> do
             callInstr <- buildCallWithAttributes builder functionType functionValue arguments ""
-            pure (zeroSizedDummyValue, callInstr)
-        Layout.LLVMScalar _ -> do
+            pure (Layout.unitCompoundValue, callInstr)
+        Layout.SingleBoxed -> do
             callInstr <- buildCallWithAttributes builder functionType functionValue arguments varName
-            pure (callInstr, callInstr)
-        Layout.AggregatePointer -> do
-            returnPointer <- buildLayoutAlloca builder returnLayout varName
+            registerGCRoot callInstr
+            pure (Layout.boxedCompoundValue callInstr, callInstr)
+        Layout.SingleScalar _scalarType -> do
+            callInstr <- buildCallWithAttributes builder functionType functionValue arguments varName
+            pure (Layout.scalarCompoundValue callInstr, callInstr)
+        Layout.ScalarStruct -> do
+            callInstr <- buildCallWithAttributes builder functionType functionValue arguments ""
+            returnValue <- deconstructScalarStruct builder returnLayout callInstr varName
+
+            pure (returnValue, callInstr)
+        Layout.SRetPointer -> do
+            returnPointer <- buildAtRestAlloca builder returnLayout "sret"
             -- The sret parameter is always the first parameter
             callInstr <- buildCallWithAttributes builder functionType functionValue ([returnPointer] <> arguments) ""
-            pure (returnPointer, callInstr)
+
+            returnValue <- buildComplexLoad builder returnLayout returnPointer varName
+
+            pure (returnValue, callInstr)
     -- This is technically not necessary since ccc is the default but it's nice to be explicit
     LLVM.setInstructionCallConv callInstr LLVM.ccallConv
     pure returnValue
+
+constructScalarStruct :: (Compile es) => LLVMBuilder.Builder -> Layout -> CompoundValue -> Text -> Eff es LLVM.Value
+constructScalarStruct builder layout value varName = do
+    assert (isNothing (Layout.unboxedPointer value))
+    assert (Size.inBits (Layout.unboxedSize layout) == 0)
+    assert (Layout.boxedCount layout == length (Layout.boxedValues value))
+    assert (length (Layout.decomposedScalars layout) == length (Layout.decomposedScalarValues value))
+
+    let emptyStruct = LLVM.getPoison (Layout.scalarStructType layout)
+    let insert struct (index, value) = do
+            LLVMBuilder.buildInsertValue builder struct value index varName
+    foldlM insert emptyStruct (Vector.indexed (Layout.boxedValues value <> Layout.decomposedScalarValues value))
+
+deconstructScalarStruct :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Text -> Eff es CompoundValue
+deconstructScalarStruct builder layout struct varName = runSTE \(type s) -> do
+    assert (Size.inBytes (Layout.unboxedSize layout) == 0)
+
+    valueBuilder <- Layout.newBuilder @s builder layout
+    for_ @[] [0 .. Layout.boxedCount layout - 1] \i -> do
+        boxedValue <- LLVMBuilder.buildExtractValue builder struct i (varName <> ".boxed")
+        registerGCRoot boxedValue
+        Layout.fillBoxed valueBuilder i boxedValue
+
+    forIndexed_ (Layout.decomposedScalars layout) \_ i -> do
+        scalar <- LLVMBuilder.buildExtractValue builder struct i (varName <> ".scalar")
+        Layout.fillDecomposed valueBuilder i scalar
+
+    Layout.buildValue valueBuilder
 
 getOrCreateLayoutInfoTablePointer :: (Compile es) => Layout -> Eff es LLVM.Value
 getOrCreateLayoutInfoTablePointer layout = do
@@ -888,9 +948,8 @@ getOrCreateLayoutInfoTablePointer layout = do
                         , layout =
                             Heap.BoxedLayout
                                 ( Heap.MkBoxedLayout
-                                    { sizeInBytes = fromIntegral (Layout.sizeInBytes layout)
-                                    , -- TODO: fill this in properly
-                                      boxedCount = 0
+                                    { sizeInBytes = fromIntegral (Size.inBytes (Layout.sizeAtRest layout))
+                                    , boxedCount = fromIntegral (Layout.boxedCount layout)
                                     }
                                 )
                         }
@@ -912,9 +971,8 @@ getOrCreateArrayInfoTablePointer static elementLayout = do
                         , layout =
                             Heap.ArrayLayout
                                 ( Heap.MkArrayLayout
-                                    { elementStrideInBytes = fromIntegral $ Layout.strideInBytes elementLayout
-                                    , -- TODO
-                                      elementBoxedCount = 0
+                                    { elementStrideInBytes = fromIntegral $ Size.inBytes (Layout.strideAtRest elementLayout)
+                                    , elementBoxedCount = fromIntegral (Layout.boxedCount elementLayout)
                                     }
                                 )
                         }
@@ -930,7 +988,7 @@ Uses as a boxed vega pointer need to offset it by 'Heap.headerSize'.
 -}
 createStaticByteArray :: (Compile es) => ByteString -> Eff es LLVM.Global
 createStaticByteArray bytes = do
-    infoTable <- getOrCreateArrayInfoTablePointer True (Layout.intLayoutInBytes 1)
+    infoTable <- getOrCreateArrayInfoTablePointer True (Layout.intLayout (Size.fromBytes 1))
     unique <- liftIO newUnique
 
     let arrayHeapType = LLVM.structType [LLVM.pointerType, LLVM.int64Type, LLVM.arrayType LLVM.int8Type (fromIntegral (ByteString.length bytes))] False
@@ -957,101 +1015,220 @@ buildRuntimeCall builder name arguments varName = do
     let (function, functionType) = getField @name ?runtimeDefinitions
     buildCallWithAttributes builder functionType function arguments varName
 
-buildClosure :: (Compile es) => LLVMBuilder.Builder -> Vega.GlobalName -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
-buildClosure builder functionName payloadLayout closureValue varName = do
-    functionPointer <-
-        -- We need to use the closure wrapper instead of the actual function here. See Note: [Closure Representation].
-        LLVM.getNamedFunction ?module_ (closureWrapperNameForFunction functionName) >>= \case
-            Nothing -> panic $ "Trying to create closure for non-existent top-level function: " <> Vega.prettyGlobal Vega.VarKind functionName
-            Just function_ -> pure function_
-    let combinedLayout = Layout.closureLayout payloadLayout
-    buildProduct builder [functionPointer, closureValue] combinedLayout varName
+accessLocation :: (HasCallStack, Compile es) => LLVMBuilder.Builder -> CompoundValue -> Layout -> Layout.ElementLocation -> Text -> Eff es CompoundValue
+accessLocation builder value layout location varName = case location of
+    Layout.BoxedScalar index -> pure $ Layout.boxedCompoundValue $ Layout.boxedValues value Vector.! index
+    Layout.DecomposedScalar index -> pure $ Layout.scalarCompoundValue $ Layout.decomposedScalarValues value Vector.! index
+    Layout.UnboxedOffset{inFlightOffsetInBytes} -> do
+        let unboxedPointer = case Layout.unboxedPointer value of
+                Nothing -> panic "Trying to access unboxed offset on compound value without unboxed segment"
+                Just unboxedPointer -> unboxedPointer
+        elementPointer <- buildGEPOffset builder unboxedPointer inFlightOffsetInBytes ""
+        buildComplexLoad builder layout elementPointer varName
 
-buildProduct :: (Compile es) => LLVMBuilder.Builder -> Seq LLVM.Value -> Layout -> Text -> Eff es LLVM.Value
-buildProduct builder values layout varName = do
-    productPointer <- buildLayoutAlloca builder layout varName
+accessElementByPath :: (HasCallStack) => Layout.ElementPath -> Layout -> Layout.ElementLocation
+accessElementByPath fullPath layout = case Layout.details layout of
+    Layout.TopLevelSumLayout{tagSize = _, tagLocation, constructors} -> case fullPath of
+        Layout.SumConstructor index :<| rest -> go rest (constructors `NonEmpty.index` index)
+        Layout.SumTag :<| Empty -> tagLocation
+        Layout.SumTag :<| _ -> panic $ "non-final sum tag in elment path: " <> show fullPath
+        Layout.ProductField _ :<| _ -> panic $ "Trying to access element at product path on TopLevelSumLayout: " <> show fullPath
+        Empty -> panic "Trying to access non-primitive path as element"
+    Layout.Simple nestedLayout -> go fullPath nestedLayout
+  where
+    go path nestedLayout = case path of
+        Empty -> case nestedLayout of
+            Layout.Primitive location -> location
+            _ -> panic $ "Trying to access non-primitive path as element"
+        Layout.ProductField index :<| rest -> case nestedLayout of
+            Layout.ProductLayout inner -> go rest (inner `Seq.index` index)
+            _ -> mismatched "product"
+        path@(Layout.SumConstructor _ :<| _) -> accessInNestedSumLayout nestedLayout path
+        path@(Layout.SumTag :<| _) -> accessInNestedSumLayout nestedLayout path
+    mismatched :: (HasCallStack) => Doc Ann -> a
+    mismatched kind = panic $ "Trying to use a " <> kind <> " path to access a non-" <> kind <> " layout"
 
-    forIndexed_ values \value index -> do
-        let (offset, subLayout) = Layout.productOffsetAndLayout index layout
-        pointer <- case offset of
-            0 -> pure productPointer
-            _ -> buildGEPOffset builder productPointer offset ""
-        buildComplexStore builder subLayout value pointer
+    accessInNestedSumLayout :: Layout.NestedLayoutDetails -> Layout.ElementPath -> Layout.ElementLocation
+    accessInNestedSumLayout nestedLayout path = case nestedLayout of
+        Layout.NestedSumLayout{boxedIndices, decomposedIndices, unboxedOffset, layout} -> do
+            let innerElement = accessElementByPath path layout
+            case innerElement of
+                Layout.BoxedScalar innerIndex -> Layout.BoxedScalar (boxedIndices `Seq.index` innerIndex)
+                Layout.DecomposedScalar innerIndex -> Layout.DecomposedScalar (decomposedIndices `Seq.index` innerIndex)
+                Layout.UnboxedOffset offset size alignment -> case unboxedOffset of
+                    Nothing -> panic $ "Returned UnboxedOffset location for a layout without an unboxed segment"
+                    Just innerOffset -> Layout.UnboxedOffset (innerOffset + offset) size alignment
+        _ -> mismatched "sum"
 
-    pure productPointer
+copyElement ::
+    (STE s :> es, Compile es) =>
+    LLVMBuilder.Builder ->
+    Layout.ElementLocation ->
+    Layout.CompoundValue ->
+    Layout.ElementLocation ->
+    Layout ->
+    Layout.CompoundValueBuilder s ->
+    Eff es ()
+copyElement builder sourceLocation sourceValue targetLocation targetLayout targetValueBuilder = do
+    elementValueOrOffset <- case sourceLocation of
+        Layout.BoxedScalar index -> pure $ Left $ Layout.boxedValues sourceValue Vector.! index
+        Layout.DecomposedScalar index -> pure $ Left $ Layout.decomposedScalarValues sourceValue Vector.! index
+        Layout.UnboxedOffset{inFlightOffsetInBytes, size, alignment} -> case Layout.unboxedPointer sourceValue of
+            Nothing -> panic "Trying to copy from unboxed offset in layout without unboxed segment"
+            Just basePointer -> do
+                pointer <- buildGEPOffset builder basePointer inFlightOffsetInBytes ""
+                pure $ Right (pointer, size, alignment)
+    case targetLocation of
+        Layout.BoxedScalar index -> case elementValueOrOffset of
+            Left elementValue -> Layout.fillBoxed targetValueBuilder index elementValue
+            Right (pointer, _size, alignment) -> do
+                elementValue <- LLVMBuilder.buildLoad builder LLVM.pointerType pointer "source"
+                LLVM.setAlignment elementValue (Alignment.toInt alignment)
+                Layout.fillBoxed targetValueBuilder index elementValue
+        Layout.DecomposedScalar index -> case elementValueOrOffset of
+            Left elementValue -> Layout.fillDecomposed targetValueBuilder index elementValue
+            Right (pointer, _size, alignment) -> do
+                let llvmType = Layout.decomposedScalars targetLayout `Seq.index` index
 
-buildComplexStore :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> LLVM.Value -> Eff es ()
-buildComplexStore builder layout value pointer = case Layout.kind layout of
-    Layout.LLVMScalar _scalar -> do
-        store <- LLVMBuilder.buildStore builder value pointer
-        LLVM.setAlignment store (Alignment.toInt (Layout.alignment layout))
-        pure ()
-    Layout.AggregatePointer -> do
-        let alignment = Alignment.toInt (Layout.alignment layout)
-        let size = LLVM.constInt LLVM.int64Type (fromIntegral (Layout.sizeInBytes layout)) False
-        _ <- LLVMBuilder.buildMemCpy builder pointer alignment value alignment size
-        pure ()
-    Layout.ZeroSized -> pure ()
-
-buildArrayStore :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> LLVM.Value -> LLVM.Value -> Eff es ()
-buildArrayStore builder layout array index value = case Layout.kind layout of
-    Layout.LLVMScalar scalar -> do
-        contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
-        pointer <- LLVMBuilder.buildGetElementPtr builder scalar contents [index] ""
-        _ <- LLVMBuilder.buildStore builder value pointer
-        pure ()
-    Layout.AggregatePointer -> do
-        contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
-        pointer <- LLVMBuilder.buildGetElementPtr builder (LLVM.arrayType LLVM.int8Type (fromIntegral (Layout.sizeInBytes layout))) contents [index] ""
-        buildComplexStore builder layout value pointer
-        pure ()
-    Layout.ZeroSized -> pure ()
-
-buildArrayLoad :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> LLVM.Value -> Text -> Eff es LLVM.Value
-buildArrayLoad builder layout array index varName = case Layout.kind layout of
-    Layout.LLVMScalar scalar -> do
-        contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
-        pointer <- LLVMBuilder.buildGetElementPtr builder scalar contents [index] ""
-        LLVMBuilder.buildLoad builder scalar pointer varName
-    Layout.AggregatePointer -> do
-        contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
-        pointer <- LLVMBuilder.buildGetElementPtr builder (LLVM.arrayType LLVM.int8Type (fromIntegral (Layout.sizeInBytes layout))) contents [index] ""
-        buildComplexLoad builder layout pointer varName
-    Layout.ZeroSized -> pure zeroSizedDummyValue
-
-buildComplexReturn :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Eff es ()
-buildComplexReturn builder layout value = do
-    case Layout.kind layout of
-        Layout.ZeroSized -> do
-            _ <- LLVMBuilder.buildRetVoid builder
-            pure ()
-        Layout.LLVMScalar _ -> do
-            _ <- LLVMBuilder.buildRet builder value
-            pure ()
-        Layout.AggregatePointer -> do
-            case ?functionEnv.sretVariable of
-                Nothing -> panic $ "Trying to return AggregatePointer layout from a function without sret variable: " <> show layout
-                Just (sretVariable, _) -> do
-                    buildComplexStore builder layout value sretVariable
-                    _ <- LLVMBuilder.buildRetVoid builder
+                elementValue <- LLVMBuilder.buildLoad builder llvmType pointer "source"
+                LLVM.setAlignment elementValue (Alignment.toInt alignment)
+                Layout.fillDecomposed targetValueBuilder index elementValue
+        Layout.UnboxedOffset{inFlightOffsetInBytes = targetOffset, size = targetSize, alignment = targetAlignment} -> case Layout.unboxedBuilderPointer targetValueBuilder of
+            Nothing -> panic "Trying to copy to unboxed offset of a value builder without an unboxed segment"
+            Just targetBasePointer -> case elementValueOrOffset of
+                Left elementValue -> do
+                    targetPointer <- buildGEPOffset builder targetBasePointer targetOffset "target"
+                    storeInstruction <- LLVMBuilder.buildStore builder elementValue targetPointer
+                    LLVM.setAlignment storeInstruction (Alignment.toInt targetAlignment)
+                    pure ()
+                Right (sourcePointer, sourceSize, sourceAlignment) -> do
+                    assert (Size.inBits sourceSize == Size.inBits targetSize)
+                    targetPointer <- buildGEPOffset builder targetBasePointer targetOffset "target"
+                    _ <-
+                        LLVMBuilder.buildMemCpy
+                            builder
+                            targetPointer
+                            (Alignment.toInt sourceAlignment)
+                            sourcePointer
+                            (Alignment.toInt targetAlignment)
+                            (LLVM.constInt LLVM.int64Type (fromIntegral (Size.inBytes sourceSize)) False)
                     pure ()
 
-buildLoadOrKeepPointer :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
-buildLoadOrKeepPointer builder layout value varName = case Layout.kind layout of
-    Layout.LLVMScalar scalar -> LLVMBuilder.buildLoad builder scalar value varName
-    Layout.AggregatePointer -> pure value
-    Layout.ZeroSized -> pure value
+buildAtRestAlloca :: (Compile es) => LLVMBuilder.Builder -> Layout -> Text -> Eff es LLVM.Value
+buildAtRestAlloca builder layout varName = do
+    LLVMBuilder.buildAlloca builder (LLVM.arrayType LLVM.int8Type (fromIntegral $ Size.inBytes (Layout.sizeAtRest layout))) varName
 
-buildComplexLoad :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Text -> Eff es LLVM.Value
-buildComplexLoad builder layout pointer varName = case Layout.kind layout of
-    Layout.LLVMScalar scalar -> LLVMBuilder.buildLoad builder scalar pointer varName
-    Layout.AggregatePointer -> do
-        localMemory <- buildLayoutAlloca builder layout ""
-        let alignment = Alignment.toInt (Layout.alignment layout)
-        let size = LLVM.constInt LLVM.int64Type (fromIntegral (Layout.sizeInBytes layout)) False
-        _ <- LLVMBuilder.buildMemCpy builder localMemory alignment pointer alignment size
-        pure localMemory
-    Layout.ZeroSized -> pure zeroSizedDummyValue
+buildComplexStore :: (Compile es) => LLVMBuilder.Builder -> Layout -> CompoundValue -> LLVM.Value -> Eff es ()
+buildComplexStore builder layout value baseTargetPointer = do
+    assert (Layout.boxedCount layout == length (Layout.boxedValues value))
+    forIndexed_ (Layout.boxedValues value) \boxedValue boxedIndex -> do
+        targetPointer <- buildGEPOffset builder baseTargetPointer (Layout.atRestBoxedOffset layout boxedIndex) "target_ptr.boxed"
+        _ <- LLVMBuilder.buildStore builder boxedValue targetPointer
+        pure ()
+
+    assert (length (Layout.decomposedScalars layout) == length (Layout.decomposedScalarValues value))
+    forIndexed_ (Layout.decomposedScalarValues value) \scalarValue scalarIndex -> do
+        targetPointer <- buildGEPOffset builder baseTargetPointer (Layout.atRestDecomposedScalarOffset layout scalarIndex) "target_ptr.scalar"
+        _ <- LLVMBuilder.buildStore builder scalarValue targetPointer
+        pure ()
+
+    for_ @Maybe (Layout.unboxedPointer value) \unboxedSourcePointer -> do
+        targetPointer <- buildGEPOffset builder baseTargetPointer (Layout.atRestUnboxedOffset layout) "target_ptr.unboxed"
+        let alignment = Alignment.toInt (Layout.unboxedAlignment layout)
+        let size = LLVM.constInt LLVM.int64Type (fromIntegral (Size.inBytes (Layout.unboxedSize layout))) False
+
+        LLVMBuilder.buildMemCpy builder targetPointer alignment unboxedSourcePointer alignment size
+
+buildArrayStore :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> LLVM.Value -> CompoundValue -> Eff es ()
+buildArrayStore builder layout array index value = do
+    contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
+    pointer <- LLVMBuilder.buildGetElementPtr builder (LLVM.arrayType LLVM.int8Type (fromIntegral $ Size.inBytes (Layout.strideAtRest layout))) contents [index] ""
+    buildComplexStore builder layout value pointer
+
+buildArrayLoad :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> LLVM.Value -> Text -> Eff es CompoundValue
+buildArrayLoad builder layout array index varName = do
+    contents <- buildGEPOffset builder array Heap.arrayContentOffset "contents"
+    pointer <- LLVMBuilder.buildGetElementPtr builder (LLVM.arrayType LLVM.int8Type (fromIntegral $ Size.inBytes (Layout.strideAtRest layout))) contents [index] ""
+    buildComplexLoad builder layout pointer varName
+
+buildComplexReturn :: (Compile es) => LLVMBuilder.Builder -> Layout -> CompoundValue -> Eff es ()
+buildComplexReturn builder layout value = case Layout.returnConvention layout of
+    Layout.Void -> do
+        _ <- LLVMBuilder.buildRetVoid builder
+        pure ()
+    Layout.SingleBoxed -> do
+        _ <- LLVMBuilder.buildRet builder (Layout.assertBoxed value)
+        pure ()
+    Layout.SingleScalar _ -> do
+        _ <- LLVMBuilder.buildRet builder (Layout.assertScalar value)
+        pure ()
+    Layout.SRetPointer -> do
+        case ?functionEnv.sretVariable of
+            Nothing -> panic $ "Trying to return layout with SRetPointer return convention from a function without sret variable: " <> show layout
+            Just (sretVariable, _) -> do
+                buildComplexStore builder layout value sretVariable
+                _ <- LLVMBuilder.buildRetVoid builder
+                pure ()
+    Layout.ScalarStruct -> do
+        structToReturn <- constructScalarStruct builder layout value "ret"
+
+        _ <- LLVMBuilder.buildRet builder structToReturn
+        pure ()
+
+{- | Load from a pointer while keeping the unboxed segment as a pointer.
+This is only valid if the pointee lives at least as long as the value returned from this
+-}
+buildLoadAsReference :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Text -> Eff es CompoundValue
+buildLoadAsReference builder layout basePointer varName = runSTE \s -> do
+    unboxedPointer <- buildGEPOffset builder basePointer (Layout.atRestUnboxedOffset layout) (varName <> ".unboxed_ref")
+
+    valueBuilder <- Layout.newBuilderWithUnboxedPointer @s layout (Just unboxedPointer)
+
+    for_ @[] [0 .. Layout.boxedCount layout - 1] \boxedIndex -> do
+        boxPointer <- buildGEPOffset builder basePointer (Layout.atRestBoxedOffset layout boxedIndex) (varName <> ".boxed")
+        value <- LLVMBuilder.buildLoad builder LLVM.pointerType boxPointer ""
+        registerGCRoot value
+        Layout.fillBoxed valueBuilder boxedIndex value
+    forIndexed_ (Layout.decomposedScalars layout) \scalarType scalarIndex -> do
+        scalarPointer <- buildGEPOffset builder basePointer (Layout.atRestDecomposedScalarOffset layout scalarIndex) (varName <> ".scalar")
+        value <- LLVMBuilder.buildLoad builder scalarType scalarPointer ""
+        Layout.fillBoxed valueBuilder scalarIndex value
+
+    Layout.buildValue valueBuilder
+
+buildComplexLoad :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Text -> Eff es CompoundValue
+buildComplexLoad builder layout basePointer varName = runSTE \s -> do
+    valueBuilder <- Layout.newBuilder @s builder layout
+
+    for_ @[] [0 .. Layout.boxedCount layout - 1] \boxedIndex -> do
+        boxPointer <- buildGEPOffset builder basePointer (Layout.atRestBoxedOffset layout boxedIndex) (varName <> ".boxed")
+        value <- LLVMBuilder.buildLoad builder LLVM.pointerType boxPointer ""
+        registerGCRoot value
+        Layout.fillBoxed valueBuilder boxedIndex value
+    forIndexed_ (Layout.decomposedScalars layout) \scalarType scalarIndex -> do
+        scalarPointer <- buildGEPOffset builder basePointer (Layout.atRestDecomposedScalarOffset layout scalarIndex) (varName <> ".scalar")
+        value <- LLVMBuilder.buildLoad builder scalarType scalarPointer ""
+        Layout.fillDecomposed valueBuilder scalarIndex value
+    for_ @Maybe (Layout.unboxedBuilderPointer valueBuilder) \targetPointer -> do
+        sourcePointer <- buildGEPOffset builder basePointer (Layout.atRestUnboxedOffset layout) ""
+        let alignment = Alignment.toInt (Layout.unboxedAlignment layout)
+        let size = LLVM.constInt LLVM.int64Type (fromIntegral $ Size.inBytes (Layout.unboxedSize layout)) False
+        LLVMBuilder.buildMemCpy builder targetPointer alignment sourcePointer alignment size
+
+    Layout.buildValue valueBuilder
+
+fillLocation :: (STE s :> es, Compile es, HasCallStack) => LLVMBuilder.Builder -> Layout.CompoundValueBuilder s -> Layout.ElementLocation -> LLVM.Value -> Eff es ()
+fillLocation builder valueBuilder location value = case location of
+    Layout.BoxedScalar index -> Layout.fillBoxed valueBuilder index value
+    Layout.DecomposedScalar index -> Layout.fillDecomposed valueBuilder index value
+    Layout.UnboxedOffset offset _size alignment -> case Layout.unboxedBuilderPointer valueBuilder of
+        Nothing -> panic "Trying to fill unboxed offset location of a value builder without an unboxed segment"
+        Just pointer -> do
+            contentPointer <- buildGEPOffset builder pointer offset ""
+            storeInstruction <- LLVMBuilder.buildStore builder value contentPointer
+            -- We don't need the size here, but the alignment could be higher than the natural alignment that
+            -- LLVM expects so we can set it explicitly
+            LLVM.setAlignment storeInstruction (Alignment.toInt alignment)
 
 {- | Build a @getelementptr@ instruction pointing at a constant offset given in bytes.
 The offset is assumed to be in-bounds.
@@ -1060,12 +1237,6 @@ buildGEPOffset :: (Compile es) => LLVMBuilder.Builder -> LLVM.Value -> Int -> Te
 buildGEPOffset builder pointer offset name = case offset of
     0 -> pure pointer
     _ -> LLVMBuilder.buildInBoundsGetElementPtr builder LLVM.int8Type pointer [LLVM.constInt LLVM.int64Type (fromIntegral offset) False] name
-
-buildLayoutAlloca :: (Compile es) => LLVMBuilder.Builder -> Layout -> Text -> Eff es LLVM.Value
-buildLayoutAlloca builder layout varName = do
-    alloca <- LLVMBuilder.buildAlloca builder (Layout.llvmType layout) varName
-    LLVM.setAlignment alloca (Alignment.toInt (Layout.alignment layout))
-    pure alloca
 
 registerNewBlock :: (Compile es) => MIR.BlockDescriptor -> Eff es LLVM.BasicBlock
 registerNewBlock descriptor = do
@@ -1092,16 +1263,16 @@ newUnreachableBlock = do
     _ <- LLVMBuilder.buildUnreachable builder
     pure llvmBlock
 
-asVar :: (Compile es) => MIR.Variable -> Layout -> (Text -> Eff es LLVM.Value) -> Eff es LLVM.Value
+asVar :: (Compile es) => MIR.Variable -> Layout -> (Text -> Eff es CompoundValue) -> Eff es CompoundValue
 asVar var layout cont = do
     llvmValue <- cont (renderVariable var)
     insertVarMapping var llvmValue layout
     pure llvmValue
 
-insertVarMapping :: (Compile es) => MIR.Variable -> LLVM.Value -> Layout -> Eff es ()
+insertVarMapping :: (Compile es) => MIR.Variable -> CompoundValue -> Layout -> Eff es ()
 insertVarMapping var llvmValue layout = modify (\state -> state{variableMappings = HashMap.insert var (llvmValue, layout) state.variableMappings})
 
-asVar_ :: (Compile es) => MIR.Variable -> Layout -> (Text -> Eff es LLVM.Value) -> Eff es ()
+asVar_ :: (Compile es) => MIR.Variable -> Layout -> (Text -> Eff es CompoundValue) -> Eff es ()
 asVar_ var layout cont = do
     _ <- asVar var layout cont
     pure ()
@@ -1109,14 +1280,14 @@ asVar_ var layout cont = do
 closureWrapperNameForFunction :: Vega.GlobalName -> Text
 closureWrapperNameForFunction coreName = renderLLVMName coreName <> "__closure"
 
-lookupVar :: (HasCallStack, Compile es) => MIR.Variable -> Eff es (LLVM.Value, Layout)
+lookupVar :: (HasCallStack, Compile es) => MIR.Variable -> Eff es (Layout.CompoundValue, Layout)
 lookupVar variable = do
     MkDeclarationState{variableMappings} <- get
     case HashMap.lookup variable variableMappings of
         Nothing -> panic $ "Trying to use MIR variable without associated LLVM value: " <> pretty variable
         Just value -> pure value
 
-lookupVarValue :: (HasCallStack, Compile es) => MIR.Variable -> Eff es LLVM.Value
+lookupVarValue :: (HasCallStack, Compile es) => MIR.Variable -> Eff es CompoundValue
 lookupVarValue variable = do
     (value, _) <- lookupVar variable
     pure value
@@ -1145,55 +1316,53 @@ alignAttribute alignment = do
     kind <- LLVM.getEnumAttributeKindForName "align"
     LLVM.createEnumAttribute kind (fromIntegral (Alignment.toInt alignment))
 
-{- | Zero sized values should never appear in the generated LLVM code, but
-we sometimes still need to register a value for a MIR variable, so we
-use this dummy value that will be very visible if it does end up in the generated code
--}
-zeroSizedDummyValue :: (?context :: LLVM.Context) => LLVM.Value
-zeroSizedDummyValue = LLVM.constString "USE_OF_ZERO_SIZED_VALUE" LLVM.Don'tNullTerminate
-
 compileArithmeticOperator :: (Compile es) => LLVMBuilder.Builder -> MIR.ArithmeticExpr -> Text -> Eff es (LLVM.Value, Layout)
 compileArithmeticOperator builder arithmeticExpr varName = case arithmeticExpr of
     MIR.Add var1 var2 -> do
         (arg1, representation) <- lookupVar var1
         arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildAdd builder arg1 arg2 varName
+        result <- LLVMBuilder.buildAdd builder (Layout.assertScalar arg1) (Layout.assertScalar arg2) varName
         pure (result, representation)
     MIR.Subtract var1 var2 -> do
         (arg1, representation) <- lookupVar var1
         arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildSub builder arg1 arg2 varName
+        result <- LLVMBuilder.buildSub builder (Layout.assertScalar arg1) (Layout.assertScalar arg2) varName
         pure (result, representation)
     MIR.Multiply var1 var2 -> do
         (arg1, representation) <- lookupVar var1
         arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildMul builder arg1 arg2 varName
+        result <- LLVMBuilder.buildMul builder (Layout.assertScalar arg1) (Layout.assertScalar arg2) varName
         pure (result, representation)
     MIR.Divide var1 var2 -> do
         (arg1, representation) <- lookupVar var1
         arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildSDiv builder arg1 arg2 varName
+        result <- LLVMBuilder.buildSDiv builder (Layout.assertScalar arg1) (Layout.assertScalar arg2) varName
         pure (result, representation)
     MIR.Less var1 var2 -> do
         arg1 <- lookupVarValue var1
         arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildICmp builder LLVM.IntSLT arg1 arg2 varName
+        result <- LLVMBuilder.buildICmp builder LLVM.IntSLT (Layout.assertScalar arg1) (Layout.assertScalar arg2) varName
         pure (result, Layout.boolLayout)
     MIR.LessEqual var1 var2 -> do
         arg1 <- lookupVarValue var1
         arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildICmp builder LLVM.IntSLE arg1 arg2 varName
+        result <- LLVMBuilder.buildICmp builder LLVM.IntSLE (Layout.assertScalar arg1) (Layout.assertScalar arg2) varName
         pure (result, Layout.boolLayout)
     MIR.Equal var1 var2 -> do
         arg1 <- lookupVarValue var1
         arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildICmp builder LLVM.IntEQ arg1 arg2 varName
+        result <- LLVMBuilder.buildICmp builder LLVM.IntEQ (Layout.assertScalar arg1) (Layout.assertScalar arg2) varName
         pure (result, Layout.boolLayout)
     MIR.NotEqual var1 var2 -> do
         arg1 <- lookupVarValue var1
         arg2 <- lookupVarValue var2
-        result <- LLVMBuilder.buildICmp builder LLVM.IntNE arg1 arg2 varName
+        result <- LLVMBuilder.buildICmp builder LLVM.IntNE (Layout.assertScalar arg1) (Layout.assertScalar arg2) varName
         pure (result, Layout.boolLayout)
+
+registerGCRoot :: (Compile es) => LLVM.Value -> Eff es ()
+registerGCRoot _ = do
+    -- TODO
+    pure ()
 
 {- NOTE [Closure Representation]:
 Closures with payload representation `r` are *always* represented as products (FunctionPointer * r).

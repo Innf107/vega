@@ -102,7 +102,7 @@ data ClosureEntry
         , variableRepresentation :: Representation
         , closureParameter :: LocalCoreName
         , unboxedClosureRepresentation :: Representation
-        , closureIndex :: Int
+        , closureIndex :: Maybe Int
         }
     | ClosedFunctionEntry
         { variableName :: LocalCoreName
@@ -170,30 +170,42 @@ compileClosureAccesses block entries = go mempty block entries
                         closure <- newVar "closure"
                         block <- addInstruction block (MIR.Unbox closure boxedClosure unboxedClosureRepresentation)
                         pure (closure, block)
-                block <-
-                    addInstruction
-                        block
-                        ( MIR.AccessField
-                            { var
-                            , target = closure
-                            , path = [MIR.ProductFieldPath closureIndex]
-                            , fieldRepresentation = variableRepresentation
-                            }
-                        )
+                block <- case closureIndex of
+                    Just closureIndex ->
+                        addInstruction
+                            block
+                            ( MIR.AccessField
+                                { var
+                                , target = closure
+                                , path = [MIR.ProductFieldPath closureIndex]
+                                , fieldRepresentation = variableRepresentation
+                                }
+                            )
+                    Nothing -> addInstruction block (MIR.Identity var closure)
                 go (HashMap.insert closureParameter closure unboxedClosuresSoFar) block rest
         ClosedFunctionEntry{variableName, globalFunctionName, closureParameter} :<| rest -> do
             (closure, closureRep) <- getLocal closureParameter
             functionPointer <- newVar "fp"
             let representationArguments = fmap Core.ParameterRep (DeBruijn.all ?currentRepresentationParameters)
-            block <- addInstruction block (MIR.LoadFunctionPointer functionPointer globalFunctionName representationArguments)
+            block <-
+                addInstruction
+                    block
+                    ( MIR.LoadFunctionPointer
+                        { var =
+                            functionPointer
+                        , functionName = globalFunctionName
+                        , asGlobalClosure = False
+                        , representationArguments
+                        }
+                    )
             var <- newVarFromName variableName
 
-            let varRepresentation = Core.ProductRep [Core.PrimitiveRep Vega.PointerRep, closureRep]
+            let varRepresentation = productRep [Core.PrimitiveRep Vega.PointerRep, closureRep]
             registerVariable variableName var varRepresentation
             block <-
                 addInstruction
                     block
-                    ( MIR.ProductConstructor
+                    ( productConstructor
                         var
                         [functionPointer, closure]
                         varRepresentation
@@ -519,7 +531,20 @@ compileVarInstantiation block var representationArguments = do
                         block <- addInstruction block (MIR.LoadGlobal{var, representationArguments, globalName, representation})
                         pure (block, var)
                     GlobalClosure -> do
-                        block <- addInstruction block (MIR.LoadGlobalClosure{var, representationArguments, functionName = globalName})
+                        pointerVar <- newVar "fp"
+                        block <-
+                            addInstruction
+                                block
+                                ( MIR.LoadFunctionPointer
+                                    { var = pointerVar
+                                    , asGlobalClosure = True
+                                    , representationArguments
+                                    , functionName = globalName
+                                    }
+                                )
+                        nullPointerVar <- newVar "null"
+                        block <- addInstruction block (MIR.LoadBoxedNull nullPointerVar)
+                        block <- addInstruction block (productConstructor var [pointerVar, nullPointerVar] Core.functionRepresentation)
                         pure (block, var)
 
 compileValue :: (Compile es) => BlockBuilder -> Core.Value -> Eff es (BlockBuilder, MIR.Variable)
@@ -553,7 +578,7 @@ compileValue block = \case
     Core.ProductConstructor arguments representation -> do
         (block, arguments) <- compileValues block arguments
         var <- newVar ""
-        block <- addInstruction block (MIR.ProductConstructor{var, values = arguments, representation})
+        block <- addInstruction block (productConstructor var arguments representation)
         pure (block, var)
     Core.SumConstructor constructorIndex payload resultRepresentation -> do
         var <- newVar ""
@@ -594,7 +619,7 @@ compileLocalFunction block functionName var parameters returnRepresentation stat
                 (_, representation) <- getLocal local
                 pure (local, representation)
 
-    let payloadRepresentation = Core.ProductRep (fmap snd localsWithRepresentations)
+    let payloadRepresentation = productRep (fmap snd localsWithRepresentations)
 
     variableClosureEntries <- forIndexed localsWithRepresentations \(local, variableRepresentation) closureIndex -> do
         pure
@@ -603,7 +628,9 @@ compileLocalFunction block functionName var parameters returnRepresentation stat
                 , variableRepresentation
                 , closureParameter
                 , unboxedClosureRepresentation = payloadRepresentation
-                , closureIndex
+                , closureIndex = case localsWithRepresentations of
+                    (_ :<| Empty) -> Nothing
+                    _ -> Just closureIndex
                 }
     let recursiveEntry = case functionName of
             Nothing -> []
@@ -630,7 +657,7 @@ compileLocalFunction block functionName var parameters returnRepresentation stat
         pure mirVar
 
     payloadVar <- newVar "payload"
-    block <- addInstruction block (MIR.ProductConstructor payloadVar closedOverMIRVars payloadRepresentation)
+    block <- addInstruction block (productConstructor payloadVar closedOverMIRVars payloadRepresentation)
 
     boxedPayloadVar <- newVar "boxedPayload"
     block <- addInstruction block (MIR.Box boxedPayloadVar payloadVar)
@@ -641,12 +668,13 @@ compileLocalFunction block functionName var parameters returnRepresentation stat
             block
             ( MIR.LoadFunctionPointer
                 { var = functionPointerVar
+                , asGlobalClosure = False
                 , functionName = lambdaName
                 , representationArguments = (fmap Core.ParameterRep $ DeBruijn.all ?currentRepresentationParameters)
                 }
             )
 
-    block <- addInstruction block (MIR.ProductConstructor var [functionPointerVar, boxedPayloadVar] Core.functionRepresentation)
+    block <- addInstruction block (productConstructor var [functionPointerVar, boxedPayloadVar] Core.functionRepresentation)
     pure block
 
 freeLocalVariables :: HashSet LocalCoreName -> Seq Core.Statement -> Core.Expr -> HashSet LocalCoreName
@@ -825,6 +853,14 @@ mergePhis (MkPhis left) (MkPhis right) = do
             let map = HashMap.unionWithKey (combineVars var) map1 map2
             (rep1, map)
     MkPhis $ HashMap.unionWithKey combineBlocks left right
+
+productRep :: Seq Representation -> Representation
+productRep [representation] = representation
+productRep representations = Core.ProductRep representations
+
+productConstructor :: MIR.Variable -> Seq MIR.Variable -> Representation -> MIR.Instruction
+productConstructor var [value] _representation = MIR.Identity var value
+productConstructor var values representation = MIR.ProductConstructor var values representation
 
 -- The f only exists to allow shadowing the builder.
 -- If you need this in a pure context, just instantiate it with Identity

@@ -18,6 +18,7 @@ import Vega.Panic (panic)
 import Vega.Pretty (intercalateDoc, lparen, pretty, rparen)
 import Vega.Pretty qualified as Pretty
 import Vega.Syntax qualified as Vega
+import Vega.Compilation.MIR.Syntax (Instruction(asGlobalClosure))
 
 type Monomorphize es =
     ( ?program :: MIR.Program
@@ -151,30 +152,20 @@ monomorphizeInstruction instruction = case instruction of
                     , representation = substituteRepresentation representation
                     }
                 )
-    MIR.LoadFunctionPointer{var, functionName, representationArguments}
+    MIR.LoadFunctionPointer{var, functionName, asGlobalClosure, representationArguments}
         | Vega.isInternalName functionName ->
             pure
                 ( MIR.LoadFunctionPointer
                     { var
                     , functionName
+                    , asGlobalClosure
                     , representationArguments = fmap substituteRepresentation representationArguments
                     }
                 )
         | otherwise -> do
             monomorphizedFunctionName <- monomorphizeDeclaration functionName (fmap substituteRepresentation representationArguments)
-            pure (MIR.LoadFunctionPointer{var, functionName = monomorphizedFunctionName, representationArguments = []})
-    MIR.LoadGlobalClosure{var, functionName, representationArguments}
-        | Vega.isInternalName functionName ->
-            pure
-                ( MIR.LoadGlobalClosure
-                    { var
-                    , functionName
-                    , representationArguments = fmap substituteRepresentation representationArguments
-                    }
-                )
-        | otherwise -> do
-            monomorphizedFunctionName <- monomorphizeDeclaration functionName (fmap substituteRepresentation representationArguments)
-            pure (MIR.LoadGlobalClosure{var, functionName = monomorphizedFunctionName, representationArguments = []})
+            pure (MIR.LoadFunctionPointer{var, functionName = monomorphizedFunctionName, asGlobalClosure, representationArguments = []})
+    MIR.LoadBoxedNull{var} -> pure $ MIR.LoadBoxedNull{var}
     MIR.CallDirect{var, functionName, representationArguments, arguments, returnRepresentation}
         | Vega.isInternalName functionName ->
             pure
