@@ -1,0 +1,13 @@
+-- type: print(abcd)
+
+import std:String
+
+import std:IO/Posix as IO
+import std:IO/Posix/FileDescriptor
+
+import std:Stream
+
+main : () -> ()
+main() = {
+    IO.writeStream(FileDescriptor.stdout(), String.toByteStream("abcd"))
+}

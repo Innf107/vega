@@ -6,6 +6,7 @@ options {
     "--hide-known" as hideKnown: "Don't print immediate output for known failures"
     "--skip-mir-verification" as skipMIRVerification: "Do not run MIR verification on the native backend. This might be desirable if you want to see what LLVM is generated for something that MIR verification doesn't implement correctly yet"
     "--debug-runtime" as debugRuntime: "Compile the runtime in debug instead of release mode"
+    "-O" "--optimized" as optimized: "Build the vega compiler with optimizations. This may take longer to build but can drastically improve the time spent actually running tests."
 }
 
 module List = import("@std/list.pls")
@@ -55,7 +56,14 @@ if debugRuntime then {
     ()
 }
 chdir(testdir)
-!stack "build" "--fast"
+
+if optimized then {
+    !stack "build"
+    ()
+} else {
+    !stack "build" "--fast"
+    ()
+}
 
 
 let vega = !readlink "-f" "../${!stack "path" "--dist-dir"}/build/vega/vega"
