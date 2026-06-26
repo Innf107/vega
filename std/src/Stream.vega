@@ -28,3 +28,9 @@ repeat(value) = Stream({
     }
 })
 
+empty : forall a. () -> Stream(a)
+empty() = Stream({
+    sizeHint = Bounded(0),
+    run = \_ -> {}
+})
+
