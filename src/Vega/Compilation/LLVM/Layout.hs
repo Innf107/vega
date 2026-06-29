@@ -77,6 +77,10 @@ module Vega.Compilation.LLVM.Layout (
     assertSingleValue,
     closurePayload,
     closureFunctionPointer,
+
+    -- * GC types
+    boxedPointerType,
+    boxedNullPointer
 ) where
 
 import Control.Exception (assert)
@@ -198,9 +202,15 @@ details :: Layout -> TopLevelLayoutDetails
 -- I don't love having to expose the entirity of LayoutDetails here but i'm not sure how else we would do nested product/sum constructors
 details layout = layout.details
 
+boxedPointerType :: (?context :: LLVM.Context) => LLVM.Type
+boxedPointerType = LLVM.pointerTypeWithAddressSpace 1
+
+boxedNullPointer :: (?context :: LLVM.Context) => LLVM.Value
+boxedNullPointer = LLVM.constNull boxedPointerType
+
 llvmParameters :: (?context :: LLVM.Context) => Layout -> Seq (LLVM.Type, Seq LLVM.Attribute)
 llvmParameters layout = do
-    let boxedParameters = Seq.replicate (boxedCount layout) (LLVM.pointerType, [])
+    let boxedParameters = Seq.replicate (boxedCount layout) (boxedPointerType, [])
     let scalarParameters = fmap (\type_ -> (type_, [])) (decomposedScalars layout)
     let unboxedParameter = case Size.inBytes (unboxedSize layout) of
             0 -> []
@@ -285,7 +295,7 @@ This is only valid if its 'returnConvention' is 'ScalarStruct'.
 scalarStructType :: (?context :: LLVM.Context) => Layout -> LLVM.Type
 scalarStructType layout = assert (case returnConvention layout of ScalarStruct -> True; _ -> False) do
     LLVM.structType
-        ( Storable.replicate (boxedCount layout) LLVM.pointerType
+        ( Storable.replicate (boxedCount layout) boxedPointerType
             <> Util.viaList (decomposedScalars layout)
         )
         False
@@ -322,11 +332,11 @@ atRestLLVMType layout
     | layout.boxedCount == 0 = Just (LLVM.arrayType LLVM.int8Type $ fromIntegral (Size.inBytes layout.unboxedSize + Size.inBytes (decomposedStride layout)))
     -- This type only contains pointers
     | Size.inBits layout.unboxedSize == 0 && length layout.decomposedScalars == 0 = do
-        Just (LLVM.arrayType LLVM.pointerType $ fromIntegral layout.boxedCount)
+        Just (LLVM.arrayType boxedPointerType $ fromIntegral layout.boxedCount)
     | otherwise = do
-        let pointers = LLVM.arrayType LLVM.pointerType $ fromIntegral layout.boxedCount
+        let boxed = LLVM.arrayType boxedPointerType $ fromIntegral layout.boxedCount
         let unboxed = LLVM.arrayType LLVM.int8Type $ fromIntegral (Size.inBytes layout.unboxedSize + Size.inBytes (decomposedStride layout))
-        Just (LLVM.structType [pointers, unboxed] False)
+        Just (LLVM.structType [boxed, unboxed] False)
 
 {- | Create an alloca for this type when stored *at rest* (e.g. when returned via an sret pointer).
 This is only valid if the type is not zero-sized.
@@ -444,7 +454,7 @@ fillBoxed :: (STE s :> es, HasCallStack) => CompoundValueBuilder s -> Int -> LLV
 fillBoxed builder index value = OutArray.fill builder.boxed index value
 
 fillRemainingBoxedWithNull :: (STE s :> es, HasCallStack, ?context :: LLVM.Context) => CompoundValueBuilder s -> Eff es ()
-fillRemainingBoxedWithNull builder = OutArray.fillRemaining builder.boxed LLVM.constNullPointer
+fillRemainingBoxedWithNull builder = OutArray.fillRemaining builder.boxed boxedNullPointer
 
 fillDecomposed :: (STE s :> es, HasCallStack) => CompoundValueBuilder s -> Int -> LLVM.Value -> Eff es ()
 fillDecomposed builder index value = OutArray.fill builder.decomposedScalars index value

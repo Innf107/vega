@@ -348,7 +348,7 @@ compileBackend = do
                 let targetMachineOptions =
                         LLVM.Target.defaultTargetMachineOptions
                             { LLVM.Target.relocMode = Just LLVM.Target.RelocPIC
-                            , LLVM.Target.codeGenOptLevel = Just LLVM.Target.CodeGenLevelNone
+                            , LLVM.Target.codeGenOptLevel = Just LLVM.Target.CodeGenLevelDefault
                             }
 
                 targetMachine <-
@@ -365,7 +365,7 @@ compileBackend = do
                 {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
 
                 -- TODO: add proper optimization flags that control this
-                LLVM.runPasses llvmModule "default<O1>" (Just targetMachine) LLVM.defaultPassBuilderOptions
+                LLVM.runPasses llvmModule "default<O1>,rewrite-statepoints-for-gc" (Just targetMachine) LLVM.defaultPassBuilderOptions
 
                 -- TODO: move this behind a flag
                 -- LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.s|] LLVM.Target.AssemblyFile
