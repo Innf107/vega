@@ -77,6 +77,9 @@ pub fn initialize_stack_roots() {
                 let base_pointer_location = &locations[3 + 2 * i];
                 let derived_pointer_location = &locations[3 + 2 * i + 1];
 
+                assert!(base_pointer_location.kind == LocationKind::Indirect);
+                assert!(derived_pointer_location.kind == LocationKind::Indirect);
+
                 // There should be exactly one base pointer
                 assert!(base_pointer_location.location_size == 8);
 
