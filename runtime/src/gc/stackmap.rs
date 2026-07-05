@@ -1,5 +1,6 @@
 // This parses the LLVM stack map format described at https://llvm.org/docs/StackMaps.html#stack-map-format
 
+use core::slice;
 use std::{cell::OnceCell, collections::HashMap, ptr::addr_of};
 
 unsafe extern "C" {
@@ -9,7 +10,17 @@ unsafe extern "C" {
 // This isn't *actually* mutable, we just need to initialize it once at the start, but it will never be mutated after that.
 static mut STACK_MAP: OnceCell<HashMap<usize, StackMapEntry>> = OnceCell::new();
 
-pub struct StackMapEntry {}
+#[derive(Debug)]
+pub struct StackMapEntry {
+    pub relocation_pairs: Box<[RelocationPair]>,
+}
+
+#[derive(Debug)]
+pub struct RelocationPair {
+    pub base_pointer_offset: i32,
+    pub derived_pointer_offset: i32,
+    pub number_of_derived_pointers: u16,
+}
 
 // SAFETY: initialize_stack_roots must have been called before
 pub unsafe fn get_stack_map() -> &'static HashMap<usize, StackMapEntry> {
@@ -20,14 +31,6 @@ pub unsafe fn get_stack_map() -> &'static HashMap<usize, StackMapEntry> {
 }
 
 pub fn initialize_stack_roots() {
-    let version = unsafe { __LLVM_STACKMAPS.header.version };
-    let num_functions = unsafe { __LLVM_STACKMAPS.num_functions };
-    let num_constants = unsafe { __LLVM_STACKMAPS.num_constants };
-    let num_records = unsafe { __LLVM_STACKMAPS.num_records };
-    println!(
-        "stack map version: {version}, num_functions: {num_functions}, num_constants: {num_constants}, num_records: {num_records}"
-    );
-
     let mut stack_map = HashMap::new();
 
     let mut current_stack_size_record_pointer =
@@ -52,15 +55,45 @@ pub fn initialize_stack_roots() {
                 + ((*current_record_pointer).instruction_offset as u64)
         };
 
-        let entry = StackMapEntry {};
+        let location_pointer = unsafe { current_record_pointer.add(1) as *const Location };
+        let num_locations = unsafe { (*current_record_pointer).num_locations } as usize;
+        let locations = unsafe { slice::from_raw_parts(location_pointer, num_locations) };
+        // locations[0] is the calling convention, but we don't actually care about that here
+        assert!(locations[0].kind == LocationKind::Constant);
+        // locations[1] contains the flags passed to this statepoint.
+        // Since we don't currently use flags, this should always be 0.
+        assert!(locations[1].kind == LocationKind::Constant);
+        assert!(locations[1].offset_or_small_constant == 0);
+
+        // locations[2] contains the number of deopt locations.
+        // We don't use deoptimization so this should always be 0
+        assert!(locations[2].kind == LocationKind::Constant);
+        assert!(locations[2].offset_or_small_constant == 0);
+
+        // The remaining locations all come in pairs
+        assert!((locations.len() - 3) % 2 == 0);
+        let relocation_pairs = (0..((locations.len() - 3) / 2))
+            .map(|i| {
+                let base_pointer_location = &locations[3 + 2 * i];
+                let derived_pointer_location = &locations[3 + 2 * i + 1];
+
+                // There should be exactly one base pointer
+                assert!(base_pointer_location.location_size == 8);
+
+                // There may be more than one derived pointer, but the total size in bytes is divisible by 8 since
+                // every pointer is exactly 8 bytes large.
+                assert!(derived_pointer_location.location_size % 8 == 0);
+                RelocationPair {
+                    base_pointer_offset: base_pointer_location.offset_or_small_constant,
+                    derived_pointer_offset: derived_pointer_location.offset_or_small_constant,
+                    number_of_derived_pointers: (derived_pointer_location.location_size / 8) as u16,
+                }
+            })
+            .collect::<Box<[RelocationPair]>>();
+
+        let entry = StackMapEntry { relocation_pairs };
 
         stack_map.insert(absolute_instruction_pointer as usize, entry);
-
-
-        let record_count_for_this_function = unsafe { (*current_stack_size_record_pointer).record_count };
-        let function_address = unsafe {(*current_stack_size_record_pointer).function_address};
-        println!("inserting entry for IP {absolute_instruction_pointer} (record index {current_record_index}/{record_count_for_this_function}): function address: {function_address}");
-
 
         current_record_index += 1;
         // We need to align some intermediate locations to increment the current record pointer here
@@ -98,6 +131,7 @@ struct LLVMStackMap {
 
 impl LLVMStackMap {}
 
+#[repr(C)]
 struct StkSizeRecord {
     function_address: u64,
     stack_size: u64,
@@ -118,6 +152,8 @@ struct StkMapRecordPrefix {
     _reserved: u16,
     num_locations: u16,
 }
+
+#[repr(C)]
 struct StkMapRecordSuffix {
     _padding: u16,
     num_live_outs: u16,
@@ -125,12 +161,22 @@ struct StkMapRecordSuffix {
 
 #[repr(C)]
 struct Location {
-    kind: u8,
+    kind: LocationKind,
     _reserved: u8,
     location_size: u16,
     dwarf_regnum: u16,
     _reserved2: u16,
     offset_or_small_constant: i32,
+}
+
+#[repr(u8)]
+#[derive(PartialEq, Eq)]
+enum LocationKind {
+    Register = 1,
+    Direct = 2,
+    Indirect = 3,
+    Constant = 4,
+    ConstIndex = 5,
 }
 
 #[repr(C)]

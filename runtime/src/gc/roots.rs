@@ -1,4 +1,4 @@
-use std::{arch::asm, cell::OnceCell, collections::HashMap};
+use std::{arch::asm};
 use crate::gc::stackmap::{get_stack_map};
 
 
@@ -9,16 +9,13 @@ pub extern "C" fn vega_debug_stack_roots() {
     unsafe { asm!("mov {}, rbp", out(reg) current_rbp) }
 
     while current_rbp != 0 {
-        println!("base pointer: {current_rbp}");
-
         let rip_ptr = (current_rbp + 8) as *const usize;
         let instruction_pointer = unsafe { *rip_ptr };
-        println!("instruction pointer: {instruction_pointer}");
         let roots = unsafe { get_stack_map() };
         match roots.get(&instruction_pointer) {
-            None => println!("WARNING: No stack root info for instruction pointer {instruction_pointer}"),
-            Some(_) => {
-
+            None => println!("IP {instruction_pointer:#x}: No stack map info"),
+            Some(entry) => {
+                println!("IP {instruction_pointer:#x}: {entry:?}")
             }
         }
 
