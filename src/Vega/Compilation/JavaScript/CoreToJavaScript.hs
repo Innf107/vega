@@ -349,6 +349,9 @@ primopJSFunction = \case
     Builtins.Errno -> panic "errno is not available on the JS backend"
     Builtins.Panic -> asJSFunction 1 "internal$panic"
     Builtins.DebugInt -> asJSFunction 1 "console.log"
+    -- There is nothing interesting we can do with this call, but it also doesn't hurt to compile it to a noop
+    -- under the JS backend so that it can be used to debug native code without having to remove the JS target
+    Builtins.DebugStackRoots -> (0, \_ -> pure ([], JS.ArrayLiteral []))
     Builtins.UnsafeCoerce -> identity
   where
     asJSFunction arity name = (arity, \arguments -> pure ([], JS.Application (JS.Var name) arguments))

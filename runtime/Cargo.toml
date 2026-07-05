@@ -5,6 +5,7 @@ edition = "2024"
 
 [lib]
 crate-type = ["staticlib"]
+rustflags = ["-C", "force-frame-pointers=yes"]
 
 [dependencies]
 libc = "0.2.183"

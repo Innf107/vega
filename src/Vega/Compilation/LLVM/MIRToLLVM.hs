@@ -108,6 +108,10 @@ addMainFunction entryPoint module_ = do
     initialBlock <- LLVM.appendBasicBlock main ""
     LLVMBuilder.positionBuilderAtEnd builder initialBlock
 
+    let vega_initialize_type = LLVM.functionType [] LLVM.voidType False
+    vega_initialize <- LLVM.addFunction module_ "vega_initialize" vega_initialize_type
+    _ <- LLVMBuilder.buildCall builder vega_initialize_type vega_initialize [] ""
+
     entryPointFunction <-
         LLVM.getNamedFunction module_ (renderLLVMName entryPoint) >>= \case
             Nothing -> panic $ "Entry point not found: " <> Vega.prettyGlobal Vega.VarKind entryPoint
@@ -171,8 +175,7 @@ forwardDeclareDeclaration = \case
         let wrapperType = attributeFunctionType (parameters <> [(Layout.boxedPointerType, [])]) returnType
         closureWrapper <- addFunctionWithAttributes ?module_ (closureWrapperNameForFunction name) wrapperType
         LLVM.setFunctionCallConv closureWrapper LLVM.tailCallConv
-        LLVM.setFunctionCallConv function LLVM.tailCallConv
-        LLVM.setGC function "statepoint-example"
+        LLVM.setGC closureWrapper "statepoint-example"
 
         block <- LLVM.appendBasicBlock closureWrapper ""
         builder <- LLVMBuilder.createBuilder
@@ -715,6 +718,7 @@ compilePrimopCall builder primop arguments representationArguments returnReprese
         UnsafeRem -> compileUnsafeRem builder arguments returnRepresentation varName
         Errno -> outOfLineBuiltin builder "vega_errno" simpleArgumentValues returnRepresentation varName
         DebugInt -> outOfLineBuiltin builder "vega_debug_int" simpleArgumentValues returnRepresentation varName
+        DebugStackRoots -> outOfLineBuiltin builder "vega_debug_stack_roots" simpleArgumentValues returnRepresentation varName
         Panic -> undefined
         UnsafeCoerce -> identity
   where

@@ -83,6 +83,7 @@ data Primop
     | -- Debugging
       Panic
     | DebugInt
+    | DebugStackRoots
     | -- Evil
       UnsafeCoerce
     deriving (Show, Enum, Bounded)
@@ -127,6 +128,7 @@ primopVarName = \case
     Errno -> "errno"
     Panic -> "panic"
     DebugInt -> "debugInt"
+    DebugStackRoots -> "debugStackRoots"
     UnsafeCoerce -> "unsafeCoerce"
 
 primops :: HashMap Text Primop
@@ -229,6 +231,7 @@ primopType = \case
     CodePoints -> [stringType] --> arrayType @@ [int32Type]
     Panic -> forall_ "a" \a -> [stringType] --> a
     DebugInt -> [intType] --> unitType
+    DebugStackRoots -> [] --> unitType
     Int8ToInt -> [int8Type] --> intType
     UInt8ToInt -> [uint8Type] --> intType
     Int16ToInt -> [int16Type] --> intType
@@ -271,6 +274,7 @@ primopRepresentation primop arguments = case primop of
     CodePoints -> ([stringRepresentation], Core.ArrayRep (intRep 32))
     Panic -> ([stringRepresentation], argument 0)
     DebugInt -> ([intRep 64], unitRep)
+    DebugStackRoots -> ([], unitRep)
     Int8ToInt -> ([intRep 8], intRep 64)
     UInt8ToInt -> ([intRep 8], intRep 64)
     Int16ToInt -> ([intRep 16], intRep 64)
