@@ -54,7 +54,8 @@ import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Compilation.MIR.Verify qualified as VerifyMIR
 import Vega.Diff (DiffChange (..))
 import Vega.Diff qualified as Diff
-import Vega.Effect.DebugEmit (DebugEmit, debugEmit)
+import Vega.Effect.DebugEmit (DebugEmit, debugEmit, debugEmitMIR, debugEmitIncrementalMIR)
+import Vega.Effect.DebugEmit qualified as DebugEmit
 import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 import Vega.Effect.Output.Static.Local (Output, output, runOutputList, runOutputSeq)
@@ -70,7 +71,7 @@ import Vega.Parser qualified as Parser
 import Vega.Pretty (keyword, pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Rename qualified as Rename
-import Vega.Runtime (runtimeArchive, linkerScript)
+import Vega.Runtime (linkerScript, runtimeArchive)
 import Vega.Seq.NonEmpty (NonEmpty, pattern NonEmpty)
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
@@ -95,10 +96,7 @@ type Driver es =
     , FileSystem :> es
     , Concurrent :> es
     , Trace :> es
-    , DebugEmit (Seq Core.Declaration) :> es
-    , DebugEmit (Seq MIR.Declaration) :> es
-    , DebugEmit (Monomorphized MIR.Program) :> es
-    , DebugEmit LLVM.Module :> es
+    , DebugEmit :> es
     )
 
 -- | Newtype wrapper so we can distinguish the two debug emits for MIR programs (pre and post monomorphization)
@@ -300,7 +298,7 @@ compileBackend = do
                             Missing{} -> panic $ "Missing Core for " <> pretty declarationName <> " in NativeRelease compilation to LIR"
                     fold <$> for core \declaration -> do
                         mir <- CoreToMIR.compileDeclaration declaration
-                        debugEmit mir
+                        debugEmitIncrementalMIR DebugEmit.MIR mir
                         pure mir
 
             let reachableStream = GraphPersistence.reachableFrom ([entryPointDeclaration] <> Builtins.wiredInDeclarations)
@@ -316,7 +314,7 @@ compileBackend = do
             let mirProgram = MIR.MkProgram{declarations = mirDeclarations}
 
             monomorphizedMIRProgram <- Monomorphize.monomorphize mirProgram entryPoint
-            debugEmit (MkMonomorphized monomorphizedMIRProgram)
+            debugEmitMIR DebugEmit.MonomorphizedMIR monomorphizedMIRProgram
 
             -- TODO: it might be nice to verify the non-monomorphized MIR (especially since that is what we're logging)
             when verifyMIR do
@@ -359,16 +357,18 @@ compileBackend = do
                 dataLayout <- LLVM.Target.createTargetDataLayout targetMachine
                 LLVM.setTarget llvmModule triple
                 LLVM.Target.setModuleDataLayout llvmModule dataLayout
-                
-                debugEmit llvmModule
 
+                DebugEmit.debugEmitLLVM DebugEmit.LLVM llvmModule
                 {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
 
                 -- TODO: add proper optimization flags that control this
-                LLVM.runPasses llvmModule "default<O1>,rewrite-statepoints-for-gc" (Just targetMachine) LLVM.defaultPassBuilderOptions
+                LLVM.runPasses llvmModule "default<O0>,rewrite-statepoints-for-gc" (Just targetMachine) LLVM.defaultPassBuilderOptions
 
-                -- TODO: move this behind a flag
-                -- LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.s|] LLVM.Target.AssemblyFile
+                DebugEmit.debugEmitLLVM DebugEmit.OptimizedLLVM llvmModule
+
+                DebugEmit.isCategoryEnabled DebugEmit.Assembly >>= \case
+                    False -> pure ()
+                    True -> LLVM.Target.targetMachineEmitToFile targetMachine llvmModule (DebugEmit.outputFile DebugEmit.Assembly) LLVM.Target.AssemblyFile
 
                 -- TODO: be smarter about where to put the output
                 {-# SCC "LLVM.Target.targetMachineEmitToFile" #-} LLVM.Target.targetMachineEmitToFile targetMachine llvmModule [osp|out.o|] LLVM.Target.ObjectFile
@@ -472,5 +472,5 @@ compileToCore name =
         Failed{} -> pure ()
         Ok typedDeclaration -> do
             compiled <- VegaToCore.compileDeclaration typedDeclaration
-            debugEmit compiled
+            for_ compiled $ \core -> debugEmit DebugEmit.Core (pretty core)
             GraphPersistence.setCompiledCore name compiled

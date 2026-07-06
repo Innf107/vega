@@ -25,7 +25,8 @@ import System.OsPath (osp)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Driver (CompilationResult (..), Monomorphized (..))
-import Vega.Effect.DebugEmit
+import Vega.Effect.DebugEmit qualified as DebugEmit
+import Vega.Effect.DebugEmit (DebugEmit)
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence.InMemory (runInMemory)
 import Vega.Effect.Trace (Trace, runTrace)
@@ -44,7 +45,7 @@ data Options
         { persistence :: PersistenceBackend
         , linker :: Text
         , includeUnique :: Bool
-        , debugEmitConfig :: DebugEmitConfig
+        , debugEmitConfig :: DebugEmit.EmitConfig
         , verifyMIR :: Bool
         }
     | Exec
@@ -64,12 +65,6 @@ instance Read DebugEmitOption where
         "stderr" -> [(ToStderr, "")]
         "none" -> [(None, "")]
         _ -> []
-data DebugEmitConfig = MkDebugEmitConfig
-    { debugCore :: DebugEmitOption
-    , debugMIR :: DebugEmitOption
-    , debugMonomorphizedMIR :: DebugEmitOption
-    , debugLLVM :: DebugEmitOption
-    }
 
 buildOptions :: Parser Options
 buildOptions = do
@@ -94,77 +89,24 @@ buildOptions = do
                 <> help
                     ("Show unique identifiers in diagnostics where applicable")
             )
-    debugCore <-
-        option
-            auto
-            ( long "debug-core"
-                <> value None
-                <> help ("Core output for debugging. Can be one of: file, stderr, none")
-            )
-    debugMIR <-
-        option
-            auto
-            ( long "debug-mir"
-                <> value None
-                <> help ("MIR output for debugging. Can be one of: file, stderr, none")
-            )
-    debugMonomorphizedMIR <-
-        option
-            auto
-            ( long "debug-monomorphized-mir"
-                <> value None
-                <> help ("Monomorphized MIR output for debugging. Can be one of: file, stderr, none")
-            )
-    debugLLVM <-
-        option
-            auto
-            (long "debug-llvm" <> value None <> help ("LLVM output for debugging. Can be one of: file, stderr, none"))
+    debugEmitConfig <- parseDebugEmitConfig
     verifyMIR <-
         flag
             False
             True
             (long "verify-mir" <> help ("Verify that the correctness intermediate MIR language is well-formed. This has a small performance cost and shouldn't be necessary unless the compiler has a bug."))
 
-    pure Build{persistence, linker, includeUnique, debugEmitConfig = MkDebugEmitConfig{debugCore, debugMIR, debugMonomorphizedMIR, debugLLVM}, verifyMIR}
+    pure Build{persistence, linker, includeUnique, debugEmitConfig, verifyMIR}
 
-runCoreEmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Seq Core.Declaration) : es) a -> Eff es a
-runCoreEmit config cont = case config.debugCore of
-    None -> ignoreEmit cont
-    ToFile -> do
-        let render declarations = encodeUtf8 do
-                prettyPlain (intercalateDoc "\n\n" (fmap pretty declarations))
-        emitAllToFile render "core.vegacore" cont
-    ToStderr -> emitToStderr (\declarations -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
-
-runMIREmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Seq MIR.Declaration) : es) a -> Eff es a
-runMIREmit config cont = case config.debugMIR of
-    None -> ignoreEmit cont
-    ToFile -> do
-        let render declarations = encodeUtf8 do
-                prettyPlain (intercalateDoc "\n\n" (fmap pretty declarations))
-        emitAllToFile render "mir.vegamir" cont
-    ToStderr -> emitToStderr (\declarations -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
-
-runMonomorphizedMIREmit :: (IOE :> es, ?config :: PrettyANSIIConfig) => DebugEmitConfig -> Eff (DebugEmit (Monomorphized MIR.Program) : es) a -> Eff es a
-runMonomorphizedMIREmit config cont = case config.debugMIR of
-    None -> ignoreEmit cont
-    ToFile -> do
-        let render (MkMonomorphized (MIR.MkProgram declarations)) = encodeUtf8 do
-                prettyPlain (intercalateDoc "\n\n" (fmap pretty declarations))
-        emitAllToFile render "monomorphized-mir.vegamir" cont
-    ToStderr -> emitToStderr (\(MkMonomorphized (MIR.MkProgram declarations)) -> intercalateDoc "\n\n" (fmap pretty declarations)) cont
-
-runLLVMEmit :: (IOE :> es) => DebugEmitConfig -> Eff (DebugEmit LLVM.Module : es) a -> Eff es a
-runLLVMEmit config cont = case config.debugLLVM of
-    None -> ignoreEmit cont
-    ToFile ->
-        cont & interpret_ \case
-            DebugEmit module_ -> do
-                liftIO $ LLVM.printModuleToFile module_ [osp|llvm.ll|]
-    ToStderr ->
-        cont & interpret_ \case
-            DebugEmit module_ ->
-                liftIO $ LLVM.dumpModule module_
+parseDebugEmitConfig :: Parser DebugEmit.EmitConfig
+parseDebugEmitConfig = do
+    core <- flag False True ( long "debug-core"<> help "Emit core output for debugging")
+    mir <- flag False True ( long "debug-mir" <> help "Emit MIR output for debugging.")
+    monomorphizedMIR <- flag False True ( long "debug-monomorphized-mir" <> help "Emit monomorphized MIR output for debugging.")
+    llvm <- flag False True (long "debug-llvm" <> help "Emit the generated LLVM output for debugging.")
+    optimizedLLVM <- flag False True (long "debug-optimized-llvm" <> help "Emit the fully optimized LLVM output for debugging. This also includes the statepoint lowering pass.")
+    assembly <- flag False True (long "debug-asm" <> help "Emit the generated assembly for debugging.")
+    pure (DebugEmit.MkEmitConfig { core, mir, monomorphizedMIR, llvm, optimizedLLVM , assembly })
 
 execOptions :: Parser Options
 execOptions = do
@@ -184,14 +126,11 @@ parser =
 run ::
     (?config :: PrettyANSIIConfig) =>
     Driver.DriverConfig ->
-    DebugEmitConfig ->
+    DebugEmit.EmitConfig ->
     PersistenceBackend ->
     Eff
         '[ Reader Driver.DriverConfig
-         , DebugEmit (Seq Core.Declaration)
-         , DebugEmit (Seq MIR.Declaration)
-         , DebugEmit (Monomorphized MIR.Program)
-         , DebugEmit LLVM.Module
+         , DebugEmit
          , Concurrent
          , Process
          , GraphPersistence
@@ -205,10 +144,7 @@ run driverConfig debugConfig persistence action = case persistence of
     InMemory ->
         action
             & runReader driverConfig
-            & runCoreEmit debugConfig
-            & runMIREmit debugConfig
-            & runMonomorphizedMIREmit debugConfig
-            & runLLVMEmit debugConfig
+            & DebugEmit.runDebugEmit debugConfig
             & runConcurrent
             & runProcess
             & runInMemory
@@ -266,11 +202,13 @@ main = do
                             exitFailure
         Exec{file, mainFunction} -> run
             driverConfig
-            MkDebugEmitConfig
-                { debugCore = None
-                , debugMIR = None
-                , debugMonomorphizedMIR = None
-                , debugLLVM = None
+            DebugEmit.MkEmitConfig
+                { core = False
+                , mir = False
+                , monomorphizedMIR = False
+                , llvm = False
+                , optimizedLLVM = False
+                , assembly = False
                 }
             InMemory
             do
