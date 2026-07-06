@@ -61,9 +61,9 @@ pub fn initialize_stack_roots() {
         // locations[0] is the calling convention, but we don't actually care about that here
         assert!(locations[0].kind == LocationKind::Constant);
         // locations[1] contains the flags passed to this statepoint.
-        // Since we don't currently use flags, this should always be 0.
+        // This is usually 0, but might be 1 if we're in a GC transition
+        // (i.e. if this function is a non-gc function that was called from a gc function)
         assert!(locations[1].kind == LocationKind::Constant);
-        assert!(locations[1].offset_or_small_constant == 0);
 
         // locations[2] contains the number of deopt locations.
         // We don't use deoptimization so this should always be 0
