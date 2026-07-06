@@ -4,6 +4,7 @@ module Vega.Compilation.LLVM.AttributeFunctionType (
     rawFunctionType,
     addFunctionWithAttributes,
     buildCallWithAttributes,
+    buildCallWithAttributesAndOperandBundles,
     parametersWithAttributes,
     returnTypeWithAttributes,
 ) where
@@ -71,6 +72,21 @@ buildCallWithAttributes builder attributeFunctionType function arguments varName
     call <- LLVMBuilder.buildCall builder (rawFunctionType attributeFunctionType) function arguments varName
     applyCallSiteAttributes attributeFunctionType call
     pure call
+
+buildCallWithAttributesAndOperandBundles ::
+    (MonadIO io) =>
+    LLVMBuilder.Builder ->
+    AttributeFunctionType ->
+    LLVM.Value ->
+    Storable.Vector LLVM.Value ->
+    Strict.Vector (Text, Storable.Vector LLVM.Value) ->
+    Text ->
+    io LLVM.Value
+buildCallWithAttributesAndOperandBundles builder attributeFunctionType function arguments operandBundles varName = do
+    call <- LLVMBuilder.buildCallWithOperandBundles builder (rawFunctionType attributeFunctionType) function arguments operandBundles varName
+    applyCallSiteAttributes attributeFunctionType call
+    pure call
+
 
 parametersWithAttributes :: AttributeFunctionType -> Strict.Vector (LLVM.Type, Seq LLVM.Attribute)
 parametersWithAttributes MkAttributeFunctionType{parameters} = parameters

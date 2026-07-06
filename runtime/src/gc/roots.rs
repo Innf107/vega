@@ -1,5 +1,8 @@
-use crate::gc::stackmap::{StackMapEntry, get_stack_map};
-use std::arch::asm;
+use crate::{
+    gc::stackmap::{StackMapEntry, get_stack_map},
+    heap::HeapObject,
+};
+use std::{arch::asm, io::{self, Write}};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn vega_debug_stack_roots() {
@@ -8,8 +11,13 @@ pub extern "C" fn vega_debug_stack_roots() {
              base_pointer,
              derived_pointer_count,
              derived_pointers,
-         }| {
-            print!("  {base_pointer:?} ~> [");
+            }| {
+            print!("  {base_pointer:?}");
+            io::stdout().flush().unwrap();
+            // we split these up such that if the pointer is invalid, it will still be printed before panicking.
+            let base_heap_object = unsafe { HeapObject::from_data(base_pointer) };
+            let object_type = unsafe { (*HeapObject::info_table(base_heap_object)).object_type };
+            print!("({object_type:?}) ~> [");
             for i in 0..derived_pointer_count {
                 let pointer_location = unsafe { derived_pointers.add(i as usize) };
                 let pointer_value = unsafe { *pointer_location };
@@ -71,6 +79,11 @@ pub fn for_stack_roots(
                         (current_rbp as *mut *const u8)
                             .byte_offset(relocation_pair.derived_pointer_offset as isize)
                     };
+
+                    let base_offset = relocation_pair.base_pointer_offset;
+                    let stack_pointer = unsafe { (current_rbp as *const *const u8)
+                            .byte_offset(relocation_pair.base_pointer_offset as isize) };
+                    println!("  rbp: {current_rbp:#x}, base_offset: {base_offset}, stack_pointer: {stack_pointer:?}, base_pointer: {base_pointer:?}");
                     on_stack_root(StackRoot {
                         base_pointer,
                         derived_pointers,

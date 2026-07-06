@@ -1,4 +1,4 @@
-use std::ffi::c_void;
+use std::{ffi::c_void, ptr::{addr_of, null}};
 
 /// The type of Vega heap objects.
 /// The fields of this type only contain the heap header
@@ -9,12 +9,27 @@ pub struct HeapObject {
 impl HeapObject {
     pub const HEADER_SIZE_IN_BYTES: usize = size_of::<HeapObject>();
 
+    // SAFETY: the pointer needs to be either a null pointer or a valid pointer pointing to
+    // the data section of a valid heap object
     pub unsafe fn from_data(object: *const u8) -> *const HeapObject {
-        unsafe { object.byte_sub(HeapObject::HEADER_SIZE_IN_BYTES) as *const HeapObject }
+        if object == null() {
+            null()
+        } else {
+            unsafe { object.byte_sub(HeapObject::HEADER_SIZE_IN_BYTES) as *const HeapObject }
+        }
     }
 
     pub fn data(object: *const HeapObject) -> *mut u8 {
         unsafe { object.byte_add(HeapObject::HEADER_SIZE_IN_BYTES) as *mut u8 }
+    }
+
+    // SAFETY: the heap object pointer needs to be either a null pointer or a pointer to a valid heap object
+    pub unsafe fn info_table(object: *const HeapObject) -> *const InfoTable {
+        if object == null() {
+            addr_of!(STATIC_NULL_INFO_TABLE)
+        } else {
+            unsafe { (*object).info_table }
+        }
     }
 
     pub unsafe fn as_arry_object_unchecked(object: *const HeapObject) -> *const ArrayHeapObject {
@@ -25,24 +40,25 @@ impl HeapObject {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct InfoTable {
-    object_type: ObjectType,
-    layout: Layout,
+    pub object_type: ObjectType,
+    pub layout: Layout,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub union Layout {
-    boxed: BoxedLayout,
-    array: ArrayLayout,
+    pub boxed: BoxedLayout,
+    pub array: ArrayLayout,
+    pub null: ()
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BoxedLayout {
     /// The full size of the object data including boxed pointers
-    size_in_bytes: usize,
+    pub size_in_bytes: usize,
     /// The number of boxed pointers in the layout. These are always the first elements
-    boxed_count: usize,
+    pub boxed_count: usize,
 }
 impl BoxedLayout {
     /// The size of the unboxed part of the layout, i.e. the size of everything that is not a boxed pointer
@@ -54,18 +70,27 @@ impl BoxedLayout {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ArrayLayout {
-    element_stride_in_bytes: usize,
-    element_boxed_count: usize,
+    pub element_stride_in_bytes: usize,
+    pub element_boxed_count: usize,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum ObjectType {
     Boxed,
     Array,
     // StaticArray also uses the regular ArrayLayout
     StaticArray,
+    // Object type for boxed pointers that don't actually point
+    // to real heap objects.
+    // INVARIANT: STATIC_NULL_INFO_TABLE is the only info table with a Null tag
+    Null
 }
+
+static STATIC_NULL_INFO_TABLE : InfoTable = InfoTable {
+    object_type: ObjectType::Null,
+    layout: Layout {null: ()}
+};
 
 #[repr(C)]
 pub struct ArrayHeapObject {

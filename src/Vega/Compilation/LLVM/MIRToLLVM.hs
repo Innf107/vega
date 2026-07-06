@@ -35,7 +35,8 @@ import Vega.Builtins (Primop (..))
 import Vega.Builtins qualified as Builtins
 import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
-import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, addFunctionWithAttributes, attributeFunctionType, buildCallWithAttributes, parametersWithAttributes, rawFunctionType, returnTypeWithAttributes)
+import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, 
+    addFunctionWithAttributes, attributeFunctionType, buildCallWithAttributes, buildCallWithAttributesAndOperandBundles, parametersWithAttributes, rawFunctionType, returnTypeWithAttributes)
 import Vega.Compilation.LLVM.AttributeFunctionType qualified as AttributeFunctionType
 import Vega.Compilation.LLVM.Layout (CompoundValue (..), Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
@@ -116,7 +117,8 @@ addMainFunction entryPoint module_ = do
         LLVM.getNamedFunction module_ (renderLLVMName entryPoint) >>= \case
             Nothing -> panic $ "Entry point not found: " <> Vega.prettyGlobal Vega.VarKind entryPoint
             Just entryPointFunction -> pure entryPointFunction
-    callInstruction <- LLVMBuilder.buildCall builder (LLVM.functionType [] LLVM.voidType False) entryPointFunction [] ""
+    callInstruction <- 
+        LLVMBuilder.buildCall builder (LLVM.functionType [] LLVM.voidType False) entryPointFunction [] ""
     LLVM.setInstructionCallConv callInstruction LLVM.tailCallConv
     _ <- LLVMBuilder.buildRet builder (LLVM.constInt LLVM.int32Type 0 False)
     pure ()
@@ -222,7 +224,8 @@ forwardDeclareDeclaration = \case
         builder <- LLVMBuilder.createBuilder
         LLVMBuilder.positionBuilderAtEnd builder block
 
-        result <- buildCallWithAttributes builder externalFunctionType externalFunction (viaList $ Seq.mapWithIndex (\i _ -> LLVM.getParam wrapperFunction i) parameterLayouts) ""
+        result <- buildCallWithAttributesAndOperandBundles 
+            builder externalFunctionType externalFunction (viaList $ Seq.mapWithIndex (\i _ -> LLVM.getParam wrapperFunction i) parameterLayouts) [("gc-transition", [])] ""
         case Layout.returnConvention returnLayout of
             Layout.Void; Layout.SRetPointer -> do
                 _ <- LLVMBuilder.buildRetVoid builder
@@ -882,25 +885,26 @@ buildCCCCall ::
     Text ->
     Eff es CompoundValue
 buildCCCCall builder functionType functionValue arguments returnLayout varName = do
+    let operandBundles = [("gc-transition", [])]
     (returnValue, callInstr) <- case Layout.returnConvention returnLayout of
         Layout.Void -> do
-            callInstr <- buildCallWithAttributes builder functionType functionValue arguments ""
+            callInstr <- buildCallWithAttributesAndOperandBundles builder functionType functionValue arguments operandBundles ""
             pure (Layout.unitCompoundValue, callInstr)
         Layout.SingleBoxed -> do
-            callInstr <- buildCallWithAttributes builder functionType functionValue arguments varName
+            callInstr <- buildCallWithAttributesAndOperandBundles builder functionType functionValue arguments operandBundles ""
             pure (Layout.boxedCompoundValue callInstr, callInstr)
         Layout.SingleScalar _scalarType -> do
-            callInstr <- buildCallWithAttributes builder functionType functionValue arguments varName
+            callInstr <- buildCallWithAttributesAndOperandBundles builder functionType functionValue arguments operandBundles ""
             pure (Layout.scalarCompoundValue callInstr, callInstr)
         Layout.ScalarStruct -> do
-            callInstr <- buildCallWithAttributes builder functionType functionValue arguments ""
+            callInstr <- buildCallWithAttributesAndOperandBundles builder functionType functionValue arguments operandBundles ""
             returnValue <- deconstructScalarStruct builder returnLayout callInstr varName
 
             pure (returnValue, callInstr)
         Layout.SRetPointer -> do
             returnPointer <- buildAtRestAlloca builder returnLayout "sret"
             -- The sret parameter is always the first parameter
-            callInstr <- buildCallWithAttributes builder functionType functionValue ([returnPointer] <> arguments) ""
+            callInstr <- buildCallWithAttributesAndOperandBundles builder functionType functionValue ([returnPointer] <> arguments) operandBundles ""
 
             returnValue <- buildComplexLoad builder returnLayout returnPointer varName
 
@@ -1014,7 +1018,7 @@ buildRuntimeCall ::
     Eff es LLVM.Value
 buildRuntimeCall builder name arguments varName = do
     let (function, functionType) = getField @name ?runtimeDefinitions
-    buildCallWithAttributes builder functionType function arguments varName
+    buildCallWithAttributesAndOperandBundles builder functionType function arguments [("gc-transition", [])] varName
 
 accessLocation :: (HasCallStack, Compile es) => LLVMBuilder.Builder -> CompoundValue -> Layout -> Layout.ElementLocation -> Text -> Eff es CompoundValue
 accessLocation builder value layout location varName = case location of
