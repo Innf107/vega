@@ -1,8 +1,12 @@
 use crate::{
+    either::Either,
     gc::stackmap::{StackMapEntry, get_stack_map},
     heap::HeapObject,
 };
-use std::{arch::asm, io::{self, Write}};
+use std::{
+    arch::asm,
+    io::{self, Write},
+};
 
 #[unsafe(no_mangle)]
 pub extern "C" fn vega_debug_stack_roots() {
@@ -11,12 +15,22 @@ pub extern "C" fn vega_debug_stack_roots() {
              base_pointer,
              derived_pointer_count,
              derived_pointers,
-            }| {
+         }| {
             print!("  {base_pointer:?}");
             io::stdout().flush().unwrap();
             // we split these up such that if the pointer is invalid, it will still be printed before panicking.
             let base_heap_object = unsafe { HeapObject::from_data(base_pointer) };
-            let object_type = unsafe { (*HeapObject::info_table(base_heap_object)).object_type };
+            let object_type = unsafe {
+                match HeapObject::header(base_heap_object).info_table_or_forward_pointer() {
+                    Either::Right(forward_pointer) => {
+                        panic!(
+                            "Found stack root pointing to forward pointer outside garbage collection {:?}",
+                            forward_pointer.to_space_allocation
+                        )
+                    }
+                    Either::Left(info_table) => info_table.object_type,
+                }
+            };
             print!("({object_type:?}) ~> [");
             for i in 0..derived_pointer_count {
                 let pointer_location = unsafe { derived_pointers.add(i as usize) };
@@ -81,9 +95,13 @@ pub fn for_stack_roots(
                     };
 
                     let base_offset = relocation_pair.base_pointer_offset;
-                    let stack_pointer = unsafe { (current_rbp as *const *const u8)
-                            .byte_offset(relocation_pair.base_pointer_offset as isize) };
-                    println!("  rbp: {current_rbp:#x}, base_offset: {base_offset}, stack_pointer: {stack_pointer:?}, base_pointer: {base_pointer:?}");
+                    let stack_pointer = unsafe {
+                        (current_rbp as *const *const u8)
+                            .byte_offset(relocation_pair.base_pointer_offset as isize)
+                    };
+                    println!(
+                        "  rbp: {current_rbp:#x}, base_offset: {base_offset}, stack_pointer: {stack_pointer:?}, base_pointer: {base_pointer:?}"
+                    );
                     on_stack_root(StackRoot {
                         base_pointer,
                         derived_pointers,

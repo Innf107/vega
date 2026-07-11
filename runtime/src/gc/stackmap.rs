@@ -174,6 +174,7 @@ struct Location {
 
 #[repr(u8)]
 #[derive(PartialEq, Eq)]
+#[allow(unused)]
 enum LocationKind {
     Register = 1,
     Direct = 2,
