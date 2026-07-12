@@ -72,7 +72,7 @@ impl BlockList {
     }
 }
 
-pub fn allocate_page_aligned_memory(size_in_bytes: usize) -> *const u8 {
+pub fn allocate_page_aligned_memory(size_in_bytes: usize) -> NonNull<u8> {
     let memory = unsafe {
         mmap(
             null_mut(),
@@ -86,12 +86,18 @@ pub fn allocate_page_aligned_memory(size_in_bytes: usize) -> *const u8 {
     if memory.addr() as isize == -1 {
         panic!("memory allocation failed: {}", Error::last_os_error());
     }
-    memory as *const u8
+    unsafe { NonNull::new_unchecked(memory as *mut u8) }
 }
 
 pub fn allocate_block() -> BlockPointer {
     let block_memory = allocate_page_aligned_memory(BLOCK_SIZE);
-    todo!()
+
+    let block_pointer = BlockPointer {
+        contents: block_memory,
+    };
+    unsafe { *(block_pointer.descriptor()) = BlockDescriptor { next: None } }
+
+    block_pointer
 }
 
 pub fn allocate_block_list(count: usize) -> BlockList {
