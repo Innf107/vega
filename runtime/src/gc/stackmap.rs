@@ -58,7 +58,7 @@ pub fn initialize_stack_roots() {
         let location_pointer = unsafe { current_record_pointer.add(1) as *const Location };
         let num_locations = unsafe { (*current_record_pointer).num_locations } as usize;
         let locations = unsafe { slice::from_raw_parts(location_pointer, num_locations) };
-        // locations[0] is the calling convention, but we don't actually care about that here
+        // locations[0] is the calling convention. We don't actually need it but it might be useful for debugging
         assert!(locations[0].kind == LocationKind::Constant);
         // locations[1] contains the flags passed to this statepoint.
         // This is usually 0, but might be 1 if we're in a GC transition
