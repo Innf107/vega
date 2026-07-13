@@ -959,6 +959,7 @@ getOrCreateLayoutInfoTablePointer layout = do
             (infoTableLLVMType, infoTableConstant) <- toLLVMConstant infoTable
 
             llvmInfoTableGlobal <- LLVM.addGlobal ?module_ infoTableLLVMType identifier
+            LLVM.setAlignment (LLVM.globalAsValue llvmInfoTableGlobal) 8
             LLVM.setInitializer llvmInfoTableGlobal infoTableConstant
             pure (LLVM.globalAsValue llvmInfoTableGlobal)
 
