@@ -574,8 +574,8 @@ representationLayout representation = do
                     MkLayoutContext
                         { inFlightUnboxedOffsetSoFar = Alignment.align tagAlignment combinedContext.inFlightUnboxedOffsetSoFar + Size.inBytes tagSize
                         , --
-                          alignmentSoFar = max tagAlignment context.alignmentSoFar
-                        , unboxedAlignmentSoFar = max tagAlignment context.unboxedAlignmentSoFar
+                          alignmentSoFar = max tagAlignment combinedContext.alignmentSoFar
+                        , unboxedAlignmentSoFar = max tagAlignment combinedContext.unboxedAlignmentSoFar
                         , boxedCountSoFar = combinedContext.boxedCountSoFar
                         }
 
