@@ -78,6 +78,7 @@ type Compile es =
     , IOE :> es
     , ?function :: LLVM.Value
     , ?functionEnv :: FunctionEnv
+    , ?allocaBuilder :: LLVMBuilder.Builder
     , State DeclarationState :> es
     , Trace :> es
     )
@@ -261,6 +262,10 @@ compileDeclaration = \case
                 LLVM.getNamedFunction ?module_ (renderLLVMName name) >>= \case
                     Nothing -> panic $ "Unable to access function '" <> Vega.prettyGlobal Vega.VarKind name <> "' that should have been forward-declared."
                     Just function_ -> pure function_
+
+            -- We construct the builder here already and make it point at the basic block later when we create it
+            allocaBuilder <- LLVMBuilder.createBuilder
+            let ?allocaBuilder = allocaBuilder
             let ?function = function
             let ?functionEnv =
                     MkFunctionEnv
@@ -302,7 +307,8 @@ compileDeclaration = \case
             initialMIRBlock <- registerNewBlock init
 
             LLVMBuilder.positionBuilderAtEnd builder initialBlock
-            _ <- LLVMBuilder.buildBr builder initialMIRBlock
+            branchInstruction <- LLVMBuilder.buildBr builder initialMIRBlock
+            LLVMBuilder.positionBuilderBefore allocaBuilder branchInstruction
 
             let go = do
                     state@MkDeclarationState{outstandingBlocks} <- get
@@ -379,7 +385,7 @@ compileInstruction builder = \case
         (parentValue, parentLayout) <- lookupVar parent
         fieldLayout <- Layout.representationLayout fieldRepresentation
 
-        fieldBuilder <- Layout.newBuilder @s builder fieldLayout
+        fieldBuilder <- Layout.newBuilder @s fieldLayout
 
         let basePath = Layout.elementPathFromMIRPath path
         Layout.forContainedElements fieldLayout \elementPath targetLocation -> do
@@ -418,7 +424,7 @@ compileInstruction builder = \case
         llvmValuesWithLayouts <- for values lookupVar
         layout <- Layout.representationLayout representation
 
-        valueBuilder <- Layout.newBuilder @s builder layout
+        valueBuilder <- Layout.newBuilder @s layout
 
         Layout.forContainedElements layout \path targetLocation -> do
             case path of
@@ -433,7 +439,7 @@ compileInstruction builder = \case
     MIR.SumConstructor{var, tag, payload, representation} -> runSTE \s -> do
         (payload, payloadLayout) <- lookupVar payload
         layout <- Layout.representationLayout representation
-        valueBuilder <- Layout.newBuilder @s builder layout
+        valueBuilder <- Layout.newBuilder @s layout
 
         let (tagLocation, tagSize) = case Layout.details layout of
                 Layout.TopLevelSumLayout{tagSize, tagLocation} -> (tagLocation, tagSize)
@@ -615,7 +621,7 @@ compileNonTailCall builder var returnLayout functionType function argumentCompou
             -- sret pointers return a value *at rest* so we first need to store this value in an alloca
             -- (and we *cannot* use the automatic CompoundValueBuilder alloca since that is used for values
             -- in-flight and will only allocate for the unboxed segment)
-            returnedValueAtRestPointer <- Layout.buildAtRestAlloca builder returnLayout "sret"
+            returnedValueAtRestPointer <- Layout.buildAtRestAlloca returnLayout "sret"
             -- The sret parameter is always the first parameter
             callInstr <- buildCallWithAttributes builder functionType function ([returnedValueAtRestPointer] <> argumentValues) ""
 
@@ -901,7 +907,7 @@ buildCCCCall builder functionType functionValue arguments returnLayout varName =
 
             pure (returnValue, callInstr)
         Layout.SRetPointer -> do
-            returnPointer <- buildAtRestAlloca builder returnLayout "sret"
+            returnPointer <- Layout.buildAtRestAlloca returnLayout "sret"
             -- The sret parameter is always the first parameter
             callInstr <- buildCallWithAttributes builder functionType functionValue ([returnPointer] <> arguments) ""
 
@@ -928,7 +934,7 @@ deconstructScalarStruct :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM
 deconstructScalarStruct builder layout struct varName = runSTE \(type s) -> do
     assert (Size.inBytes (Layout.unboxedSize layout) == 0)
 
-    valueBuilder <- Layout.newBuilder @s builder layout
+    valueBuilder <- Layout.newBuilder @s layout
     for_ @[] [0 .. Layout.boxedCount layout - 1] \i -> do
         boxedValue <- LLVMBuilder.buildExtractValue builder struct i (varName <> ".boxed")
         Layout.fillBoxed valueBuilder i boxedValue
@@ -1119,10 +1125,6 @@ copyElement builder sourceLocation sourceValue targetLocation targetLayout targe
                             (LLVM.constInt LLVM.int64Type (fromIntegral (Size.inBytes sourceSize)) False)
                     pure ()
 
-buildAtRestAlloca :: (Compile es) => LLVMBuilder.Builder -> Layout -> Text -> Eff es LLVM.Value
-buildAtRestAlloca builder layout varName = do
-    LLVMBuilder.buildAlloca builder (LLVM.arrayType LLVM.int8Type (fromIntegral $ Size.inBytes (Layout.sizeAtRest layout))) varName
-
 buildComplexStore :: (Compile es) => LLVMBuilder.Builder -> Layout -> CompoundValue -> LLVM.Value -> Eff es ()
 buildComplexStore builder layout value baseTargetPointer = do
     assert (Layout.boxedCount layout == length (Layout.boxedValues value))
@@ -1202,7 +1204,7 @@ buildLoadAsReference builder layout basePointer varName = runSTE \s -> do
 
 buildComplexLoad :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Text -> Eff es CompoundValue
 buildComplexLoad builder layout basePointer varName = runSTE \s -> do
-    valueBuilder <- Layout.newBuilder @s builder layout
+    valueBuilder <- Layout.newBuilder @s layout
 
     for_ @[] [0 .. Layout.boxedCount layout - 1] \boxedIndex -> do
         boxPointer <- buildGEPOffset builder basePointer (Layout.atRestBoxedOffset layout boxedIndex) (varName <> ".boxed")

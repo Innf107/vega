@@ -80,18 +80,20 @@ module Vega.Compilation.LLVM.Layout (
 
     -- * GC types
     boxedPointerType,
-    boxedNullPointer
+    boxedNullPointer,
 ) where
 
 import Control.Exception (assert)
 import Data.Bits qualified as Bits
+import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
+import Data.Vector.Generic qualified as Vector
 import Data.Vector.Storable qualified as Storable
 import Data.Vector.Strict (Vector)
-import Data.Vector.Generic qualified as Vector
 import Effectful (Eff, IOE, runPureEff, (:>))
+import Effectful.Dispatch.Static (unsafeEff_)
 import LLVM.Core qualified as LLVM
 import LLVM.Core.Context qualified as LLVM
 import LLVM.InstructionBuilder qualified as LLVMBuilder
@@ -118,8 +120,6 @@ import Vega.Syntax qualified as Vega
 import Vega.Util (forAccumLM, forIndexed, forIndexed_, mapAccumLM, smallestPowerOfTwoFitting)
 import Vega.Util qualified as Util
 import Witherable (catMaybes, mapMaybe, wither)
-import Effectful.Dispatch.Static (unsafeEff_)
-import qualified Data.HashMap.Strict as HashMap
 
 {- Note [At-rest vs in-flight]:
 -------------------------------
@@ -341,13 +341,17 @@ atRestLLVMType layout
 {- | Create an alloca for this type when stored *at rest* (e.g. when returned via an sret pointer).
 This is only valid if the type is not zero-sized.
 -}
-buildAtRestAlloca :: (HasCallStack, ?context :: LLVM.Context, MonadIO io) => LLVMBuilder.Builder -> Layout -> Text -> io LLVM.Value
-buildAtRestAlloca builder layout varName = case atRestLLVMType layout of
+buildAtRestAlloca ::
+    (HasCallStack, ?context :: LLVM.Context, ?allocaBuilder :: LLVMBuilder.Builder, MonadIO io) =>
+    Layout ->
+    Text ->
+    io LLVM.Value
+buildAtRestAlloca layout varName = case atRestLLVMType layout of
     Nothing -> panic "unable to construct alloca for zero sized layout"
     -- TODO: it might make sense to use something custom here that allocates something of size `atRest*Stride* layout`.
     -- LLVM might be able to compile the associated memcpys more efficiently if they have a more aligned  size
     -- and we can afford the extra <= 7 bytes of stack space
-    Just llvmType -> LLVMBuilder.buildAlloca builder llvmType varName
+    Just llvmType -> LLVMBuilder.buildAlloca ?allocaBuilder llvmType varName
 
 -- | The index of the function parameter corresponding to the i-th boxed component
 parameterBoxedIndex :: (HasCallStack) => Layout -> Int -> Int
@@ -439,13 +443,13 @@ newBuilderWithUnboxedPointer layout unboxedPointer = do
     decomposedScalars <- OutArray.new (length (decomposedScalars layout))
     pure (MkCompoundValueBuilder{boxed, decomposedScalars, unboxedPointer})
 
-newBuilder :: (STE s :> es, IOE :> es, ?context :: LLVM.Context) => LLVMBuilder.Builder -> Layout -> Eff es (CompoundValueBuilder s)
-newBuilder builder layout = do
+newBuilder :: (STE s :> es, IOE :> es, ?allocaBuilder :: LLVMBuilder.Builder, ?context :: LLVM.Context) => Layout -> Eff es (CompoundValueBuilder s)
+newBuilder layout = do
     unboxedPointer <- case Size.inBytes (unboxedSize layout) of
         0 -> pure Nothing
         size -> do
             -- TODO: we should really hoist allocas to the first block because that's where LLVM will optimize them properly
-            pointer <- LLVMBuilder.buildAlloca builder (LLVM.arrayType LLVM.int8Type (fromIntegral size)) "unboxed"
+            pointer <- LLVMBuilder.buildAlloca ?allocaBuilder (LLVM.arrayType LLVM.int8Type (fromIntegral size)) "unboxed"
             LLVM.setAlignment pointer (Alignment.toInt (unboxedAlignment layout))
             pure (Just pointer)
     newBuilderWithUnboxedPointer layout unboxedPointer
@@ -498,7 +502,7 @@ data LayoutContext = MkLayoutContext
     , unboxedAlignmentSoFar :: Alignment
     }
 
---TODO: do something smarter:
+-- TODO: do something smarter:
 -- - this should probably be controlled by graph persistence (it *might* even make sense to serialize very complex layouts to disk)
 -- - we should use some sort of LRU mechanism so this doesn't eat up all memory (although we should probably measure the actual usage first)
 -- - we should try using a (compressed) trie instead of a dumb hash map
@@ -508,39 +512,39 @@ cached = unsafePerformIO $ newIORef mempty
 
 representationLayout :: (?context :: LLVM.Context) => Representation -> Eff es Layout
 representationLayout representation = do
- cache <- unsafeEff_ $ readIORef cached
- case HashMap.lookup representation cache of
-  Just layout -> pure layout
-  Nothing -> do
-    case tryDecomposedRepresentationLayout representation of
+    cache <- unsafeEff_ $ readIORef cached
+    case HashMap.lookup representation cache of
         Just layout -> pure layout
         Nothing -> do
-            let initialContext =
-                    MkLayoutContext
-                        { boxedCountSoFar = 0
-                        , alignmentSoFar = Alignment.fromValue 1
-                        , unboxedAlignmentSoFar = Alignment.fromValue 1
-                        , inFlightUnboxedOffsetSoFar = 0
-                        }
-            (context, details) <- case representation of
-                Core.SumRep constructorRepresentations -> topLevelSum initialContext constructorRepresentations
-                _ -> do
-                    (context, nestedDetails) <- go initialContext representation
-                    pure (context, Simple nestedDetails)
+            case tryDecomposedRepresentationLayout representation of
+                Just layout -> pure layout
+                Nothing -> do
+                    let initialContext =
+                            MkLayoutContext
+                                { boxedCountSoFar = 0
+                                , alignmentSoFar = Alignment.fromValue 1
+                                , unboxedAlignmentSoFar = Alignment.fromValue 1
+                                , inFlightUnboxedOffsetSoFar = 0
+                                }
+                    (context, details) <- case representation of
+                        Core.SumRep constructorRepresentations -> topLevelSum initialContext constructorRepresentations
+                        _ -> do
+                            (context, nestedDetails) <- go initialContext representation
+                            pure (context, Simple nestedDetails)
 
-            let size = Size.fromBytes (context.boxedCountSoFar * Size.inBytes pointerSize + context.inFlightUnboxedOffsetSoFar)
-            pure
-                MkLayout
-                    { size
-                    , alignment = context.alignmentSoFar
-                    , boxedCount = context.boxedCountSoFar
-                    , -- We *currently* either decompose everything or nothing.
-                      -- It might make sense to change this in the future
-                      decomposedScalars = []
-                    , unboxedAlignment = context.unboxedAlignmentSoFar
-                    , unboxedSize = Size.fromBytes context.inFlightUnboxedOffsetSoFar
-                    , details
-                    }
+                    let size = Size.fromBytes (context.boxedCountSoFar * Size.inBytes pointerSize + context.inFlightUnboxedOffsetSoFar)
+                    pure
+                        MkLayout
+                            { size
+                            , alignment = context.alignmentSoFar
+                            , boxedCount = context.boxedCountSoFar
+                            , -- We *currently* either decompose everything or nothing.
+                              -- It might make sense to change this in the future
+                              decomposedScalars = []
+                            , unboxedAlignment = context.unboxedAlignmentSoFar
+                            , unboxedSize = Size.fromBytes context.inFlightUnboxedOffsetSoFar
+                            , details
+                            }
   where
     topLevelSum context (constructors :: Seq Core.Representation) = case constructors of
         Empty -> pure (context, Simple (ProductLayout []))
