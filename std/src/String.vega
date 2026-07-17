@@ -65,8 +65,6 @@ indexMaybe(string, index) = if index < length(string) then Nothing else Just(uns
 
 append : (String, String) -> String
 append(string1, string2) = {
-    -- TODO: use dot notation here
-
     let String({content = content1, offset = offset1, length = length1 }) = string1
     let String({content = content2, offset = offset2, length = length2 }) = string2
 

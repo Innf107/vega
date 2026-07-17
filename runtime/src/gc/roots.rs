@@ -87,11 +87,12 @@ pub fn for_stack_roots(
                 for relocation_pair in relocation_pairs {
                     let base_pointer = unsafe {
                         *(current_rbp as *const *const u8)
-                            .byte_offset(relocation_pair.base_pointer_offset as isize)
+                            // Why the offset by 0x10? I have absolutely no idea but apparently LLVM starts counting at `BP + 0x10`
+                            .byte_offset(relocation_pair.base_pointer_offset as isize + 0x10)
                     };
                     let derived_pointers = unsafe {
                         (current_rbp as *mut *const u8)
-                            .byte_offset(relocation_pair.derived_pointer_offset as isize)
+                            .byte_offset(relocation_pair.derived_pointer_offset as isize + 0x10)
                     };
 
                     let base_offset = relocation_pair.base_pointer_offset;

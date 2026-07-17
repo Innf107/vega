@@ -3,7 +3,7 @@ use std::{
     ptr::{addr_of, null},
 };
 
-use crate::either::Either;
+use crate::{either::Either, gc::roots::vega_debug_stack_roots};
 
 /// The type of Vega heap objects.
 /// The fields of this type only contain the heap header
@@ -312,6 +312,7 @@ impl ArrayHeapObject {
 // SAFETY: this assumes that info_table points to a boxed heap object info table
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vega_allocate_boxed(info_table: &'static InfoTable) -> *mut u8 {
+    vega_debug_stack_roots();
     let layout = unsafe { info_table.layout.boxed };
 
     let object_pointer = unsafe {
