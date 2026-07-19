@@ -1,6 +1,6 @@
 cabal-version: 2.2
 
--- This file has been generated from package.yaml by hpack version 0.39.1.
+-- This file has been generated from package.yaml by hpack version 0.39.6.
 --
 -- see: https://github.com/sol/hpack
 
@@ -38,6 +38,7 @@ library
       Vega.Compilation.LLVM.Runtime
       Vega.Compilation.LLVM.Runtime.Heap
       Vega.Compilation.LLVM.Runtime.ToLLVMConstant
+      Vega.Compilation.LLVM.ShadowStack
       Vega.Compilation.MIR.CoreToMIR
       Vega.Compilation.MIR.Monomorphize
       Vega.Compilation.MIR.Syntax
@@ -109,6 +110,10 @@ library
       LexicalNegation
       OrPatterns
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -Wno-unused-imports -fno-show-error-context -fno-show-valid-hole-fits -fmax-relevant-binds=0 -fdefer-diagnostics
+  include-dirs:
+      llvm-shadow-stack/include
+  extra-libraries:
+      VegaShadowStackPlugin
   build-depends:
       aeson
     , base >=4.7 && <5
@@ -167,6 +172,10 @@ executable vega
       LexicalNegation
       OrPatterns
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -Wno-unused-imports -fno-show-error-context -fno-show-valid-hole-fits -fmax-relevant-binds=0 -fdefer-diagnostics -threaded -rtsopts -with-rtsopts=-N
+  include-dirs:
+      llvm-shadow-stack/include
+  extra-libraries:
+      VegaShadowStackPlugin
   build-depends:
       aeson
     , base >=4.7 && <5
@@ -227,6 +236,10 @@ test-suite vega-test
       LexicalNegation
       OrPatterns
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -Wno-unused-imports -fno-show-error-context -fno-show-valid-hole-fits -fmax-relevant-binds=0 -fdefer-diagnostics -threaded -rtsopts -with-rtsopts=-N
+  include-dirs:
+      llvm-shadow-stack/include
+  extra-libraries:
+      VegaShadowStackPlugin
   build-depends:
       aeson
     , base >=4.7 && <5

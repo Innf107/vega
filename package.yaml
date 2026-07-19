@@ -56,6 +56,10 @@ ghc-options:
 - -fmax-relevant-binds=0
 - -fdefer-diagnostics
 
+extra-libraries: VegaShadowStackPlugin
+include-dirs:
+- llvm-shadow-stack/include
+
 library:
   source-dirs: src
 

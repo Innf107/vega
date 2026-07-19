@@ -104,9 +104,10 @@ parseDebugEmitConfig = do
     mir <- flag False True ( long "debug-mir" <> help "Emit MIR output for debugging.")
     monomorphizedMIR <- flag False True ( long "debug-monomorphized-mir" <> help "Emit monomorphized MIR output for debugging.")
     llvm <- flag False True (long "debug-llvm" <> help "Emit the generated LLVM output for debugging.")
-    optimizedLLVM <- flag False True (long "debug-optimized-llvm" <> help "Emit the fully optimized LLVM output for debugging. This also includes the statepoint lowering pass.")
+    optimizedLLVM <- flag False True (long "debug-optimized-llvm" <> help "Emit the fully optimized LLVM output for debugging. This does not include the custom shadow stack pass. Use --debug-shadow-stack to debug that.")
+    llvmWithShadowStack <- flag False True (long "debug-shadow-stack" <> help "Emit the final LLVM including the custom shadow stack lowering.")
     assembly <- flag False True (long "debug-asm" <> help "Emit the generated assembly for debugging.")
-    pure (DebugEmit.MkEmitConfig { core, mir, monomorphizedMIR, llvm, optimizedLLVM , assembly })
+    pure (DebugEmit.MkEmitConfig { core, mir, monomorphizedMIR, llvm, optimizedLLVM, llvmWithShadowStack, assembly })
 
 execOptions :: Parser Options
 execOptions = do
@@ -208,6 +209,7 @@ main = do
                 , monomorphizedMIR = False
                 , llvm = False
                 , optimizedLLVM = False
+                , llvmWithShadowStack = False
                 , assembly = False
                 }
             InMemory

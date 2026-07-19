@@ -76,6 +76,7 @@ import Vega.Seq.NonEmpty (NonEmpty, pattern NonEmpty)
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (decodeOsPathUnchecked, viaList)
+import Vega.Compilation.LLVM.ShadowStack (runShadowStackPass)
 
 data CompilationResult
     = CompilationSuccessful
@@ -362,9 +363,17 @@ compileBackend = do
                 {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
 
                 -- TODO: add proper optimization flags that control this
-                LLVM.runPasses llvmModule "default<O0>,rewrite-statepoints-for-gc,dce" (Just targetMachine) LLVM.defaultPassBuilderOptions
+                LLVM.runPasses llvmModule "default<O0>" (Just targetMachine) LLVM.defaultPassBuilderOptions
 
                 DebugEmit.debugEmitLLVM DebugEmit.OptimizedLLVM llvmModule
+
+                print LLVM.llvmVersion
+
+                -- liftIO $ runShadowStackPass llvmModule
+
+                print "BBBBBB"
+
+                DebugEmit.debugEmitLLVM DebugEmit.LLVMWithShadowStack llvmModule
 
                 DebugEmit.isCategoryEnabled DebugEmit.Assembly >>= \case
                     False -> pure ()

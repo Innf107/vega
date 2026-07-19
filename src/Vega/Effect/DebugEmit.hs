@@ -36,6 +36,7 @@ data Category
     | MonomorphizedMIR
     | LLVM
     | OptimizedLLVM
+    | LLVMWithShadowStack
     | Assembly
     deriving (Enum, Bounded)
 
@@ -45,6 +46,7 @@ data EmitConfig = MkEmitConfig
     , monomorphizedMIR :: Bool
     , llvm :: Bool
     , optimizedLLVM :: Bool
+    , llvmWithShadowStack :: Bool
     , assembly :: Bool
     }
 
@@ -57,6 +59,7 @@ isCategoryEnabled category = do
         MonomorphizedMIR -> config.monomorphizedMIR
         LLVM -> config.llvm
         OptimizedLLVM -> config.optimizedLLVM
+        LLVMWithShadowStack -> config.llvmWithShadowStack
         Assembly -> config.assembly
 
 outputFile :: Category -> OsPath
@@ -66,6 +69,7 @@ outputFile = \case
     MonomorphizedMIR -> [osp|monomorphized.vegamir|]
     LLVM -> [osp|llvm.ll|]
     OptimizedLLVM -> [osp|optimized.ll|]
+    LLVMWithShadowStack -> [osp|shadow-stack.ll|]
     Assembly -> [osp|out.s|]
 
 data DebugEmit :: Effect
