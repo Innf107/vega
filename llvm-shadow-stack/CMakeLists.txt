@@ -19,4 +19,4 @@ llvm_map_components_to_libnames(llvm_libs Core Support IRReader Passes Target An
 
 add_library(VegaShadowStackPlugin src/VegaShadowStackPlugin.cpp)
 
-target_link_libraries(VegaShadowStackPlugin PUBLIC ${llvm_libs})
+# target_link_libraries(VegaShadowStackPlugin PUBLIC ${llvm_libs})

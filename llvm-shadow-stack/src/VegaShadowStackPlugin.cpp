@@ -12,11 +12,11 @@ using namespace llvm;
 namespace llvm {
 
 class ShadowStackPass : public PassInfoMixin<ShadowStackPass> {
-public:
-  PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
-    errs() << F.getName() << "\n";
-    return PreservedAnalyses::none();
-  }
+  public:
+    PreservedAnalyses run(Function &F, FunctionAnalysisManager &AM) {
+        errs() << F.getName() << "\n";
+        return PreservedAnalyses::none();
+    }
 };
 
 } // namespace llvm
@@ -24,19 +24,47 @@ public:
 extern "C" {
 void RunShadowStackPass(LLVMModuleRef moduleRef) {
 
-  std::cout << "LLVM: " << LLVM_VERSION_MAJOR << "." << LLVM_VERSION_MINOR << "." << LLVM_VERSION_PATCH << std::endl;
+    std::cout << "LLVM: " << LLVM_VERSION_MAJOR << "." << LLVM_VERSION_MINOR
+              << "." << LLVM_VERSION_PATCH << std::endl;
 
-  Module *module_ = unwrap(moduleRef);
+    Module *module_ = unwrap(moduleRef);
 
-  ModulePassManager passManager;
-  passManager.addPass(createModuleToFunctionPassAdaptor(ShadowStackPass()));
+    PassBuilder passBuilder;
+    passBuilder.registerPipelineParsingCallback(
+        [](StringRef name, FunctionPassManager &functionManager,
+           ArrayRef<PassBuilder::PipelineElement> _) {
+            if (name == "vega-shadow-stack") {
+                functionManager.addPass(ShadowStackPass());
+                return true;
+            } else {
+                return false;
+            }
+        });
 
-  // TODO: it would be nice if we could share this analysisManager with the
-  // actual optimizations, but that would need us to restructure slightly how
-  // the compiler runs these passes.
-  ModuleAnalysisManager analysisManager;
+    LoopAnalysisManager loopAnalysisManager;
+    passBuilder.registerLoopAnalyses(loopAnalysisManager);
+    FunctionAnalysisManager functionAnalysisManager;
+    passBuilder.registerFunctionAnalyses(functionAnalysisManager);
+    CGSCCAnalysisManager cgsccAnalysisManager;
+    passBuilder.registerCGSCCAnalyses(cgsccAnalysisManager);
+    ModuleAnalysisManager moduleAnalysisManager;
+    passBuilder.registerModuleAnalyses(moduleAnalysisManager);
 
-  passManager.run(*module_, analysisManager);
+    passBuilder.crossRegisterProxies(
+            loopAnalysisManager, functionAnalysisManager,
+            cgsccAnalysisManager, moduleAnalysisManager);
+
+    // TODO: it would be nice if we could share the analysis managers with the
+    // actual optimizations, but that would need us to restructure slightly how
+    // the compiler runs these passes.
+    ModulePassManager passManager;
+
+    if (auto error = passBuilder.parsePassPipeline(passManager, "vega-shadow-stack")) {
+        errs() << "internal shadow stack plugin error: unable to pass pipleine\n";
+        consumeError(std::move(error));
+        return;
+    }
+    passManager.run(*module_, moduleAnalysisManager);
 }
 }
 

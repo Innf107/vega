@@ -367,11 +367,7 @@ compileBackend = do
 
                 DebugEmit.debugEmitLLVM DebugEmit.OptimizedLLVM llvmModule
 
-                print LLVM.llvmVersion
-
-                -- liftIO $ runShadowStackPass llvmModule
-
-                print "BBBBBB"
+                liftIO $ runShadowStackPass llvmModule
 
                 DebugEmit.debugEmitLLVM DebugEmit.LLVMWithShadowStack llvmModule
 
