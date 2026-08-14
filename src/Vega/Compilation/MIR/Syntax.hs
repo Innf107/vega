@@ -5,6 +5,7 @@ module Vega.Compilation.MIR.Syntax (
     Phis (..),
     Block (..),
     Variable (..),
+    variableName,
     PathSegment (..),
     Path,
     Instruction (..),
@@ -65,6 +66,9 @@ data Block = MkBlock
 data Variable = MkVariable Text Int
 instance Eq Variable where
     MkVariable _ index1 == MkVariable _ index2 = index1 == index2
+
+variableName :: Variable -> Text
+variableName (MkVariable name _) = name
 
 instance Hashable Variable where
     hashWithSalt salt (MkVariable _ index) = hashWithSalt salt index

@@ -110,8 +110,6 @@ library
       LexicalNegation
       OrPatterns
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -Wno-unused-imports -fno-show-error-context -fno-show-valid-hole-fits -fmax-relevant-binds=0 -fdefer-diagnostics
-  include-dirs:
-      llvm-shadow-stack/include
   extra-libraries:
       VegaShadowStackPlugin
   build-depends:
@@ -172,8 +170,6 @@ executable vega
       LexicalNegation
       OrPatterns
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -Wno-unused-imports -fno-show-error-context -fno-show-valid-hole-fits -fmax-relevant-binds=0 -fdefer-diagnostics -threaded -rtsopts -with-rtsopts=-N
-  include-dirs:
-      llvm-shadow-stack/include
   extra-libraries:
       VegaShadowStackPlugin
   build-depends:
@@ -236,8 +232,6 @@ test-suite vega-test
       LexicalNegation
       OrPatterns
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -Wno-unused-imports -fno-show-error-context -fno-show-valid-hole-fits -fmax-relevant-binds=0 -fdefer-diagnostics -threaded -rtsopts -with-rtsopts=-N
-  include-dirs:
-      llvm-shadow-stack/include
   extra-libraries:
       VegaShadowStackPlugin
   build-depends:

@@ -35,8 +35,16 @@ import Vega.Builtins (Primop (..))
 import Vega.Builtins qualified as Builtins
 import Vega.Compilation.Core.Syntax (Representation)
 import Vega.Compilation.Core.Syntax qualified as Core
-import Vega.Compilation.LLVM.AttributeFunctionType (AttributeFunctionType, 
-    addFunctionWithAttributes, attributeFunctionType, buildCallWithAttributes, buildCallWithAttributesAndOperandBundles, parametersWithAttributes, rawFunctionType, returnTypeWithAttributes)
+import Vega.Compilation.LLVM.AttributeFunctionType (
+    AttributeFunctionType,
+    addFunctionWithAttributes,
+    attributeFunctionType,
+    buildCallWithAttributes,
+    buildCallWithAttributesAndOperandBundles,
+    parametersWithAttributes,
+    rawFunctionType,
+    returnTypeWithAttributes,
+ )
 import Vega.Compilation.LLVM.AttributeFunctionType qualified as AttributeFunctionType
 import Vega.Compilation.LLVM.Layout (CompoundValue (..), Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
@@ -70,6 +78,11 @@ data DeclarationState = MkDeclarationState
 data FunctionEnv = MkFunctionEnv
     { sretVariable :: Maybe (LLVM.Value, Layout)
     }
+
+shadowStackPointer :: (?function :: LLVM.Value, ?functionEnv :: FunctionEnv) => LLVM.Value
+shadowStackPointer = case ?functionEnv.sretVariable of
+    Nothing -> LLVM.getParam ?function 0
+    Just{} -> LLVM.getParam ?function 1
 
 type Compile es =
     ( ?context :: LLVM.Context
@@ -118,8 +131,9 @@ addMainFunction entryPoint module_ = do
         LLVM.getNamedFunction module_ (renderLLVMName entryPoint) >>= \case
             Nothing -> panic $ "Entry point not found: " <> Vega.prettyGlobal Vega.VarKind entryPoint
             Just entryPointFunction -> pure entryPointFunction
-    callInstruction <- 
-        LLVMBuilder.buildCall builder (LLVM.functionType [] LLVM.voidType False) entryPointFunction [] ""
+    -- The initial shadow stack pointer is always null so that the runtime knows that it needs to stop here
+    callInstruction <-
+        LLVMBuilder.buildCall builder (LLVM.functionType [LLVM.pointerType] LLVM.voidType False) entryPointFunction [LLVM.constNullPointer] ""
     LLVM.setInstructionCallConv callInstruction LLVM.tailCallConv
     _ <- LLVMBuilder.buildRet builder (LLVM.constInt LLVM.int32Type 0 False)
     pure ()
@@ -131,11 +145,12 @@ functionLLVMType ::
     Eff es (AttributeFunctionType, "sretParameter" ? Maybe (Int, Layout))
 functionLLVMType parameters returnLayout = do
     let baseParameterTypes = foldMap Layout.llvmParameters parameters
+    let shadowStackPointer = (LLVM.pointerType, [])
 
     (parameterTypes, returnType, usesSRet) <- case Layout.returnConvention returnLayout of
-        Layout.Void -> pure (baseParameterTypes, LLVM.voidType, False)
-        Layout.SingleBoxed -> pure (baseParameterTypes, Layout.boxedPointerType, False)
-        Layout.SingleScalar scalar -> pure (baseParameterTypes, scalar, False)
+        Layout.Void -> pure (shadowStackPointer :<| baseParameterTypes, LLVM.voidType, False)
+        Layout.SingleBoxed -> pure (shadowStackPointer :<| baseParameterTypes, Layout.boxedPointerType, False)
+        Layout.SingleScalar scalar -> pure (shadowStackPointer :<| baseParameterTypes, scalar, False)
         Layout.SRetPointer -> do
             let returnLLVMType = case Layout.atRestLLVMType returnLayout of
                     Nothing -> panic "Trying to return zero-sized layout via an sret pointer"
@@ -143,10 +158,16 @@ functionLLVMType parameters returnLayout = do
             -- The sret parameter always has to be the first parameter
             sretAttribute <- sretAttribute returnLLVMType
             alignmentAttribute <- alignAttribute (Layout.alignment returnLayout)
-            pure ((LLVM.pointerType, [sretAttribute, alignmentAttribute]) :<| baseParameterTypes, LLVM.voidType, True)
+            pure
+                ( (LLVM.pointerType, [sretAttribute, alignmentAttribute])
+                    :<| shadowStackPointer
+                    :<| baseParameterTypes
+                , LLVM.voidType
+                , True
+                )
         Layout.ScalarStruct -> do
             assert (Size.inBits (Layout.unboxedSize returnLayout) == 0)
-            pure (baseParameterTypes, Layout.scalarStructType returnLayout, False)
+            pure (shadowStackPointer :<| baseParameterTypes, Layout.scalarStructType returnLayout, False)
 
     -- The sret parameter is always the first one
     let sretParameter = if usesSRet then Just (0, returnLayout) else Nothing
@@ -169,7 +190,7 @@ forwardDeclareDeclaration = \case
         (functionTypeWithAttributes, _sret) <- functionLLVMType parameterLayouts returnLayout
         function <- addFunctionWithAttributes ?module_ (renderLLVMName name) functionTypeWithAttributes
         LLVM.setFunctionCallConv function LLVM.tailCallConv
-        LLVM.setGC function "statepoint-example"
+        LLVM.setGC function "vegagc"
 
         -- We also generate a wrapper function for closures. See Note: [Closure Representation]
         let parameters = parametersWithAttributes functionTypeWithAttributes
@@ -178,7 +199,7 @@ forwardDeclareDeclaration = \case
         let wrapperType = attributeFunctionType (parameters <> [(Layout.boxedPointerType, [])]) returnType
         closureWrapper <- addFunctionWithAttributes ?module_ (closureWrapperNameForFunction name) wrapperType
         LLVM.setFunctionCallConv closureWrapper LLVM.tailCallConv
-        LLVM.setGC closureWrapper "statepoint-example"
+        LLVM.setGC closureWrapper "vegagc"
 
         block <- LLVM.appendBasicBlock closureWrapper ""
         builder <- LLVMBuilder.createBuilder
@@ -218,15 +239,29 @@ forwardDeclareDeclaration = \case
 
         wrapperFunction <- addFunctionWithAttributes ?module_ (renderLLVMName name) internalFunctionType
         LLVM.setFunctionCallConv wrapperFunction LLVM.tailCallConv
-        LLVM.setGC wrapperFunction "statepoint-example"
+        LLVM.setGC wrapperFunction "vegagc"
 
         block <- LLVM.appendBasicBlock wrapperFunction ""
 
         builder <- LLVMBuilder.createBuilder
         LLVMBuilder.positionBuilderAtEnd builder block
 
-        result <- buildCallWithAttributes 
-            builder externalFunctionType externalFunction (viaList $ Seq.mapWithIndex (\i _ -> LLVM.getParam wrapperFunction i) parameterLayouts) ""
+        -- TODO: instead of just forwarding the parameters here we should really convert them to their C representations.
+        -- For now, all FFI-compatible types have exactly the same representation so this works, but that might change in the
+        -- future.
+        let llvmParameterCount = length (AttributeFunctionType.parametersWithAttributes internalFunctionType)
+        let forwardedParameters = fromList $ fmap (LLVM.getParam wrapperFunction) $ case Layout.returnConvention returnLayout of
+                -- We don't want to forward the shadow stack pointer
+                Layout.SRetPointer -> 0 : [2 .. llvmParameterCount - 1]
+                _ -> [1 .. llvmParameterCount - 1]
+
+        result <-
+            buildCallWithAttributes
+                builder
+                externalFunctionType
+                externalFunction
+                forwardedParameters
+                ""
         case Layout.returnConvention returnLayout of
             Layout.Void; Layout.SRetPointer -> do
                 _ <- LLVMBuilder.buildRetVoid builder
@@ -289,12 +324,27 @@ compileDeclaration = \case
                                 Layout.fillDecomposed valueBuilder scalarIndex (LLVM.getParam function (currentIndex + Layout.parameterDecomposedScalarIndex layout scalarIndex))
                             Layout.buildValue valueBuilder
                         insertVarMapping parameter value layout
+                        for_ @[] [0 .. Layout.parameterCount layout - 1] \parameterIndex -> do
+                            let name =
+                                    if Layout.parameterCount layout == 1
+                                        then MIR.variableName parameter
+                                        else MIR.variableName parameter <> show parameterIndex
+                            LLVM.setValueName (LLVM.getParam function (currentIndex + parameterIndex)) name
                         addParameterMappings (currentIndex + Layout.parameterCount layout) rest
 
+            case sretParameter of
+                    Nothing -> LLVM.setValueName (LLVM.getParam function 0) "shadow-stack"
+                    Just{} -> do
+                        LLVM.setValueName (LLVM.getParam function 0) "sret"                        
+                        LLVM.setValueName (LLVM.getParam function 1) "shadow-stack"
+
+            -- The first parameter may or may not be an sret pointer but either way we always need to
+            -- skip the shadow stack pointer, which is either the first or second parameter depending on whether
+            -- there is an sret pointer
             let initialIndex = case sretParameter of
-                    Nothing -> 0
+                    Nothing -> 1
                     -- The sret parameter is always the first parameter so our actual parameters start at 1
-                    Just{} -> 1
+                    Just{} -> 2
             addParameterMappings initialIndex parametersWithLayouts
 
             builder <- LLVMBuilder.createBuilder
@@ -600,7 +650,7 @@ compileNonTailCall ::
     Seq CompoundValue ->
     Eff es ()
 compileNonTailCall builder var returnLayout functionType function argumentCompounds = do
-    let argumentValues = viaList $ foldMap Layout.compoundAsFunctionArguments argumentCompounds
+    let argumentValues = viaList $ shadowStackPointer :<| foldMap Layout.compoundAsFunctionArguments argumentCompounds
     callInstr <- case Layout.returnConvention returnLayout of
         Layout.Void -> do
             insertVarMapping var Layout.unitCompoundValue returnLayout
@@ -640,7 +690,7 @@ compileTailCall ::
     Seq CompoundValue ->
     Eff es ()
 compileTailCall builder returnLayout functionType function argumentCompounds = do
-    let argumentValues = viaList $ foldMap Layout.compoundAsFunctionArguments argumentCompounds
+    let argumentValues = viaList $ shadowStackPointer :<| foldMap Layout.compoundAsFunctionArguments argumentCompounds
     callInstr <- case Layout.returnConvention returnLayout of
         Layout.Void -> do
             callInstr <- buildCallWithAttributes builder functionType function argumentValues ""

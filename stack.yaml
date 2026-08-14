@@ -6,7 +6,7 @@ packages:
 extra-deps:
 - hashtables-1.4.2
 - git: https://github.com/Innf107/llvm-ng
-  commit: 6e743118293759f6c911bc98c80da9b520d11efe
+  commit: f781358dc828340cba206ab28a24f1d047322e09
 - llvm-ffi-21.0.0.2@sha256:d898d53846373b86a6e34fc2c72cb79cbbe4398bd38e127c69367a933eba6e57,8424
 
 extra-lib-dirs:

@@ -57,8 +57,6 @@ ghc-options:
 - -fdefer-diagnostics
 
 extra-libraries: VegaShadowStackPlugin
-include-dirs:
-- llvm-shadow-stack/include
 
 library:
   source-dirs: src

@@ -368,8 +368,11 @@ compileBackend = do
                 DebugEmit.debugEmitLLVM DebugEmit.OptimizedLLVM llvmModule
 
                 liftIO $ runShadowStackPass llvmModule
-
+                
                 DebugEmit.debugEmitLLVM DebugEmit.LLVMWithShadowStack llvmModule
+
+                -- We verify the module a second time after our own shadow stack pass has run
+                {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
 
                 DebugEmit.isCategoryEnabled DebugEmit.Assembly >>= \case
                     False -> pure ()
