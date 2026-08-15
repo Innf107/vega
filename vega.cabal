@@ -75,7 +75,6 @@ library
       Vega.Runtime
       Vega.SCC
       Vega.Seq.NonEmpty
-      Vega.ShadowStackDependency
       Vega.ShadowStackDependency.TH
       Vega.Size
       Vega.Syntax
@@ -146,6 +145,7 @@ library
 executable vega
   main-is: Main.hs
   other-modules:
+      ShadowStackDependency
       Paths_vega
   autogen-modules:
       Paths_vega

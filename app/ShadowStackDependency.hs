@@ -1,6 +1,7 @@
 {-# LANGUAGE TemplateHaskell #-}
-module Vega.ShadowStackDependency () where
+module ShadowStackDependency () where
 
 import Vega.ShadowStackDependency.TH (addShadowStackDependency)
 
 addShadowStackDependency
+
