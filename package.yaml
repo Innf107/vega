@@ -38,6 +38,7 @@ dependencies:
 - bytestring
 - directory
 - file-io
+- template-haskell
 
 ghc-options:
 - -Wall

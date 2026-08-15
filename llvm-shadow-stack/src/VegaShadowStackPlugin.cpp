@@ -2,6 +2,7 @@
 #define LLVM_SHADOW_STACK_PLUGIN
 
 #include "llvm-c/Core.h"
+#include "llvm/ADT/SmallBitVector.h"
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LLVMContext.h"
@@ -24,11 +25,17 @@ class ShadowStackPass : public PassInfoMixin<ShadowStackPass> {
         }
         // We don't want the gc annotation to stick around since LLVM can't
         // process it
+        // TODO: this doesn't work. we can only clear the gc annotation after we
+        // have already processed all calls to it that need to preserve it. In
+        // fact, we should probably just use a pass over the entire module,
+        // rather than one on functions
         function.clearGC();
 
         if (function.isDeclaration()) {
             return PreservedAnalyses::all();
         }
+
+        auto livePointersPerBlock = computeLiveness(function);
 
         const auto previousShadowStackPointer =
             function.hasAttributeAtIndex(0, Attribute::AttrKind::StructRet)
@@ -37,12 +44,84 @@ class ShadowStackPass : public PassInfoMixin<ShadowStackPass> {
 
         IRBuilder builder(context);
 
-        builder.SetInsertPoint(&function.getEntryBlock(), function.getEntryBlock().getFirstInsertionPt());
-        auto shadow_stack_alloca = builder.CreateAlloca(
-            PointerType::get(context, 0),
-            ConstantInt::get(Type::getInt64Ty(context), 0), "shadow_stack");
+        builder.SetInsertPoint(&function.getEntryBlock(),
+                               function.getEntryBlock().getFirstInsertionPt());
+        auto shadow_stack_alloca =
+            builder.CreateAlloca(PointerType::get(context, 0),
+                                 ConstantInt::get(Type::getInt64Ty(context), 0),
+                                 "shadow-stack-frame");
 
         return PreservedAnalyses::none();
+    }
+
+  private:
+    DenseMap<Value *, unsigned> pointerValueIDs;
+    DenseMap<unsigned, Value *> reversePointerValueIDs;
+
+    unsigned idFor(Value *value) {
+        // TODO: surely there is a way to avoid the double traversal here
+        if (pointerValueIDs.contains(value)) {
+            return pointerValueIDs[value];
+        } else {
+            unsigned id = pointerValueIDs.size();
+            pointerValueIDs[value] = id;
+            reversePointerValueIDs[id] = value;
+            return id;
+        }
+    }
+
+    inline bool isGCPointer(Value *value) {
+        auto type = value->getType();
+        return type->isPointerTy() && type->getPointerAddressSpace() == 1;
+    }
+
+    DenseMap<BasicBlock *, llvm::SmallBitVector>
+    computeLiveness(Function &function) {
+        llvm::DenseMap<BasicBlock *, llvm::SmallBitVector> genSets;
+        llvm::DenseMap<BasicBlock *, llvm::SmallBitVector> killSets;
+
+        for (auto *block : post_order(&function)) {
+            llvm::SmallBitVector genSet;
+            llvm::SmallBitVector killSet;
+            for (auto &instruction : llvm::reverse(*block)) {
+                if (isGCPointer(&instruction)) {
+                    killSet.set(idFor(&instruction));
+                }
+                for (auto &operand : instruction.operands()) {
+                    auto *value = operand.get();
+                    if (isGCPointer(value)) {
+                        genSet.set(idFor(value));
+                    }
+                }
+            }
+
+            genSets[block] = genSet;
+            killSets[block] = killSet;
+        }
+
+        llvm::DenseMap<BasicBlock *, llvm::SmallBitVector> livePointersPerBlock;
+
+        bool changed = true;
+        while (changed) {
+            changed = false;
+
+            // TODO: we might be able to do something smarter than repeatedly
+            // looping over all blocks here. This should converge pretty quickly
+            // either way though.
+            for (auto *block : post_order(&function)) {
+                SmallBitVector liveThisIteration;
+                for (auto *successor : successors(block)) {
+                    liveThisIteration |= genSets[successor];
+                    liveThisIteration &= ~killSets[successor];
+                }
+                if (livePointersPerBlock[block] != liveThisIteration) {
+                    changed = true;
+                    livePointersPerBlock[block] = liveThisIteration;
+                }
+            }
+        }
+
+        return livePointersPerBlock;
     }
 };
 } // namespace llvm

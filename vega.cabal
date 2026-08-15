@@ -75,6 +75,8 @@ library
       Vega.Runtime
       Vega.SCC
       Vega.Seq.NonEmpty
+      Vega.ShadowStackDependency
+      Vega.ShadowStackDependency.TH
       Vega.Size
       Vega.Syntax
       Vega.TypeCheck
@@ -130,6 +132,7 @@ library
     , prettyprinter
     , relude
     , streaming
+    , template-haskell
     , text
     , text-builder
     , time
@@ -190,6 +193,7 @@ executable vega
     , prettyprinter
     , relude
     , streaming
+    , template-haskell
     , text
     , text-builder
     , time
@@ -252,6 +256,7 @@ test-suite vega-test
     , prettyprinter
     , relude
     , streaming
+    , template-haskell
     , text
     , text-builder
     , time
