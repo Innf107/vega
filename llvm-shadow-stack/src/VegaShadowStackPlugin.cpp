@@ -12,6 +12,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include <iostream>
 #include <llvm-c/Types.h>
+#include <llvm/ADT/Twine.h>
 #include <queue>
 
 using namespace llvm;
@@ -255,9 +256,15 @@ computeIntervals(Function &function, Schedule &schedule, PointerIDs &pointerIDs,
     return intervals;
 }
 
-DenseMap<Value *, unsigned>
+struct StackFrameAssignments {
+    DenseMap<Value *, unsigned> assignments;
+    unsigned frameSize;
+};
+
+StackFrameAssignments
 allocateStackFrameSlots(DenseMap<Value *, Interval> intervals) {
     DenseMap<Value *, unsigned> stackSlots;
+    unsigned frameSize = 0;
 
     BitSet usedSlots;
 
@@ -291,9 +298,52 @@ allocateStackFrameSlots(DenseMap<Value *, Interval> intervals) {
         usedSlots.set(slotForThisInterval);
         stackSlots[value] = slotForThisInterval;
         active.push(std::make_pair(value, interval));
+
+        frameSize = std::max(frameSize, slotForThisInterval + 1);
     }
 
-    return stackSlots;
+    return StackFrameAssignments{.assignments = stackSlots,
+                                 .frameSize = frameSize};
+}
+
+void saveAndRelocateBoxedPointers(Function &function,
+                                  StackFrameAssignments stackFrameAssignments) {
+    if (stackFrameAssignments.frameSize == 0) {
+        return;
+    }
+
+    auto &context = function.getContext();
+    const auto previousShadowStackPointer =
+        function.hasParamAttribute(0, Attribute::AttrKind::StructRet)
+            ? function.getArg(1)
+            : function.getArg(0);
+
+    IRBuilder builder(context);
+
+    builder.SetInsertPoint(&function.getEntryBlock(),
+                           function.getEntryBlock().getFirstInsertionPt());
+
+    auto* frameStructType = StructType::get(
+        context, {// Pointer to the previous segment. This has to be in address
+                  // space 0, not 1 since it's not heap allocated itself
+                  PointerType::get(context, 0),
+                  // Size (doesn't need to be 64 bit but we can't make it less
+                  // because of alignment so it doesn't matter)
+                  Type::getInt64Ty(context),
+                  // The actual pointers. These have to be in address space 1.
+                  ArrayType::get(PointerType::get(context, 1),
+                                 stackFrameAssignments.frameSize)});
+    auto* shadowStackStruct =
+        builder.CreateAlloca(frameStructType, nullptr, "shadow-stack-frame");
+    
+    auto* pointerToPrevious = builder.CreateInBoundsGEP(frameStructType, shadowStackStruct, { builder.getInt32(0), builder.getInt32(0) }, "previous");
+    builder.CreateStore(previousShadowStackPointer, pointerToPrevious);
+
+    auto* pointerToSize = builder.CreateInBoundsGEP(frameStructType, shadowStackStruct, { builder.getInt32(0), builder.getInt32(1) }, "size");
+    builder.CreateStore(builder.getInt64(stackFrameAssignments.frameSize), pointerToSize);
+
+    auto* stackFrame = builder.CreateInBoundsGEP(frameStructType, shadowStackStruct, { builder.getInt32(0), builder.getInt32(2) }, "shadow-stack-pointers");
+
 }
 }; // namespace llvm
 
@@ -301,7 +351,6 @@ extern "C" {
 void RunShadowStackPass(LLVMModuleRef moduleRef) {
     Module *module_ = unwrap(moduleRef);
 
-    auto &context = module_->getContext();
     for (auto &function : module_->functions()) {
         // We should only process our own functions
         if (!function.hasGC() || function.getGC() != "vegagc") {
@@ -318,21 +367,8 @@ void RunShadowStackPass(LLVMModuleRef moduleRef) {
         auto schedule = computeSchedule(function);
         auto intervals = computeIntervals(function, schedule, pointerIDs,
                                           livePointersInBlock);
-        auto slotAssignments = allocateStackFrameSlots(intervals);
-
-        const auto previousShadowStackPointer =
-            function.hasAttributeAtIndex(0, Attribute::AttrKind::StructRet)
-                ? function.getArg(1)
-                : function.getArg(0);
-
-        IRBuilder builder(context);
-
-        builder.SetInsertPoint(&function.getEntryBlock(),
-                               function.getEntryBlock().getFirstInsertionPt());
-        auto shadow_stack_alloca =
-            builder.CreateAlloca(PointerType::get(context, 0),
-                                 ConstantInt::get(Type::getInt64Ty(context), 0),
-                                 "shadow-stack-frame");
+        auto StackFrameAssignments = allocateStackFrameSlots(intervals);
+        saveAndRelocateBoxedPointers(function, StackFrameAssignments);
     }
 
     for (auto &function : module_->functions()) {
