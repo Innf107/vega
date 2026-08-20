@@ -110,9 +110,11 @@ library
       RoleAnnotations
       LexicalNegation
       OrPatterns
+  other-extensions:
+      TemplateHaskell
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -Wno-unused-imports -fno-show-error-context -fno-show-valid-hole-fits -fmax-relevant-binds=0 -fdefer-diagnostics
-  extra-libraries:
-      VegaShadowStackPlugin
+  cxx-sources:
+      llvm-shadow-stack/src/VegaShadowStackPlugin.cpp
   build-depends:
       aeson
     , base >=4.7 && <5
@@ -172,9 +174,9 @@ executable vega
       RoleAnnotations
       LexicalNegation
       OrPatterns
+  other-extensions:
+      TemplateHaskell
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -Wno-unused-imports -fno-show-error-context -fno-show-valid-hole-fits -fmax-relevant-binds=0 -fdefer-diagnostics -threaded -rtsopts -with-rtsopts=-N
-  extra-libraries:
-      VegaShadowStackPlugin
   build-depends:
       aeson
     , base >=4.7 && <5
@@ -235,9 +237,9 @@ test-suite vega-test
       RoleAnnotations
       LexicalNegation
       OrPatterns
+  other-extensions:
+      TemplateHaskell
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -Wno-unused-imports -fno-show-error-context -fno-show-valid-hole-fits -fmax-relevant-binds=0 -fdefer-diagnostics -threaded -rtsopts -with-rtsopts=-N
-  extra-libraries:
-      VegaShadowStackPlugin
   build-depends:
       aeson
     , base >=4.7 && <5

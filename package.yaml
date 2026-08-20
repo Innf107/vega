@@ -57,10 +57,12 @@ ghc-options:
 - -fmax-relevant-binds=0
 - -fdefer-diagnostics
 
-extra-libraries: VegaShadowStackPlugin
+# extra-libraries: VegaShadowStackPlugin
 
 library:
   source-dirs: src
+  cxx-sources:
+  - llvm-shadow-stack/src/VegaShadowStackPlugin.cpp
 
 executables:
   vega:
@@ -107,3 +109,6 @@ default-extensions:
 - RoleAnnotations
 - LexicalNegation
 - OrPatterns
+
+other-extensions:
+- TemplateHaskell
