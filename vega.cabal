@@ -113,7 +113,7 @@ library
       TemplateHaskell
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wmissing-export-lists -Wmissing-home-modules -Wno-name-shadowing -Werror=incomplete-patterns -Wno-ambiguous-fields -Wno-unused-imports -fno-show-error-context -fno-show-valid-hole-fits -fmax-relevant-binds=0 -fdefer-diagnostics
   cxx-sources:
-      llvm-shadow-stack/src/VegaShadowStackPlugin.cpp
+      llvm-shadow-stack/VegaShadowStackPlugin.cpp
   build-depends:
       aeson
     , base >=4.7 && <5

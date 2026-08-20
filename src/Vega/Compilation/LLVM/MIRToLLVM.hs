@@ -48,7 +48,8 @@ import Vega.Compilation.LLVM.AttributeFunctionType (
 import Vega.Compilation.LLVM.AttributeFunctionType qualified as AttributeFunctionType
 import Vega.Compilation.LLVM.Layout (CompoundValue (..), Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
-import Vega.Compilation.LLVM.Runtime (RuntimeDefinitions (..), declareRuntimeDefinitions)
+import Vega.Compilation.LLVM.Runtime (Definition (..), RuntimeDefinitions (..), declareRuntimeDefinitions)
+import Vega.Compilation.LLVM.Runtime qualified as Runtime
 import Vega.Compilation.LLVM.Runtime.Heap qualified as Heap
 import Vega.Compilation.LLVM.Runtime.ToLLVMConstant (ToLLVMConstant (toLLVMConstant), size)
 import Vega.Compilation.LLVM.Runtime.ToLLVMConstant qualified as ToLLVMConstant
@@ -333,10 +334,10 @@ compileDeclaration = \case
                         addParameterMappings (currentIndex + Layout.parameterCount layout) rest
 
             case sretParameter of
-                    Nothing -> LLVM.setValueName (LLVM.getParam function 0) "shadow-stack"
-                    Just{} -> do
-                        LLVM.setValueName (LLVM.getParam function 0) "sret"                        
-                        LLVM.setValueName (LLVM.getParam function 1) "shadow-stack"
+                Nothing -> LLVM.setValueName (LLVM.getParam function 0) "shadow-stack"
+                Just{} -> do
+                    LLVM.setValueName (LLVM.getParam function 0) "sret"
+                    LLVM.setValueName (LLVM.getParam function 1) "shadow-stack"
 
             -- The first parameter may or may not be an sret pointer but either way we always need to
             -- skip the shadow stack pointer, which is either the first or second parameter depending on whether
@@ -920,16 +921,20 @@ outOfLineBuiltin ::
     (Compile es) =>
     LLVMBuilder.Builder ->
     forall (functionName :: Symbol) ->
-    (HasField functionName RuntimeDefinitions (LLVM.Value, AttributeFunctionType)) =>
+    (HasField functionName RuntimeDefinitions Runtime.Definition) =>
     Seq LLVM.Value ->
     Representation ->
     Text ->
     Eff es CompoundValue
 outOfLineBuiltin builder functionName arguments returnRepresentation varName = do
-    let (llvmFunctionValue, llvmFunctionType) = getField @functionName ?runtimeDefinitions
+    let MkDefinition{value, type_, isSafepoint} = getField @functionName ?runtimeDefinitions
     returnLayout <- Layout.representationLayout returnRepresentation
 
-    buildCCCCall builder llvmFunctionType llvmFunctionValue (viaList arguments) returnLayout varName
+    let fullArguments = case isSafepoint of
+            False -> viaList arguments
+            True -> viaList (shadowStackPointer :<| arguments)
+
+    buildCCCCall builder type_ value fullArguments returnLayout varName
 
 buildCCCCall ::
     (Compile es) =>
@@ -1068,13 +1073,15 @@ buildRuntimeCall ::
     (Compile es) =>
     LLVMBuilder.Builder ->
     forall (name :: Symbol) ->
-    (HasField name RuntimeDefinitions (LLVM.Value, AttributeFunctionType)) =>
+    (HasField name RuntimeDefinitions Runtime.Definition) =>
     Storable.Vector LLVM.Value ->
     Text ->
     Eff es LLVM.Value
 buildRuntimeCall builder name arguments varName = do
-    let (function, functionType) = getField @name ?runtimeDefinitions
-    buildCallWithAttributes builder functionType function arguments varName
+    let MkDefinition{value, type_, isSafepoint} = getField @name ?runtimeDefinitions
+    case isSafepoint of
+        False -> buildCallWithAttributes builder type_ value arguments varName
+        True -> buildCallWithAttributes builder type_ value ([shadowStackPointer] <> arguments) varName
 
 accessLocation :: (HasCallStack, Compile es) => LLVMBuilder.Builder -> CompoundValue -> Layout -> Layout.ElementLocation -> Text -> Eff es CompoundValue
 accessLocation builder value layout location varName = case location of

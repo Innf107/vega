@@ -62,7 +62,7 @@ ghc-options:
 library:
   source-dirs: src
   cxx-sources:
-  - llvm-shadow-stack/src/VegaShadowStackPlugin.cpp
+  - llvm-shadow-stack/VegaShadowStackPlugin.cpp
 
 executables:
   vega:

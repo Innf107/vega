@@ -3,7 +3,10 @@ use std::{
     ptr::{addr_of, null},
 };
 
-use crate::{either::Either, gc::roots::vega_debug_stack_roots};
+use crate::{
+    either::Either,
+    gc::roots::{ShadowStackFrame, vega_debug_stack_roots},
+};
 
 /// The type of Vega heap objects.
 /// The fields of this type only contain the heap header
@@ -32,6 +35,19 @@ impl HeapObject {
         unsafe { object.byte_add(HeapObject::HEADER_SIZE_IN_BYTES) as *mut u8 }
     }
 
+    // A textual description of this heap object's object type for use in debugging.
+    //
+    // SAFETY: the pointer must point to a valid heap object or forward pointer or be a null pointer.
+    pub unsafe fn object_type_description(object: *const HeapObject) -> &'static str {
+        match unsafe { HeapObject::as_handle(object) } {
+            HeapObjectHandle::Boxed(_) => "Boxed",
+            HeapObjectHandle::Array(_) => "Array",
+            HeapObjectHandle::StaticArray(_) => "StaticArray",
+            HeapObjectHandle::ForwardPointer(_) => "ForwardPointer",
+            HeapObjectHandle::Null => "Null",
+        }
+    }
+
     // SAFETY: the heap object pointer needs to be either a null pointer or a pointer to a valid heap object
     pub unsafe fn header(object: *const HeapObject) -> Header {
         if object == null() {
@@ -45,7 +61,7 @@ impl HeapObject {
         object as *const ArrayHeapObject
     }
 
-    /// SAFETY: the pointer needs to point to a valid heap object (including forward pointers)
+    /// SAFETY: the pointer needs to point to a valid heap object (including forward pointers and null)
     pub unsafe fn as_handle(object: *const HeapObject) -> HeapObjectHandle {
         let header = unsafe { Self::header(object) };
         match header.info_table_or_forward_pointer() {
@@ -311,8 +327,11 @@ impl ArrayHeapObject {
 // it's simpler to keep it as a rust function for now
 // SAFETY: this assumes that info_table points to a boxed heap object info table
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn vega_allocate_boxed(info_table: &'static InfoTable) -> *mut u8 {
-    vega_debug_stack_roots();
+pub unsafe extern "C" fn vega_allocate_boxed(
+    shadow_stack_pointer: *const ShadowStackFrame,
+    info_table: &'static InfoTable,
+) -> *mut u8 {
+    vega_debug_stack_roots(shadow_stack_pointer);
     let layout = unsafe { info_table.layout.boxed };
 
     let object_pointer = unsafe {
@@ -332,6 +351,7 @@ pub unsafe extern "C" fn vega_allocate_boxed(info_table: &'static InfoTable) -> 
 ///
 /// If you need an array that can survive across a garbage collection, try [allocate_zero_initialized_array]
 pub unsafe fn allocate_uninitialized_array(
+    shadow_stack_pointer: *const ShadowStackFrame,
     array_info_table: &'static InfoTable,
     length_in_elements: usize,
 ) -> *mut ArrayHeapObject {
@@ -344,7 +364,7 @@ pub unsafe fn allocate_uninitialized_array(
 
     let header = Header::new(array_info_table, Generation::MINOR);
     unsafe { (*object_pointer).base = HeapObject { header } };
-    
+
     unsafe { (*object_pointer).length = length_in_elements };
     object_pointer
 }
@@ -352,11 +372,13 @@ pub unsafe fn allocate_uninitialized_array(
 /// See [allocate_uninitialized_array]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vega_allocate_uninitialized_array(
+    shadow_stack_pointer: *const ShadowStackFrame,
     array_info_table: &'static InfoTable,
     size_in_elements: usize,
 ) -> *mut u8 {
-    let object_pointer =
-        unsafe { allocate_uninitialized_array(array_info_table, size_in_elements) };
+    let object_pointer = unsafe {
+        allocate_uninitialized_array(shadow_stack_pointer, array_info_table, size_in_elements)
+    };
     HeapObject::data(ArrayHeapObject::as_base(object_pointer))
 }
 
@@ -367,10 +389,13 @@ pub unsafe extern "C" fn vega_allocate_uninitialized_array(
 ///
 /// Also, this assumes that array_info_table points to a valid array info table (with object_type = Array)
 pub unsafe fn allocate_zero_initialized_array(
+    shadow_stack_pointer: *const ShadowStackFrame,
     array_info_table: &'static InfoTable,
     size_in_elements: usize,
 ) -> *mut ArrayHeapObject {
-    let array = unsafe { allocate_uninitialized_array(array_info_table, size_in_elements) };
+    let array = unsafe {
+        allocate_uninitialized_array(shadow_stack_pointer, array_info_table, size_in_elements)
+    };
     let size_in_bytes =
         size_in_elements * unsafe { (*array_info_table).layout.array.element_stride_in_bytes };
     unsafe {
@@ -386,9 +411,12 @@ pub unsafe fn allocate_zero_initialized_array(
 /// See [allocate_zero_initialized_array]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vega_allocate_zero_initialized_array(
+    shadow_stack_pointer: *const ShadowStackFrame,
     array_info_table: &'static InfoTable,
     size_in_elements: usize,
 ) -> *mut u8 {
-    let array = unsafe { allocate_zero_initialized_array(array_info_table, size_in_elements) };
+    let array = unsafe {
+        allocate_zero_initialized_array(shadow_stack_pointer, array_info_table, size_in_elements)
+    };
     HeapObject::data(ArrayHeapObject::as_base(array))
 }

@@ -2,7 +2,7 @@ use std::ptr::{null, null_mut};
 
 use block_allocator::{BLOCK_SIZE, BlockList, allocate_block_list};
 use libc::{_SC_PAGESIZE, sysconf};
-use roots::for_stack_roots;
+use roots::{ShadowStackFrame, for_stack_roots};
 
 use crate::{
     either::Either,
@@ -11,7 +11,6 @@ use crate::{
 
 pub mod block_allocator;
 pub mod roots;
-pub mod stackmap;
 
 pub struct AllocationArea {
     blocks: BlockList,
@@ -35,18 +34,13 @@ pub fn allocate_in(area: &AllocationArea, info_table: &'static InfoTable) {
     todo!()
 }
 
-pub fn collect_garbage() {
-    for_stack_roots(
-        |stack_root| unsafe {
-            let from_object = HeapObject::from_data(stack_root.base_pointer);
+pub fn collect_garbage(shadow_stack_pointer: *const ShadowStackFrame) {
+    for_stack_roots(shadow_stack_pointer, |stack_root| unsafe {
+        let from_object = HeapObject::from_data(*stack_root);
 
-            let relocated_heap_object = evacuate(from_object);
-            for i in 0..(stack_root.derived_pointer_count as usize) {
-                *(stack_root.derived_pointers.add(i)) = HeapObject::data(relocated_heap_object)
-            }
-        },
-        |_, _| {},
-    );
+        let relocated_heap_object = evacuate(from_object);
+        *stack_root = HeapObject::data(relocated_heap_object);
+    });
     todo!("scavenge")
 }
 
