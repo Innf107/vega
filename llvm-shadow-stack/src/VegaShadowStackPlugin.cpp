@@ -12,6 +12,7 @@
 #include "llvm/Passes/PassBuilder.h"
 #include <iostream>
 #include <llvm-c/Types.h>
+#include <llvm/ADT/PostOrderIterator.h>
 #include <llvm/ADT/Twine.h>
 #include <queue>
 
@@ -52,6 +53,8 @@ struct Interval {
 
 // Wrapper around a SmallBitVector that allows setting bits at any index
 // without a fixed length.
+//
+// A freshly constructed bitset represents an infinite sequence of 0s.
 class BitSet {
   public:
     void set(unsigned index) {
@@ -59,6 +62,13 @@ class BitSet {
             vector.resize(index + 1);
         };
         vector.set(index);
+    }
+    bool test(unsigned index) {
+        if (index >= vector.size()) {
+            return false;
+        } else {
+            return vector.test(index);
+        }
     }
     void reset(unsigned index) {
         // If the index is out of bounds of the underlying vector, it is
@@ -85,6 +95,8 @@ class BitSet {
         }
         vector |= other.vector;
     }
+
+    void operator&=(BitSet &other) { vector &= other.vector; }
 
     void operator-=(BitSet &other) {
         // his could be asymptotically faster but that doesn't matter
@@ -168,7 +180,7 @@ DenseMap<BasicBlock *, BitSet> computeLiveness(Function &function,
         killSets[block] = killSet;
     }
 
-    llvm::DenseMap<BasicBlock *, BitSet> livePointersPerBlock;
+    llvm::DenseMap<BasicBlock *, BitSet> liveIntoBlock;
 
     bool changed = true;
     while (changed) {
@@ -183,14 +195,77 @@ DenseMap<BasicBlock *, BitSet> computeLiveness(Function &function,
                 liveThisIteration |= genSets[successor];
                 liveThisIteration -= killSets[successor];
             }
-            if (livePointersPerBlock[block] != liveThisIteration) {
+            if (liveIntoBlock[block] != liveThisIteration) {
                 changed = true;
-                livePointersPerBlock[block] = liveThisIteration;
+                liveIntoBlock[block] = liveThisIteration;
             }
         }
     }
 
-    return livePointersPerBlock;
+    return liveIntoBlock;
+}
+
+bool isVegaGCCall(Instruction &instruction) {
+    if (isa<CallBase>(instruction)) {
+        auto *call = dyn_cast<CallBase>(&instruction);
+        auto callee = call->getCalledFunction();
+        return callee != nullptr && callee->hasGC() &&
+               callee->getGC() == "vegagc";
+    } else {
+        return false;
+    }
+}
+
+// We only need to concern ourselves with boxed pointers that are live across a
+// call to a function that could contain a safepoint. Pointers that aren't don't
+// need to be stored in the shadow stack.
+//
+// A bit more formally, a pointer is live across a call, if there is a vegagc
+// call instruction such that the pointer is live at the instruction before and
+// one after the call.
+BitSet filterLiveAcrossGCCalls(Function &function, PointerIDs &pointerIDs,
+                               DenseMap<BasicBlock *, BitSet> &liveIntoBlock) {
+    BitSet pointersLiveAcrossGCCalls;
+
+    // The order shouldn't matter here since we already have all the block-level
+    // liveness information.
+    for (auto *block : post_order(&function)) {
+        BitSet livePointersAtAll;
+        for (auto *successor : successors(block)) {
+            livePointersAtAll |= liveIntoBlock[successor];
+        }
+
+        for (auto &instruction : reverse(*block)) {
+            if (isVegaGCCall(instruction)) {
+                BitSet pointersLiveBeforeAndAfterThis = livePointersAtAll;
+                if (isGCPointer(&instruction)) {
+                    // Any variable in livePointersAtAll is live *after* this
+                    // instruction. The variable defined by this call is not
+                    // live before it, but every other one is (since it only
+                    // becomes dead at its definition), so we only need to
+                    // delete one value from the bitset
+                    pointersLiveBeforeAndAfterThis.reset(
+                        idFor(pointerIDs, &instruction));
+                }
+                pointersLiveAcrossGCCalls |= pointersLiveBeforeAndAfterThis;
+            }
+
+            // It is important that we update this *after* the call check, since
+            // we want that one to use the state of the instruction one after
+            // this one.
+            for (auto &operand : instruction.operands()) {
+                auto *value = operand.get();
+                if (isGCPointer(value)) {
+                    livePointersAtAll.set(idFor(pointerIDs, value));
+                }
+            }
+            if (isGCPointer(&instruction)) {
+                livePointersAtAll.reset(idFor(pointerIDs, &instruction));
+            }
+        }
+    }
+
+    return pointersLiveAcrossGCCalls;
 }
 
 Schedule computeSchedule(Function &function) {
@@ -209,15 +284,21 @@ Schedule computeSchedule(Function &function) {
     return schedule;
 }
 
-DenseMap<Value *, Interval>
-computeIntervals(Function &function, Schedule &schedule, PointerIDs &pointerIDs,
-                 DenseMap<BasicBlock *, BitSet> livePointersInBlock) {
+inline bool isGCPointerLiveAcrossCall(PointerIDs &pointerIDs,
+                                      BitSet &liveAcrossCalls, Value *value) {
+    return isGCPointer(value) && liveAcrossCalls.test(idFor(pointerIDs, value));
+}
+
+DenseMap<Value *, Interval> computeIntervals(
+    const Function &function, Schedule &schedule, PointerIDs &pointerIDs,
+    DenseMap<BasicBlock *, BitSet> &liveIntoBlock, BitSet liveAcrossCalls) {
+
     DenseMap<Value *, Interval> intervals;
 
     for (auto *block : reverse(schedule.blockOrder)) {
         BitSet livePointers;
         for (auto *successor : successors(block)) {
-            livePointers |= livePointersInBlock[successor];
+            livePointers |= liveIntoBlock[successor];
             for (auto &phi : successor->phis()) {
                 if (isGCPointer(&phi)) {
                     livePointers.set(idFor(
@@ -228,6 +309,9 @@ computeIntervals(Function &function, Schedule &schedule, PointerIDs &pointerIDs,
         unsigned blockStart = schedule.blockStarts[block];
         unsigned blockEnd = schedule.blockEnds[block];
         for (unsigned pointerID : livePointers.set_bits()) {
+            if (!liveAcrossCalls.test(pointerID)) {
+                continue;
+            }
             auto *pointer = pointerIDs.reversePointerValueIDs[pointerID];
 
             // We initially set the range of every pointer that is live
@@ -236,7 +320,8 @@ computeIntervals(Function &function, Schedule &schedule, PointerIDs &pointerIDs,
             intervals[pointer].addRange(blockStart, blockEnd);
         }
         for (auto &instruction : reverse(*block)) {
-            if (isGCPointer(&instruction)) {
+            if (isGCPointerLiveAcrossCall(pointerIDs, liveAcrossCalls,
+                                          &instruction)) {
                 // TODO: we could in principle avoid this hash map lookup if
                 // we computed the instruction index from the block indices
                 // here
@@ -245,7 +330,8 @@ computeIntervals(Function &function, Schedule &schedule, PointerIDs &pointerIDs,
             }
             for (auto &operand : instruction.operands()) {
                 auto *value = operand.get();
-                if (isGCPointer(value)) {
+                if (isGCPointerLiveAcrossCall(pointerIDs, liveAcrossCalls,
+                                              value)) {
                     intervals[value].addRange(
                         blockStart, schedule.instructions[&instruction]);
                 }
@@ -323,7 +409,7 @@ void saveAndRelocateBoxedPointers(Function &function,
     builder.SetInsertPoint(&function.getEntryBlock(),
                            function.getEntryBlock().getFirstInsertionPt());
 
-    auto* frameStructType = StructType::get(
+    auto *frameStructType = StructType::get(
         context, {// Pointer to the previous segment. This has to be in address
                   // space 0, not 1 since it's not heap allocated itself
                   PointerType::get(context, 0),
@@ -333,17 +419,23 @@ void saveAndRelocateBoxedPointers(Function &function,
                   // The actual pointers. These have to be in address space 1.
                   ArrayType::get(PointerType::get(context, 1),
                                  stackFrameAssignments.frameSize)});
-    auto* shadowStackStruct =
+    auto *shadowStackStruct =
         builder.CreateAlloca(frameStructType, nullptr, "shadow-stack-frame");
-    
-    auto* pointerToPrevious = builder.CreateInBoundsGEP(frameStructType, shadowStackStruct, { builder.getInt32(0), builder.getInt32(0) }, "previous");
+
+    auto *pointerToPrevious = builder.CreateInBoundsGEP(
+        frameStructType, shadowStackStruct,
+        {builder.getInt32(0), builder.getInt32(0)}, "previous");
     builder.CreateStore(previousShadowStackPointer, pointerToPrevious);
 
-    auto* pointerToSize = builder.CreateInBoundsGEP(frameStructType, shadowStackStruct, { builder.getInt32(0), builder.getInt32(1) }, "size");
-    builder.CreateStore(builder.getInt64(stackFrameAssignments.frameSize), pointerToSize);
+    auto *pointerToSize = builder.CreateInBoundsGEP(
+        frameStructType, shadowStackStruct,
+        {builder.getInt32(0), builder.getInt32(1)}, "size");
+    builder.CreateStore(builder.getInt64(stackFrameAssignments.frameSize),
+                        pointerToSize);
 
-    auto* stackFrame = builder.CreateInBoundsGEP(frameStructType, shadowStackStruct, { builder.getInt32(0), builder.getInt32(2) }, "shadow-stack-pointers");
-
+    auto *stackFrame = builder.CreateInBoundsGEP(
+        frameStructType, shadowStackStruct,
+        {builder.getInt32(0), builder.getInt32(2)}, "shadow-stack-pointers");
 }
 }; // namespace llvm
 
@@ -363,10 +455,12 @@ void RunShadowStackPass(LLVMModuleRef moduleRef) {
         outs() << "<<<" << function.getName() << ">>>\n";
 
         PointerIDs pointerIDs;
-        auto livePointersInBlock = computeLiveness(function, pointerIDs);
+        auto liveIntoBlock = computeLiveness(function, pointerIDs);
+        auto liveAcrossCalls =
+            filterLiveAcrossGCCalls(function, pointerIDs, liveIntoBlock);
         auto schedule = computeSchedule(function);
         auto intervals = computeIntervals(function, schedule, pointerIDs,
-                                          livePointersInBlock);
+                                          liveIntoBlock, liveAcrossCalls);
         auto StackFrameAssignments = allocateStackFrameSlots(intervals);
         saveAndRelocateBoxedPointers(function, StackFrameAssignments);
     }
