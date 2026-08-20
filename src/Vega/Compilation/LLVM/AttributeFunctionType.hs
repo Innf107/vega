@@ -56,7 +56,6 @@ addFunctionWithAttributes :: (MonadIO io) => LLVM.Module -> Text -> AttributeFun
 addFunctionWithAttributes module_ name attributeFunctionType = do
     let functionType = rawFunctionType attributeFunctionType
     function <- LLVM.addFunction module_ name functionType
-    LLVM.addTargetDependentFunctionAttr function "frame-pointer" "all"
     applyAttributes attributeFunctionType function
     pure function
 
