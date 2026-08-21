@@ -39,6 +39,7 @@ pub extern "C" fn vega_debug_stack_roots(shadow_stack_pointer: *const ShadowStac
     while frame != null() {
         unsafe {
             let size = (*frame).size;
+            println!("frame({size})@{frame:?}");
             let pointers = frame.byte_add(size_of::<ShadowStackFrame>()) as *mut *const u8;
             for i in 0..(size as usize) {
                 let pointer_to_data_pointer = pointers.add(i);

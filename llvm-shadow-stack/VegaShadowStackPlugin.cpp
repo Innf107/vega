@@ -14,6 +14,7 @@
 #include <llvm-c/Types.h>
 #include <llvm/ADT/PostOrderIterator.h>
 #include <llvm/ADT/Twine.h>
+#include <optional>
 #include <queue>
 
 using namespace llvm;
@@ -151,9 +152,10 @@ unsigned idFor(PointerIDs &pointerIDs, Value *value) {
     }
 }
 
-inline bool isGCPointer(Value *value) {
+inline bool isGCPointerVariable(Value *value) {
     auto type = value->getType();
-    return type->isPointerTy() && type->getPointerAddressSpace() == 1;
+    return type->isPointerTy() && type->getPointerAddressSpace() == 1 &&
+           !isa<Constant>(value);
 }
 
 DenseMap<BasicBlock *, BitSet> computeLiveness(Function &function,
@@ -165,12 +167,12 @@ DenseMap<BasicBlock *, BitSet> computeLiveness(Function &function,
         BitSet genSet;
         BitSet killSet;
         for (auto &instruction : llvm::reverse(*block)) {
-            if (isGCPointer(&instruction)) {
+            if (isGCPointerVariable(&instruction)) {
                 killSet.set(idFor(pointerIDs, &instruction));
             }
             for (auto &operand : instruction.operands()) {
                 auto *value = operand.get();
-                if (isGCPointer(value)) {
+                if (isGCPointerVariable(value)) {
                     genSet.set(idFor(pointerIDs, value));
                 }
             }
@@ -238,7 +240,7 @@ BitSet filterLiveAcrossGCCalls(Function &function, PointerIDs &pointerIDs,
         for (auto &instruction : reverse(*block)) {
             if (isVegaGCCall(instruction)) {
                 BitSet pointersLiveBeforeAndAfterThis = livePointersAtAll;
-                if (isGCPointer(&instruction)) {
+                if (isGCPointerVariable(&instruction)) {
                     // Any variable in livePointersAtAll is live *after* this
                     // instruction. The variable defined by this call is not
                     // live before it, but every other one is (since it only
@@ -255,11 +257,11 @@ BitSet filterLiveAcrossGCCalls(Function &function, PointerIDs &pointerIDs,
             // this one.
             for (auto &operand : instruction.operands()) {
                 auto *value = operand.get();
-                if (isGCPointer(value)) {
+                if (isGCPointerVariable(value)) {
                     livePointersAtAll.set(idFor(pointerIDs, value));
                 }
             }
-            if (isGCPointer(&instruction)) {
+            if (isGCPointerVariable(&instruction)) {
                 livePointersAtAll.reset(idFor(pointerIDs, &instruction));
             }
         }
@@ -286,7 +288,8 @@ Schedule computeSchedule(Function &function) {
 
 inline bool isGCPointerLiveAcrossCall(PointerIDs &pointerIDs,
                                       BitSet &liveAcrossCalls, Value *value) {
-    return isGCPointer(value) && liveAcrossCalls.test(idFor(pointerIDs, value));
+    return isGCPointerVariable(value) &&
+           liveAcrossCalls.test(idFor(pointerIDs, value));
 }
 
 DenseMap<Value *, Interval> computeIntervals(
@@ -300,7 +303,7 @@ DenseMap<Value *, Interval> computeIntervals(
         for (auto *successor : successors(block)) {
             livePointers |= liveIntoBlock[successor];
             for (auto &phi : successor->phis()) {
-                if (isGCPointer(&phi)) {
+                if (isGCPointerVariable(&phi)) {
                     livePointers.set(idFor(
                         pointerIDs, phi.DoPHITranslation(successor, block)));
                 }
@@ -392,7 +395,26 @@ allocateStackFrameSlots(DenseMap<Value *, Interval> intervals) {
                                  .frameSize = frameSize};
 }
 
-void saveAndRelocateBoxedPointers(Function &function,
+void saveToShadowStackIfNecessary(IRBuilder<> &builder,
+                                  std::optional<Instruction *> instruction,
+                                  PointerIDs pointerIDs, BitSet liveAcrossCalls,
+                                  StackFrameAssignments stackFrameAssignments,
+                                  Value *stackFramePointers, Value *value) {
+    if (isGCPointerLiveAcrossCall(pointerIDs, liveAcrossCalls, value)) {
+        // SAFETY: terminators don't return anything so it's okay to use
+        // getNextNode here
+        if (instruction.has_value())
+            builder.SetInsertPoint(instruction.value()->getNextNode());
+        assert(stackFrameAssignments.assignments.contains(value));
+        unsigned slot = stackFrameAssignments.assignments.lookup(value);
+        auto *stackSlotPointer = builder.CreateGEP(
+            PointerType::get(value->getContext(), 1), stackFramePointers,
+            {builder.getInt64(slot)}, "stack-slot");
+        builder.CreateStore(value, stackSlotPointer);
+    }
+}
+void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
+                                  BitSet liveAcrossCalls,
                                   StackFrameAssignments stackFrameAssignments) {
     if (stackFrameAssignments.frameSize == 0) {
         return;
@@ -433,10 +455,29 @@ void saveAndRelocateBoxedPointers(Function &function,
     builder.CreateStore(builder.getInt64(stackFrameAssignments.frameSize),
                         pointerToSize);
 
-    auto *stackFrame = builder.CreateInBoundsGEP(
+    auto *stackFramePointers = builder.CreateInBoundsGEP(
         frameStructType, shadowStackStruct,
         {builder.getInt32(0), builder.getInt32(2)}, "shadow-stack-pointers");
+    builder.CreateMemSetInline(
+        stackFramePointers, MaybeAlign(8), builder.getInt8(0),
+        builder.getInt64(8 * stackFrameAssignments.frameSize));
+
+    for (Argument &argument : function.args()) {
+        saveToShadowStackIfNecessary(builder, std::nullopt, pointerIDs,
+                                     liveAcrossCalls, stackFrameAssignments,
+                                     stackFramePointers, &argument);
+    }
+
+    for (auto &block : function) {
+        for (auto &instruction : block) {
+            saveToShadowStackIfNecessary(
+                builder, std::make_optional(&instruction), pointerIDs,
+                liveAcrossCalls, stackFrameAssignments, stackFramePointers,
+                &instruction);
+        }
+    }
 }
+
 }; // namespace llvm
 
 extern "C" {
@@ -462,7 +503,8 @@ void RunShadowStackPass(LLVMModuleRef moduleRef) {
         auto intervals = computeIntervals(function, schedule, pointerIDs,
                                           liveIntoBlock, liveAcrossCalls);
         auto StackFrameAssignments = allocateStackFrameSlots(intervals);
-        saveAndRelocateBoxedPointers(function, StackFrameAssignments);
+        saveAndRelocateBoxedPointers(function, pointerIDs, liveAcrossCalls,
+                                     StackFrameAssignments);
     }
 
     for (auto &function : module_->functions()) {
