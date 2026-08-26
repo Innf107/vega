@@ -3,7 +3,7 @@
 {-# LANGUAGE RequiredTypeArguments #-}
 {-# LANGUAGE TypeAbstractions #-}
 
-module Vega.Compilation.LLVM.MIRToLLVM (compile, addMainFunction) where
+module Vega.Compilation.LLVM.MIRToLLVM (compile, addMainFunction, useCCallingConvention) where
 
 import Relude hiding (NonEmpty, State, evalState, get, modify, prettyCallStack, put, trace)
 
@@ -135,7 +135,7 @@ addMainFunction entryPoint module_ = do
     -- The initial shadow stack pointer is always null so that the runtime knows that it needs to stop here
     callInstruction <-
         LLVMBuilder.buildCall builder (LLVM.functionType [LLVM.pointerType] LLVM.voidType False) entryPointFunction [LLVM.constNullPointer] ""
-    LLVM.setInstructionCallConv callInstruction LLVM.tailCallConv
+    LLVM.setInstructionCallConv callInstruction vegaCallingConvention
     _ <- LLVMBuilder.buildRet builder (LLVM.constInt LLVM.int32Type 0 False)
     pure ()
 
@@ -190,7 +190,7 @@ forwardDeclareDeclaration = \case
 
         (functionTypeWithAttributes, _sret) <- functionLLVMType parameterLayouts returnLayout
         function <- addFunctionWithAttributes ?module_ (renderLLVMName name) functionTypeWithAttributes
-        LLVM.setFunctionCallConv function LLVM.tailCallConv
+        LLVM.setFunctionCallConv function vegaCallingConvention
         LLVM.setGC function "vegagc"
 
         -- We also generate a wrapper function for closures. See Note: [Closure Representation]
@@ -199,7 +199,7 @@ forwardDeclareDeclaration = \case
         -- We add a single "Boxed" (i.e. ptr addrspace(1) for LLVM) argument
         let wrapperType = attributeFunctionType (parameters <> [(Layout.boxedPointerType, [])]) returnType
         closureWrapper <- addFunctionWithAttributes ?module_ (closureWrapperNameForFunction name) wrapperType
-        LLVM.setFunctionCallConv closureWrapper LLVM.tailCallConv
+        LLVM.setFunctionCallConv closureWrapper vegaCallingConvention
         LLVM.setGC closureWrapper "vegagc"
 
         block <- LLVM.appendBasicBlock closureWrapper ""
@@ -209,7 +209,7 @@ forwardDeclareDeclaration = \case
         let arguments = Storable.generate (Strict.length parameters) \i -> LLVM.getParam closureWrapper i
         result <- buildCallWithAttributes builder functionTypeWithAttributes function arguments ""
         LLVM.setTailCallKind result LLVM.TailCallKindTail
-        LLVM.setInstructionCallConv result LLVM.tailCallConv
+        LLVM.setInstructionCallConv result vegaCallingConvention
 
         case Layout.returnConvention returnLayout of
             Layout.Void; Layout.SRetPointer -> do
@@ -239,7 +239,7 @@ forwardDeclareDeclaration = \case
         (internalFunctionType, _sret) <- functionLLVMType parameterLayouts returnLayout
 
         wrapperFunction <- addFunctionWithAttributes ?module_ (renderLLVMName name) internalFunctionType
-        LLVM.setFunctionCallConv wrapperFunction LLVM.tailCallConv
+        LLVM.setFunctionCallConv wrapperFunction vegaCallingConvention
         LLVM.setGC wrapperFunction "vegagc"
 
         block <- LLVM.appendBasicBlock wrapperFunction ""
@@ -680,7 +680,7 @@ compileNonTailCall builder var returnLayout functionType function argumentCompou
             asVar_ var returnLayout $ buildLoadAsReference builder returnLayout returnedValueAtRestPointer
 
             pure callInstr
-    LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
+    LLVM.setInstructionCallConv callInstr vegaCallingConvention
 
 compileTailCall ::
     (Compile es) =>
@@ -712,7 +712,7 @@ compileTailCall builder returnLayout functionType function argumentCompounds = d
             _ <- LLVMBuilder.buildRetVoid builder
             pure callInstr
     LLVM.setTailCallKind callInstr LLVM.TailCallKindTail
-    LLVM.setInstructionCallConv callInstr LLVM.tailCallConv
+    LLVM.setInstructionCallConv callInstr vegaCallingConvention
 
 externalTypeForRepresentation :: (?context :: LLVM.Context) => Representation -> Eff es LLVM.Type
 externalTypeForRepresentation representation = case representation of
@@ -1420,6 +1420,25 @@ compileArithmeticOperator builder arithmeticExpr varName = case arithmeticExpr o
         arg2 <- lookupVarValue var2
         result <- LLVMBuilder.buildICmp builder LLVM.IntNE (Layout.assertScalar arg1) (Layout.assertScalar arg2) varName
         pure (result, Layout.boolLayout)
+
+vegaCallingConvention :: LLVM.CallingConvention
+vegaCallingConvention = case (unsafePerformIO (readIORef useCCallingConventionRef)) of
+    False -> LLVM.tailCallConv
+    True -> LLVM.ccallConv
+
+{-# NOINLINE useCCallingConventionRef #-}
+useCCallingConventionRef :: IORef Bool
+useCCallingConventionRef = unsafePerformIO $ newIORef False
+
+{- | For debugging, set the code generator to use the ccc calling convention instead of tailcc.
+This makes it more predictable in which registers arguments will end up and
+makes it easier to debug LLVM bugs around tailcc.
+
+For this to work properly, this should be called *before* any other function in this module
+is ever used, ideally immediately after argument parsing in main.
+-}
+useCCallingConvention :: Bool -> IO ()
+useCCallingConvention value = writeIORef useCCallingConventionRef value
 
 {- NOTE [Closure Representation]:
 Closures with payload representation `r` are *always* represented as products (FunctionPointer * r).

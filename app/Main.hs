@@ -1,6 +1,6 @@
+{-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE ApplicativeDo #-}
 
 module Main (main) where
 
@@ -23,10 +23,11 @@ import LLVM.Core qualified as LLVM
 import System.IO (hIsTerminalDevice)
 import System.OsPath (osp)
 import Vega.Compilation.Core.Syntax qualified as Core
+import Vega.Compilation.LLVM.MIRToLLVM qualified as MIRToLLVM
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Driver (CompilationResult (..), Monomorphized (..))
-import Vega.Effect.DebugEmit qualified as DebugEmit
 import Vega.Effect.DebugEmit (DebugEmit)
+import Vega.Effect.DebugEmit qualified as DebugEmit
 import Vega.Effect.GraphPersistence (GraphPersistence)
 import Vega.Effect.GraphPersistence.InMemory (runInMemory)
 import Vega.Effect.Trace (Trace, runTrace)
@@ -47,6 +48,7 @@ data Options
         , includeUnique :: Bool
         , debugEmitConfig :: DebugEmit.EmitConfig
         , verifyMIR :: Bool
+        , useCCallingConvention :: Bool
         }
     | Exec
         { file :: FilePath
@@ -95,19 +97,26 @@ buildOptions = do
             False
             True
             (long "verify-mir" <> help ("Verify that the correctness intermediate MIR language is well-formed. This has a small performance cost and shouldn't be necessary unless the compiler has a bug."))
+    useCCallingConvention <-
+        flag
+            False
+            True
+            ( long "use-c-calling-convention"
+                <> help ("For debugging the compiler only: Make the generated LLVM code use the ccc calling convention instead of tailcc. This will break all tail calls, lead to stack overflows and possibly performance losses, but it might make it easier to debug miscompilations.")
+            )
 
-    pure Build{persistence, linker, includeUnique, debugEmitConfig, verifyMIR}
+    pure Build{persistence, linker, includeUnique, debugEmitConfig, verifyMIR, useCCallingConvention}
 
 parseDebugEmitConfig :: Parser DebugEmit.EmitConfig
 parseDebugEmitConfig = do
-    core <- flag False True ( long "debug-core"<> help "Emit core output for debugging")
-    mir <- flag False True ( long "debug-mir" <> help "Emit MIR output for debugging.")
-    monomorphizedMIR <- flag False True ( long "debug-monomorphized-mir" <> help "Emit monomorphized MIR output for debugging.")
+    core <- flag False True (long "debug-core" <> help "Emit core output for debugging")
+    mir <- flag False True (long "debug-mir" <> help "Emit MIR output for debugging.")
+    monomorphizedMIR <- flag False True (long "debug-monomorphized-mir" <> help "Emit monomorphized MIR output for debugging.")
     llvm <- flag False True (long "debug-llvm" <> help "Emit the generated LLVM output for debugging.")
     optimizedLLVM <- flag False True (long "debug-optimized-llvm" <> help "Emit the fully optimized LLVM output for debugging. This does not include the custom shadow stack pass. Use --debug-shadow-stack to debug that.")
     llvmWithShadowStack <- flag False True (long "debug-shadow-stack" <> help "Emit the final LLVM including the custom shadow stack lowering.")
     assembly <- flag False True (long "debug-asm" <> help "Emit the generated assembly for debugging.")
-    pure (DebugEmit.MkEmitConfig { core, mir, monomorphizedMIR, llvm, optimizedLLVM, llvmWithShadowStack, assembly })
+    pure (DebugEmit.MkEmitConfig{core, mir, monomorphizedMIR, llvm, optimizedLLVM, llvmWithShadowStack, assembly})
 
 execOptions :: Parser Options
 execOptions = do
@@ -166,7 +175,8 @@ main = do
                 , linker = options.linker
                 }
     case options of
-        Build{persistence, debugEmitConfig} -> run driverConfig debugEmitConfig persistence do
+        Build{persistence, debugEmitConfig, useCCallingConvention} -> run driverConfig debugEmitConfig persistence do
+            liftIO $ MIRToLLVM.useCCallingConvention useCCallingConvention
             let eprint :: forall io. (MonadIO io) => Doc Ann -> io ()
                 eprint doc = do
                     liftIO (hIsTerminalDevice stderr) >>= \case
