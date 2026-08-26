@@ -507,12 +507,12 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
 
     auto *pointerToPrevious = builder.CreateInBoundsGEP(
         frameStructType, shadowStackStruct,
-        {builder.getInt32(0), builder.getInt32(0)}, "previous");
+        {builder.getInt32(0), builder.getInt32(0)}, "previous-slot");
     builder.CreateStore(previousShadowStackPointer, pointerToPrevious);
 
     auto *pointerToSize = builder.CreateInBoundsGEP(
         frameStructType, shadowStackStruct,
-        {builder.getInt32(0), builder.getInt32(1)}, "size");
+        {builder.getInt32(0), builder.getInt32(1)}, "size-slot");
     builder.CreateStore(builder.getInt64(stackFrameAssignments.frameSize),
                         pointerToSize);
 
@@ -570,11 +570,13 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
                 if (cached_relocation != nullptr) {
                     operandUse.set(cached_relocation);
                 } else {
+
                     builder.SetInsertPoint(&instruction);
                     auto *relocation =
                         relocate(builder, operand, stackFrameAssignments,
                                  stackFramePointers);
                     alreadyRelocated[operand] = relocation;
+                    operandUse.set(relocation);
                 }
             }
 
@@ -611,6 +613,7 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
                         relocate(builder, incoming, stackFrameAssignments,
                                  stackFramePointers);
                     alreadyRelocated[incoming] = relocation;
+                    phi.setIncomingValueForBlock(block, relocation);
                 }
             }
         }
