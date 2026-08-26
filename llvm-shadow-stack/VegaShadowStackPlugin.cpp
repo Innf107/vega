@@ -591,8 +591,27 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
             // invalidated
             if (isGCPointerLiveAcrossCall(pointerIDs, liveAcrossCalls,
                                           &instruction)) {
-                // TODO: this is wrong for phis
                 alreadyRelocated[&instruction] = &instruction;
+            }
+        }
+
+        for (auto *successor : successors(block)) {
+            for (auto &phi : successor->phis()) {
+                auto *incoming = phi.getIncomingValueForBlock(block);
+                if (!isGCPointerLiveAcrossCall(pointerIDs, liveAcrossCalls,
+                                               incoming)) {
+                    continue;
+                }
+                auto *cached_relocation = alreadyRelocated.lookup(incoming);
+                if (cached_relocation != nullptr) {
+                    phi.setIncomingValueForBlock(block, cached_relocation);
+                } else {
+                    builder.SetInsertPoint(block->getTerminator());
+                    auto *relocation =
+                        relocate(builder, incoming, stackFrameAssignments,
+                                 stackFramePointers);
+                    alreadyRelocated[incoming] = relocation;
+                }
             }
         }
 
@@ -614,8 +633,6 @@ void RunShadowStackPass(LLVMModuleRef moduleRef) {
         if (function.isDeclaration()) {
             continue;
         }
-
-        outs() << "<<<" << function.getName() << ">>>\n";
 
         PointerIDs pointerIDs;
         auto liveIntoBlock = computeLiveness(function, pointerIDs);
