@@ -12,8 +12,12 @@
 #include "llvm/Passes/PassBuilder.h"
 #include <iostream>
 #include <llvm-c/Types.h>
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/PostOrderIterator.h>
 #include <llvm/ADT/Twine.h>
+#include <llvm/IR/CFG.h>
+#include <llvm/IR/InlineAsm.h>
+#include <llvm/IR/Instructions.h>
 #include <optional>
 #include <queue>
 
@@ -403,8 +407,13 @@ void saveToShadowStackIfNecessary(IRBuilder<> &builder,
     if (isGCPointerLiveAcrossCall(pointerIDs, liveAcrossCalls, value)) {
         // SAFETY: terminators don't return anything so it's okay to use
         // getNextNode here
-        if (instruction.has_value())
-            builder.SetInsertPoint(instruction.value()->getNextNode());
+        if (instruction.has_value()) {
+            auto *nextNonPhiInstruction = instruction.value()->getNextNode();
+            while (isa<PHINode>(nextNonPhiInstruction)) {
+                nextNonPhiInstruction = nextNonPhiInstruction->getNextNode();
+            }
+            builder.SetInsertPoint(nextNonPhiInstruction);
+        }
         assert(stackFrameAssignments.assignments.contains(value));
         unsigned slot = stackFrameAssignments.assignments.lookup(value);
         auto *stackSlotPointer = builder.CreateGEP(
@@ -413,6 +422,55 @@ void saveToShadowStackIfNecessary(IRBuilder<> &builder,
         builder.CreateStore(value, stackSlotPointer);
     }
 }
+
+SmallDenseMap<Value *, Value *> intersectionOfPredecessorRelocations(
+    BasicBlock *block,
+    SmallDenseMap<BasicBlock *, SmallDenseMap<Value *, Value *>>
+        &relocatedOutOfBlocks) {
+    if (block->hasNPredecessors(0)) {
+        return SmallDenseMap<Value *, Value *>();
+    }
+    if (auto *predecessor = block->getSinglePredecessor()) {
+        return relocatedOutOfBlocks[predecessor];
+    }
+
+    SmallVector<SmallDenseMap<Value *, Value *>> predecessors;
+    for (auto *predecessorBlock : llvm::predecessors(block)) {
+        predecessors.push_back(relocatedOutOfBlocks[predecessorBlock]);
+    }
+    SmallDenseMap<Value *, Value *> intersection;
+
+    for (auto &[k, v] : predecessors[0]) {
+        bool is_in_intersection = true;
+        for (int i = 1; i < predecessors.size(); i++) {
+            if (!predecessors[i].contains(k) || predecessors[i][k] != v) {
+                is_in_intersection = false;
+                break;
+            }
+        }
+        if (is_in_intersection) {
+            intersection[k] = v;
+        }
+    }
+    return intersection;
+}
+Value *relocate(IRBuilder<> &builder, Value *valueToRelocate,
+                StackFrameAssignments &stackFrameAssignments,
+                Value *stackFramePointers) {
+    assert(stackFrameAssignments.assignments.contains(valueToRelocate));
+    unsigned slot = stackFrameAssignments.assignments.lookup(valueToRelocate);
+
+    auto *gcPointerType = PointerType::get(valueToRelocate->getContext(), 1);
+    auto *stackSlotPointer =
+        builder.CreateGEP(gcPointerType, stackFramePointers,
+                          {builder.getInt64(slot)}, "stack-slot");
+
+    return builder.CreateLoad(gcPointerType, stackSlotPointer,
+                              valueToRelocate->getName() + ".relocated");
+}
+
+// TODO: we need to clear out stack slots once
+// they're dead
 void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
                                   BitSet liveAcrossCalls,
                                   StackFrameAssignments stackFrameAssignments) {
@@ -428,8 +486,7 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
 
     IRBuilder builder(context);
 
-    builder.SetInsertPoint(&function.getEntryBlock(),
-                           function.getEntryBlock().getFirstInsertionPt());
+    builder.SetInsertPointPastAllocas(&function);
 
     auto *frameStructType = StructType::get(
         context, {// Pointer to the previous segment. This has to be in address
@@ -443,6 +500,10 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
                                  stackFrameAssignments.frameSize)});
     auto *shadowStackStruct =
         builder.CreateAlloca(frameStructType, nullptr, "shadow-stack-frame");
+
+    // We need to do this before saving the previous pointer, since otherwise
+    // that one would be replaced and create a cyclical shadow stack frame
+    previousShadowStackPointer->replaceAllUsesWith(shadowStackStruct);
 
     auto *pointerToPrevious = builder.CreateInBoundsGEP(
         frameStructType, shadowStackStruct,
@@ -475,6 +536,67 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
                 liveAcrossCalls, stackFrameAssignments, stackFramePointers,
                 &instruction);
         }
+    }
+
+    SmallDenseMap<BasicBlock *, SmallDenseMap<Value *, Value *>>
+        relocatedOutOfBlocks;
+
+    for (auto *block : depth_first(&function)) {
+        SmallDenseMap<Value *, Value *> alreadyRelocated =
+            intersectionOfPredecessorRelocations(block, relocatedOutOfBlocks);
+        if (block->isEntryBlock()) {
+            for (auto &parameter : function.args()) {
+                if (isGCPointerLiveAcrossCall(pointerIDs, liveAcrossCalls,
+                                              &parameter)) {
+                    alreadyRelocated[&parameter] = &parameter;
+                }
+            }
+        }
+
+        for (auto &instruction : *block) {
+            if (isa<PHINode>(instruction)) {
+                // We handle phi nodes at the end of their predecessor block
+                continue;
+            }
+            // relocate the operands
+            for (auto &operandUse : instruction.operands()) {
+                auto *operand = operandUse.get();
+                if (!isGCPointerLiveAcrossCall(pointerIDs, liveAcrossCalls,
+                                               operand)) {
+                    continue;
+                }
+
+                auto *cached_relocation = alreadyRelocated.lookup(operand);
+                if (cached_relocation != nullptr) {
+                    operandUse.set(cached_relocation);
+                } else {
+                    builder.SetInsertPoint(&instruction);
+                    auto *relocation =
+                        relocate(builder, operand, stackFrameAssignments,
+                                 stackFramePointers);
+                    alreadyRelocated[operand] = relocation;
+                }
+            }
+
+            if (isVegaGCCall(instruction)) {
+                // After a gc call, we need to relocate everything again
+                alreadyRelocated.clear();
+            }
+
+            // The result of an instruction doesn't need to be relocated until
+            // we hit a gc call, so we can treat it as if it had already been
+            // relocated.
+            // It is important that this happens *after* we clear the
+            // relocations, since the result of a call does not need to be
+            // invalidated
+            if (isGCPointerLiveAcrossCall(pointerIDs, liveAcrossCalls,
+                                          &instruction)) {
+                // TODO: this is wrong for phis
+                alreadyRelocated[&instruction] = &instruction;
+            }
+        }
+
+        relocatedOutOfBlocks[block] = alreadyRelocated;
     }
 }
 
