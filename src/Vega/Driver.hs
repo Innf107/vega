@@ -362,7 +362,7 @@ compileBackend = do
                 {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
 
                 -- TODO: add proper optimization flags that control this
-                LLVM.runPasses llvmModule "default<O0>" (Just targetMachine) LLVM.defaultPassBuilderOptions
+                LLVM.runPasses llvmModule "default<O3>" (Just targetMachine) LLVM.defaultPassBuilderOptions
 
                 DebugEmit.debugEmitLLVM DebugEmit.OptimizedLLVM llvmModule
 
