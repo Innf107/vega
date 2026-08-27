@@ -595,6 +595,20 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
                                           &instruction)) {
                 alreadyRelocated[&instruction] = &instruction;
             }
+
+            // Tail calls need to be modified to use the previous shadow stack
+            // pointer, since our stack frame isn't even alive after the tail
+            // call
+            if (isa<CallInst>(instruction)) {
+                auto* call = dyn_cast<CallInst>(&instruction);
+                if (call->isTailCall()) {
+                    for (auto &operandUse : call->operands()) {
+                        if (operandUse == shadowStackStruct) {
+                            operandUse.set(previousShadowStackPointer);
+                        }
+                    }
+                }
+            }
         }
 
         for (auto *successor : successors(block)) {
