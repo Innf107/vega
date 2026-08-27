@@ -601,16 +601,25 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
             // call
             if (isa<CallInst>(instruction)) {
                 auto *call = dyn_cast<CallInst>(&instruction);
-                // Just having a tail specifier is not enough here. LLVM optimizations can create tail annotations on
-                // calls that are not actually in tail position.
+                // Just having a tail specifier is not enough here. LLVM
+                // optimizations can create tail annotations on calls that are
+                // not actually in tail position.
                 //
                 // In these cases, we do need to pass the modified stack frame.
-                if (call->isTailCall() &&
-                    isa<ReturnInst>(call->getNextNode())) {
-                    for (auto &operandUse : call->operands()) {
-                        if (operandUse == shadowStackStruct) {
-                            operandUse.set(previousShadowStackPointer);
+                if (call->isTailCall()) {
+                    if (isa<ReturnInst>(call->getNextNode())) {
+                        for (auto &operandUse : call->operands()) {
+                            if (operandUse == shadowStackStruct) {
+                                operandUse.set(previousShadowStackPointer);
+                            }
                         }
+                    } else {
+                        // This probably isn't strictly necessary as long as we run the
+                        // shadow stack pass last, but if we ever want to run
+                        // any other optimizations after it, we need to make
+                        // sure that these calls aren't treated as tail calls
+                        // (since they're not tail-call safe anymore)
+                        call->setTailCall(false);
                     }
                 }
             }
