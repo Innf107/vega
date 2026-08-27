@@ -857,7 +857,9 @@ compileArrayLength builder arguments _returnRepresentation varName = case argume
     [array] -> do
         array <- Layout.assertBoxed <$> lookupVarValue array
         lengthPointer <- buildGEPOffset builder array Heap.arrayLengthOffset "lengthPtr"
-        Layout.scalarCompoundValue <$> LLVMBuilder.buildLoad builder LLVM.int64Type lengthPointer varName
+        loadInstruction <- LLVMBuilder.buildLoad builder LLVM.int64Type lengthPointer varName
+        LLVM.setAlignment loadInstruction 8
+        pure (Layout.scalarCompoundValue loadInstruction)
     _ -> panic $ "arrayLength called with incorrect number of arguments: [" <> Pretty.intercalateDoc ", " (fmap pretty arguments) <> "]"
 
 compileUnsafeArrayContents :: (Compile es) => LLVMBuilder.Builder -> Seq MIR.Variable -> Representation -> Text -> Eff es CompoundValue
