@@ -134,7 +134,13 @@ addMainFunction entryPoint module_ = do
             Just entryPointFunction -> pure entryPointFunction
     -- The initial shadow stack pointer is always null so that the runtime knows that it needs to stop here
     callInstruction <-
-        LLVMBuilder.buildCall builder (LLVM.functionType [LLVM.pointerType] LLVM.voidType False) entryPointFunction [LLVM.constNullPointer] ""
+        LLVMBuilder.buildCallWithOperandBundles
+            builder
+            (LLVM.functionType [LLVM.pointerType] LLVM.voidType False)
+            entryPointFunction
+            [LLVM.constNullPointer]
+            [("gc-transition", [])]
+            ""
     LLVM.setInstructionCallConv callInstruction vegaCallingConvention
     _ <- LLVMBuilder.buildRet builder (LLVM.constInt LLVM.int32Type 0 False)
     pure ()

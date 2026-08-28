@@ -331,7 +331,7 @@ pub unsafe extern "C" fn vega_allocate_boxed(
     shadow_stack_pointer: *const ShadowStackFrame,
     info_table: &'static InfoTable,
 ) -> *mut u8 {
-    vega_debug_stack_roots(shadow_stack_pointer);
+    // vega_debug_stack_roots(shadow_stack_pointer);
     let layout = unsafe { info_table.layout.boxed };
 
     let object_pointer = unsafe {

@@ -70,7 +70,7 @@ import Vega.Parser qualified as Parser
 import Vega.Pretty (keyword, pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Rename qualified as Rename
-import Vega.Runtime (linkerScript, runtimeArchive)
+import Vega.Runtime (runtimeArchive)
 import Vega.Seq.NonEmpty (NonEmpty, pattern NonEmpty)
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
@@ -387,9 +387,8 @@ compileBackend = do
 
                 -- TODO: put this somewhere more sensible
                 writeFileBS "libvega_runtime.a" runtimeArchive
-                writeFileBS "vega_stackmaps.ld" linkerScript
 
-                {-# SCC "linker" #-} runProcess $ callProcess linkerCommand ["-T", "vega_stackmaps.ld", "out.o", "libvega_runtime.a"]
+                {-# SCC "linker" #-} runProcess $ callProcess linkerCommand ["out.o", "libvega_runtime.a"]
                 removeFile "out.o"
                 removeFile "libvega_runtime.a"
         _ -> undefined

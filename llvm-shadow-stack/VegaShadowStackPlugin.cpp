@@ -14,6 +14,7 @@
 #include <llvm-c/Types.h>
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/PostOrderIterator.h>
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/Twine.h>
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/InlineAsm.h>
@@ -479,6 +480,9 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
     }
 
     auto &context = function.getContext();
+
+    errs() << function.getName() << "\n";
+
     const auto previousShadowStackPointer =
         function.hasParamAttribute(0, Attribute::AttrKind::StructRet)
             ? function.getArg(1)
@@ -614,11 +618,11 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
                             }
                         }
                     } else {
-                        // This probably isn't strictly necessary as long as we run the
-                        // shadow stack pass last, but if we ever want to run
-                        // any other optimizations after it, we need to make
-                        // sure that these calls aren't treated as tail calls
-                        // (since they're not tail-call safe anymore)
+                        // This probably isn't strictly necessary as long as we
+                        // run the shadow stack pass last, but if we ever want
+                        // to run any other optimizations after it, we need to
+                        // make sure that these calls aren't treated as tail
+                        // calls (since they're not tail-call safe anymore)
                         call->setTailCall(false);
                     }
                 }
@@ -686,6 +690,30 @@ void RunShadowStackPass(LLVMModuleRef moduleRef) {
         // boxed pointers on the shadow stack.
         if (function.hasGC() && function.getGC() == "vegagc") {
             function.clearGC();
+        }
+    }
+
+    for (auto &function : module_->functions()) {
+        for (auto &block : function) {
+            for (auto &instruction : make_early_inc_range(block)) {
+                auto *callInstruction = dyn_cast<CallInst>(&instruction);
+                if (callInstruction == nullptr ||
+                    !callInstruction->hasOperandBundles() ||
+                    !callInstruction->getOperandBundle(LLVMContext::OB_gc_transition)) {
+                    continue;
+                }
+
+                CallInst *replacement;
+
+                // We won't ever need any operand bundles other than gc-transition
+                assert(!callInstruction->hasOperandBundlesOtherThan(
+                    {LLVMContext::OB_gc_transition}));
+                replacement = CallInst::Create(callInstruction, {},
+                                               callInstruction->getIterator());
+
+                callInstruction->replaceAllUsesWith(replacement);
+                callInstruction->eraseFromParent();
+            }
         }
     }
 }

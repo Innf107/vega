@@ -1,6 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Vega.Runtime (runtimeArchive, linkerScript) where
+module Vega.Runtime (runtimeArchive) where
 
 import Data.ByteString (ByteString)
 import Data.FileEmbed (embedFile)
@@ -9,6 +9,4 @@ import Data.FileEmbed (embedFile)
 runtimeArchive :: ByteString
 runtimeArchive = $(embedFile ".build/libvega_runtime.a")
 
-linkerScript :: ByteString
-linkerScript = $(embedFile "runtime/vega_stackmaps.ld")
 
