@@ -58,7 +58,7 @@ import Vega.Debug (showHeadConstructor)
 import Vega.Effect.ST (STE, liftST, runSTE)
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.OutArray qualified as OutArray
-import Vega.Panic (panic, prettyCallStack)
+import Vega.Panic (panic, prettyCallStack, assert)
 import Vega.Pretty (Ann, Doc, pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Seq.NonEmpty (NonEmpty ((:<||)), pattern NonEmpty)
@@ -66,7 +66,7 @@ import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Size qualified as Size
 import Vega.Syntax (renderPackageName)
 import Vega.Syntax qualified as Vega
-import Vega.Util (Sign (..), assert, forIndexed_, viaList, type (?))
+import Vega.Util (Sign (..), forIndexed_, viaList, type (?))
 import Vega.Util qualified as Util
 import Witherable qualified
 
@@ -472,8 +472,8 @@ compileInstruction builder = \case
         case Size.inBytes (Layout.sizeAtRest layout) of
             0 -> insertVarMapping var (Layout.unitCompoundValue) layout
             _ -> do
-                Util.assert (Vector.null (Layout.decomposedScalarValues targetValue))
-                Util.assert (isNothing (Layout.unboxedPointer targetValue))
+                assert (Vector.null (Layout.decomposedScalarValues targetValue))
+                assert (isNothing (Layout.unboxedPointer targetValue))
                 case Layout.boxedValues targetValue of
                     [pointerValue] -> asVar_ var layout $ buildComplexLoad builder layout pointerValue
                     _ -> panic $ "Trying to unbox non-boxed compound value " <> pretty targetValue

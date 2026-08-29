@@ -12,7 +12,6 @@ module Vega.Util (
     viaList,
     constructorNames,
     Untagged (..),
-    assert,
     for2,
     partitionWithSeq,
     frequencies,
@@ -38,7 +37,6 @@ import Data.Foldable qualified as Foldable
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
 import Data.Traversable (for)
-import GHC.Base qualified
 import GHC.Exts (IsList (..), Symbol)
 import GHC.Generics (C1, Generic (Rep), M1, Meta (..), (:+:))
 import GHC.TypeLits (KnownSymbol, symbolVal)
@@ -114,9 +112,6 @@ instance {-# OVERLAPPABLE #-} (ConstructorNamesG f) => ConstructorNamesG (M1 _i 
     constructorNamesG = constructorNamesG @f
 
 newtype Untagged a = MkUntagged a
-
-assert :: (HasCallStack, Applicative f) => Bool -> f ()
-assert ~condition = GHC.Base.assert condition (pure ())
 
 for2 :: forall f a b c d. (Monad f) => Seq a -> Seq b -> (a -> b -> f (c, d)) -> f (Seq c, Seq d)
 for2 xs ys f = go [] [] xs ys

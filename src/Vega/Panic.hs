@@ -1,9 +1,21 @@
-module Vega.Panic (panic, Panic (..), prettyCallStack) where
+{-# LANGUAGE CPP #-}
+
+module Vega.Panic (
+    panic,
+    Panic (..),
+    prettyCallStack,
+    assert,
+    assertIn,
+    assertWith,
+    assertWithIn,
+) where
 
 import Control.Exception (throw)
+import GHC.Base qualified as GHC.Base
 import Relude hiding (prettyCallStack)
 import Relude qualified
-import Vega.Pretty
+import Vega.Pretty (Ann, Doc)
+import Vega.Pretty qualified as Pretty
 
 data Panic = Panic CallStack (Doc Ann)
     deriving stock (Show)
@@ -13,4 +25,26 @@ panic :: (HasCallStack) => Doc Ann -> a
 panic doc = throw (Panic callStack doc)
 
 prettyCallStack :: CallStack -> Doc Ann
-prettyCallStack callStack = align (note $ toText $ Relude.prettyCallStack callStack)
+prettyCallStack callStack = Pretty.align (Pretty.note $ toText $ Relude.prettyCallStack callStack)
+
+{-# INLINE assertWith #-}
+assertWith :: (HasCallStack, Applicative f) => Bool -> Doc Ann -> f ()
+assertWith ~condition message = assertWithIn condition message (pure ())
+
+{-# INLINE assertWithIn #-}
+assertWithIn :: (HasCallStack) => Bool -> Doc Ann -> a -> a
+#ifdef __GLASGOW_HASKELL_ASSERTS_IGNORED__
+assertWithIn _ _ x = x
+#else
+assertWithIn condition ~message x = case condition of
+    True -> x
+    False -> panic $ Pretty.errorText "Assertion failed: " <> message
+#endif
+
+{-# INLINE assert #-}
+assert :: (HasCallStack, Applicative f) => Bool -> f ()
+assert ~condition = GHC.Base.assert condition (pure ())
+
+{-# INLINE assertIn #-}
+assertIn :: (HasCallStack) => Bool -> a -> a
+assertIn = GHC.Base.assert

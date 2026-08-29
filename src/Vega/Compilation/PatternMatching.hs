@@ -5,13 +5,12 @@ module Vega.Compilation.PatternMatching (
     traverseLeaves,
 ) where
 
-import Control.Exception (assert)
 import Data.Map qualified as Map
 import Data.Sequence (Seq (..))
 import Relude hiding (NonEmpty, Type)
 import Vega.Compilation.Core.Syntax qualified as Core
 import Vega.Debug (showHeadConstructor)
-import Vega.Panic (panic)
+import Vega.Panic (assertIn, panic)
 import Vega.Pretty (Ann, Doc, Pretty, align, indent, intercalateDoc, keyword, lparen, number, pretty, rparen, vsep, (<+>))
 import Vega.Seq.NonEmpty
 import Vega.Syntax
@@ -171,7 +170,7 @@ compileSinglePattern bound pattern_ leaf = case pattern_ of
     StringLiteralPattern{} -> undefined
     DoubleLiteralPattern{} -> undefined
     AsPattern _loc rep inner name -> BindVar{name = name, representation = rep, next = compileSinglePattern (bound :|> (name, rep)) inner leaf}
-    ConstructorPattern{constructorExt, constructor, subPatterns} -> assert (length constructorExt.parameterRepresentations == length subPatterns) do
+    ConstructorPattern{constructorExt, constructor, subPatterns} -> assertIn (length constructorExt.parameterRepresentations == length subPatterns) do
         let subTree = serializeSubPatternsWithLeaf bound subPatterns leaf
         ConstructorCase
             { scrutineeRepresentation = constructorExt.returnRepresentation

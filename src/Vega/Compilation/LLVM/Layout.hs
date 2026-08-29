@@ -83,7 +83,6 @@ module Vega.Compilation.LLVM.Layout (
     boxedNullPointer,
 ) where
 
-import Control.Exception (assert)
 import Data.Bits qualified as Bits
 import Data.HashMap.Strict qualified as HashMap
 import Data.Sequence (Seq (..))
@@ -109,7 +108,7 @@ import Vega.Debug (showHeadConstructor)
 import Vega.Effect.ST (STE, runSTE)
 import Vega.OutArray (OutArray)
 import Vega.OutArray qualified as OutArray
-import Vega.Panic (panic)
+import Vega.Panic (panic, assertWithIn, assertIn)
 import Vega.Pretty (Pretty, number, pretty, (<+>))
 import Vega.Pretty qualified as Pretty
 import Vega.Seq.NonEmpty (NonEmpty ((:<||)), maximum, pattern NonEmpty)
@@ -293,7 +292,7 @@ data ReturnConvention
 This is only valid if its 'returnConvention' is 'ScalarStruct'.
 -}
 scalarStructType :: (?context :: LLVM.Context) => Layout -> LLVM.Type
-scalarStructType layout = assert (case returnConvention layout of ScalarStruct -> True; _ -> False) do
+scalarStructType layout = assertIn (case returnConvention layout of ScalarStruct -> True; _ -> False) do
     LLVM.structType
         ( Storable.replicate (boxedCount layout) boxedPointerType
             <> Util.viaList (decomposedScalars layout)
@@ -314,10 +313,11 @@ identifier layout = "layout[size=" <> Relude.show @_ @Int (Size.inBytes layout.s
 
 atRestBoxedOffset :: Layout -> Int -> Int
 -- See Note [At-rest vs in-flight] for why we can compute these offsets this way
-atRestBoxedOffset layout boxedIndex = boxedIndex * Size.inBytes pointerSize
+atRestBoxedOffset layout boxedIndex = assertInBounds boxedIndex (boxedCount layout) do
+    boxedIndex * Size.inBytes pointerSize
 
 atRestDecomposedScalarOffset :: Layout -> Int -> Int
-atRestDecomposedScalarOffset layout scalarIndex = do
+atRestDecomposedScalarOffset layout scalarIndex = assertInBounds scalarIndex (length (decomposedScalars layout)) do
     let (_, scalarSegmentOffset) = layout.decomposedScalars `Seq.index` scalarIndex
     layout.boxedCount * Size.inBytes pointerSize + scalarSegmentOffset
 
@@ -364,9 +364,7 @@ parameterDecomposedScalarIndex layout index = assertInBounds index (length (deco
     boxedCount layout + index
 
 assertInBounds :: (HasCallStack) => Int -> Int -> a -> a
-assertInBounds value size result
-    | value >= 0 && value < size = result
-    | otherwise = panic $ "Access at index " <> number value <> " out of bounds for size " <> number size
+assertInBounds value size result = assertWithIn (value >= 0 && value < size) ("Access at index " <> number value <> " out of bounds for size " <> number size) result
 
 {- | The index of the pointer corresponding to the unboxed segment of the layout when passed as a function parameter
 This is 'Nothing' if the layout does not have an unboxed segment
@@ -609,7 +607,7 @@ representationLayout representation = do
             -- either keeping them decomposed (and recording them in the context accordingly) or (more likely)
             -- extending the unboxed section with them like we would for values at-rest
             -- (although we *cannot* do this for boxed values since we still need to access them decomposed as GC roots)
-            let !() = assert (Seq.null layout.decomposedScalars) ()
+            let !() = assertIn (Seq.null layout.decomposedScalars) ()
             let unboxedOffset = case context.inFlightUnboxedOffsetSoFar + Size.inBytes (unboxedSize layout) of
                     0 -> Nothing
                     offset -> Just offset

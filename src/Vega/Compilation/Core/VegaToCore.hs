@@ -17,7 +17,6 @@ import Relude hiding (
  )
 import Relude qualified
 
-import Control.Exception qualified
 import Data.HashMap.Strict (alter)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map qualified as Map
@@ -38,13 +37,12 @@ import Vega.Effect.Meta.Static (BindMeta, ReadMeta, followMetasWithoutPathCompre
 import Vega.Effect.Meta.Static qualified as Meta
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
-import Vega.Panic (panic)
+import Vega.Panic (panic, assert, assertIn)
 import Vega.Pretty (align, indent, intercalateDoc, keyword, number, pretty, (<+>))
 import Vega.Seq.NonEmpty (pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax (Pass (..))
 import Vega.Syntax qualified as Vega
-import Vega.Util (assert)
 import Vega.Util qualified as Util
 import Vega.VectorMap qualified as VectorMap
 import Witherable (wither, Filterable (mapMaybe))
@@ -997,7 +995,7 @@ applySubst substitution = \case
     Core.Instantiation (Core.Local localName) representationArguments -> case getFinalValue substitution localName of
         -- No idea if this is actually okay
         Core.Var name -> Core.Instantiation{varName = name, representationArguments}
-        Core.Instantiation{varName = name, representationArguments = otherRepresentationArguments} -> Control.Exception.assert (representationArguments == otherRepresentationArguments) do
+        Core.Instantiation{varName = name, representationArguments = otherRepresentationArguments} -> assertIn (representationArguments == otherRepresentationArguments) do
             Core.Instantiation{varName = name, representationArguments = representationArguments}
         value -> panic $ "Trying to apply non-variable substitution " <> pretty value <> " to instantiation: " <> pretty (Core.Instantiation (Core.Local localName) representationArguments)
     Core.Literal literal -> Core.Literal literal

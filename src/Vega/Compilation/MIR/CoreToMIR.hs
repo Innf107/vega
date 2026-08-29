@@ -29,12 +29,12 @@ import Vega.Effect.GraphPersistence
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
 import Vega.Effect.Trace (Category (..), Trace, trace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique)
-import Vega.Panic (panic)
+import Vega.Panic (panic, assert)
 import Vega.Pretty (pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Seq.NonEmpty qualified as NonEmpty
 import Vega.Syntax qualified as Vega
-import Vega.Util (assert, forFoldLM, forIndexed, forIndexed_, indexed, mapAccumLM)
+import Vega.Util (forFoldLM, forIndexed, forIndexed_, indexed, mapAccumLM)
 import Vega.Util qualified as Util
 
 type Compile es =
