@@ -84,7 +84,7 @@ data Traces = MkTraces
 defaultTraces :: Traces
 defaultTraces =
     MkTraces
-        { debug = False
+        { debug = True
         , driver = False
         , workItems = False
         , assembleJS = False
