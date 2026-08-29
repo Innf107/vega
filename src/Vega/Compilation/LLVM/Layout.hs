@@ -108,7 +108,7 @@ import Vega.Debug (showHeadConstructor)
 import Vega.Effect.ST (STE, runSTE)
 import Vega.OutArray (OutArray)
 import Vega.OutArray qualified as OutArray
-import Vega.Panic (panic, assertWithIn, assertIn)
+import Vega.Panic (assertIn, assertWithIn, panic)
 import Vega.Pretty (Pretty, number, pretty, (<+>))
 import Vega.Pretty qualified as Pretty
 import Vega.Seq.NonEmpty (NonEmpty ((:<||)), maximum, pattern NonEmpty)
@@ -608,9 +608,9 @@ representationLayout representation = do
             -- extending the unboxed section with them like we would for values at-rest
             -- (although we *cannot* do this for boxed values since we still need to access them decomposed as GC roots)
             let !() = assertIn (Seq.null layout.decomposedScalars) ()
-            let unboxedOffset = case context.inFlightUnboxedOffsetSoFar + Size.inBytes (unboxedSize layout) of
+            let unboxedOffset = case Size.inBytes (unboxedSize layout) of
                     0 -> Nothing
-                    offset -> Just offset
+                    _ -> Just context.inFlightUnboxedOffsetSoFar
 
             let details = NestedSumLayout{layout, boxedIndices, decomposedIndices = [], unboxedOffset}
 

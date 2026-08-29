@@ -12,15 +12,15 @@ packages:
   original:
     hackage: hashtables-1.4.2
 - completed:
-    commit: f781358dc828340cba206ab28a24f1d047322e09
+    commit: fb530ed7a0a0877cfbd7655ce2c0679bffff8610
     git: https://github.com/Innf107/llvm-ng
     name: llvm-ng
     pantry-tree:
-      sha256: 4ba546e9d982c9857dfb6f5ac3df9abd336ada21645e9292c2ee87123d33f4d6
+      sha256: c5f8d97e0ca7460abf346548cd124e0dc66355abd686db745d8c654fba277d6a
       size: 1329
     version: 0.1.0.0
   original:
-    commit: f781358dc828340cba206ab28a24f1d047322e09
+    commit: fb530ed7a0a0877cfbd7655ce2c0679bffff8610
     git: https://github.com/Innf107/llvm-ng
 - completed:
     hackage: llvm-ffi-21.0.0.2@sha256:d898d53846373b86a6e34fc2c72cb79cbbe4398bd38e127c69367a933eba6e57,8424
@@ -31,7 +31,7 @@ packages:
     hackage: llvm-ffi-21.0.0.2@sha256:d898d53846373b86a6e34fc2c72cb79cbbe4398bd38e127c69367a933eba6e57,8424
 snapshots:
 - completed:
-    sha256: 13050127e3c353b80c01d6a8c8856ffb982c938e20f3e8d6026ffc3412c5bb0d
-    size: 715417
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2025/12/29.yaml
-  original: nightly-2025-12-29
+    sha256: a578d98b69e5742eaf2c42d870e9c5011e5f8b5ad216f04ca8f52caadc8bf89c
+    size: 715419
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2025/12/30.yaml
+  original: nightly-2025-12-30

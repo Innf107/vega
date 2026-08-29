@@ -58,7 +58,7 @@ import Vega.Debug (showHeadConstructor)
 import Vega.Effect.ST (STE, liftST, runSTE)
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.OutArray qualified as OutArray
-import Vega.Panic (panic, prettyCallStack, assert)
+import Vega.Panic (assert, panic, prettyCallStack)
 import Vega.Pretty (Ann, Doc, pretty)
 import Vega.Pretty qualified as Pretty
 import Vega.Seq.NonEmpty (NonEmpty ((:<||)), pattern NonEmpty)
@@ -479,20 +479,20 @@ compileInstruction builder = \case
                     _ -> panic $ "Trying to unbox non-boxed compound value " <> pretty targetValue
     MIR.ProductConstructor{var, values, representation} -> runSTE \s -> do
         llvmValuesWithLayouts <- for values lookupVar
-        layout <- Layout.representationLayout representation
+        finalProductLayout <- Layout.representationLayout representation
 
-        valueBuilder <- Layout.newBuilder @s layout (renderVariable var)
+        valueBuilder <- Layout.newBuilder @s finalProductLayout (renderVariable var)
 
-        Layout.forContainedElements layout \path targetLocation -> do
+        Layout.forContainedElements finalProductLayout \path targetLocation -> do
             case path of
                 (Layout.ProductField index :<| sourcePath) -> do
                     let (sourceValue, sourceLayout) = llvmValuesWithLayouts `Seq.index` index
                     let sourceLocation = accessElementByPath sourcePath sourceLayout
-                    copyElement builder sourceLocation sourceValue targetLocation layout valueBuilder
+                    copyElement builder sourceLocation sourceValue targetLocation finalProductLayout valueBuilder
                 _ -> panic $ "Element with non-ProductField path in product layout: " <> show path
 
         builtValue <- Layout.buildValue valueBuilder
-        insertVarMapping var builtValue layout
+        insertVarMapping var builtValue finalProductLayout
     MIR.SumConstructor{var, tag, payload, representation} -> runSTE \s -> do
         (payload, payloadLayout) <- lookupVar payload
         layout <- Layout.representationLayout representation
@@ -675,10 +675,11 @@ compileNonTailCall builder var returnLayout functionType function argumentCompou
             asVar_ var returnLayout $ deconstructScalarStruct builder returnLayout struct
             pure struct
         Layout.SRetPointer -> do
+            functionName <- LLVM.getValueName function
             -- sret pointers return a value *at rest* so we first need to store this value in an alloca
             -- (and we *cannot* use the automatic CompoundValueBuilder alloca since that is used for values
             -- in-flight and will only allocate for the unboxed segment)
-            returnedValueAtRestPointer <- Layout.buildAtRestAlloca returnLayout "sret"
+            returnedValueAtRestPointer <- Layout.buildAtRestAlloca returnLayout (functionName <> ".sret")
             -- The sret parameter is always the first parameter
             callInstr <- buildCallWithAttributes builder functionType function ([returnedValueAtRestPointer] <> argumentValues) ""
 
