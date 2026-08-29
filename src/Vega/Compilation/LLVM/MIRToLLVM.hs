@@ -442,7 +442,7 @@ compileInstruction builder = \case
         (parentValue, parentLayout) <- lookupVar parent
         fieldLayout <- Layout.representationLayout fieldRepresentation
 
-        fieldBuilder <- Layout.newBuilder @s fieldLayout
+        fieldBuilder <- Layout.newBuilder @s fieldLayout (renderVariable var)
 
         let basePath = Layout.elementPathFromMIRPath path
         Layout.forContainedElements fieldLayout \elementPath targetLocation -> do
@@ -481,7 +481,7 @@ compileInstruction builder = \case
         llvmValuesWithLayouts <- for values lookupVar
         layout <- Layout.representationLayout representation
 
-        valueBuilder <- Layout.newBuilder @s layout
+        valueBuilder <- Layout.newBuilder @s layout (renderVariable var)
 
         Layout.forContainedElements layout \path targetLocation -> do
             case path of
@@ -496,7 +496,7 @@ compileInstruction builder = \case
     MIR.SumConstructor{var, tag, payload, representation} -> runSTE \s -> do
         (payload, payloadLayout) <- lookupVar payload
         layout <- Layout.representationLayout representation
-        valueBuilder <- Layout.newBuilder @s layout
+        valueBuilder <- Layout.newBuilder @s layout (renderVariable var)
 
         let (tagLocation, tagSize) = case Layout.details layout of
                 Layout.TopLevelSumLayout{tagSize, tagLocation} -> (tagLocation, tagSize)
@@ -997,7 +997,7 @@ deconstructScalarStruct :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM
 deconstructScalarStruct builder layout struct varName = runSTE \(type s) -> do
     assert (Size.inBytes (Layout.unboxedSize layout) == 0)
 
-    valueBuilder <- Layout.newBuilder @s layout
+    valueBuilder <- Layout.newBuilder @s layout varName
     for_ @[] [0 .. Layout.boxedCount layout - 1] \i -> do
         boxedValue <- LLVMBuilder.buildExtractValue builder struct i (varName <> ".boxed")
         Layout.fillBoxed valueBuilder i boxedValue
@@ -1269,7 +1269,7 @@ buildLoadAsReference builder layout basePointer varName = runSTE \s -> do
 
 buildComplexLoad :: (Compile es) => LLVMBuilder.Builder -> Layout -> LLVM.Value -> Text -> Eff es CompoundValue
 buildComplexLoad builder layout basePointer varName = runSTE \s -> do
-    valueBuilder <- Layout.newBuilder @s layout
+    valueBuilder <- Layout.newBuilder @s layout varName
 
     for_ @[] [0 .. Layout.boxedCount layout - 1] \boxedIndex -> do
         boxPointer <- buildGEPOffset builder basePointer (Layout.atRestBoxedOffset layout boxedIndex) (varName <> ".boxed")

@@ -441,13 +441,13 @@ newBuilderWithUnboxedPointer layout unboxedPointer = do
     decomposedScalars <- OutArray.new (length (decomposedScalars layout))
     pure (MkCompoundValueBuilder{boxed, decomposedScalars, unboxedPointer})
 
-newBuilder :: (STE s :> es, IOE :> es, ?allocaBuilder :: LLVMBuilder.Builder, ?context :: LLVM.Context) => Layout -> Eff es (CompoundValueBuilder s)
-newBuilder layout = do
+newBuilder :: (STE s :> es, IOE :> es, ?allocaBuilder :: LLVMBuilder.Builder, ?context :: LLVM.Context) => Layout -> Text -> Eff es (CompoundValueBuilder s)
+newBuilder layout varName = do
     unboxedPointer <- case Size.inBytes (unboxedSize layout) of
         0 -> pure Nothing
         size -> do
             -- TODO: we should really hoist allocas to the first block because that's where LLVM will optimize them properly
-            pointer <- LLVMBuilder.buildAlloca ?allocaBuilder (LLVM.arrayType LLVM.int8Type (fromIntegral size)) "unboxed"
+            pointer <- LLVMBuilder.buildAlloca ?allocaBuilder (LLVM.arrayType LLVM.int8Type (fromIntegral size)) (varName <> ".unboxed")
             LLVM.setAlignment pointer (Alignment.toInt (unboxedAlignment layout))
             pure (Just pointer)
     newBuilderWithUnboxedPointer layout unboxedPointer
