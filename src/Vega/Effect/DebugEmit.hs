@@ -93,7 +93,7 @@ debugEmitLLVM category module_ =
 
 {-# INLINE debugEmitIncrementalMIR #-}
 debugEmitIncrementalMIR :: (DebugEmit :> es) => Category -> Seq MIR.Declaration -> Eff es ()
-debugEmitIncrementalMIR category declarations = debugEmit category (Pretty.intercalateDoc "\n\n" (fmap Pretty.pretty declarations))
+debugEmitIncrementalMIR category declarations = debugEmit category (Pretty.intercalateDoc "\n\n" (fmap Pretty.pretty declarations) <> "\n\n")
 
 {-# INLINE debugEmitMIR #-}
 debugEmitMIR :: (DebugEmit :> es) => Category -> MIR.Program -> Eff es ()
