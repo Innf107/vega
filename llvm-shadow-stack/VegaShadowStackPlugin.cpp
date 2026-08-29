@@ -481,8 +481,6 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
 
     auto &context = function.getContext();
 
-    errs() << function.getName() << "\n";
-
     const auto previousShadowStackPointer =
         function.hasParamAttribute(0, Attribute::AttrKind::StructRet)
             ? function.getArg(1)
