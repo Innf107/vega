@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     either::Either,
-    gc::roots::{ShadowStackFrame, vega_debug_stack_roots},
+    gc::roots::ShadowStackFrame,
 };
 
 /// The type of Vega heap objects.

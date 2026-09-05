@@ -1,11 +1,11 @@
 use std::{
     io::Error,
-    ptr::{NonNull, null, null_mut},
+    ptr::{NonNull, null_mut},
 };
 
-use libc::{_SC_PAGESIZE, MAP_ANONYMOUS, PROT_READ, PROT_WRITE, mmap, sysconf};
+use libc::{MAP_ANONYMOUS, PROT_READ, PROT_WRITE, mmap};
 
-use crate::{heap::HeapObject, primitive::vega_errno};
+use crate::heap::HeapObject;
 
 pub const BLOCK_SIZE: usize = 4096;
 const BLOCK_DESCRIPTOR_MASK: usize = !(BLOCK_SIZE - 1);

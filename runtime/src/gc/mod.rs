@@ -1,12 +1,10 @@
-use std::ptr::{null, null_mut};
-
 use block_allocator::{BLOCK_SIZE, BlockList, allocate_block_list};
 use libc::{_SC_PAGESIZE, sysconf};
 use roots::{ShadowStackFrame, for_stack_roots};
 
 use crate::{
     either::Either,
-    heap::{ForwardPointer, HeapObject, HeapObjectHandle, InfoTable, ObjectType},
+    heap::{ForwardPointer, HeapObject, HeapObjectHandle, InfoTable},
 };
 
 pub mod block_allocator;
