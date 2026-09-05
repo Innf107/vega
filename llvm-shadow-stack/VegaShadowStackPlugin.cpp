@@ -556,29 +556,30 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
         }
 
         for (auto &instruction : *block) {
-            if (isa<PHINode>(instruction)) {
-                // We handle phi nodes at the end of their predecessor block
-                continue;
-            }
-            // relocate the operands
-            for (auto &operandUse : instruction.operands()) {
-                auto *operand = operandUse.get();
-                if (!isGCPointerLiveAcrossCall(pointerIDs, liveAcrossCalls,
-                                               operand)) {
-                    continue;
-                }
 
-                auto *cached_relocation = alreadyRelocated.lookup(operand);
-                if (cached_relocation != nullptr) {
-                    operandUse.set(cached_relocation);
-                } else {
+            // We handle phi arguments at the end of their parent block.
+            // Everything else here still applies to them though.
+            if (!isa<PHINode>(instruction)) {
+                // relocate the operands
+                for (auto &operandUse : instruction.operands()) {
+                    auto *operand = operandUse.get();
+                    if (!isGCPointerLiveAcrossCall(pointerIDs, liveAcrossCalls,
+                                                   operand)) {
+                        continue;
+                    }
 
-                    builder.SetInsertPoint(&instruction);
-                    auto *relocation =
-                        relocate(builder, operand, stackFrameAssignments,
-                                 stackFramePointers);
-                    alreadyRelocated[operand] = relocation;
-                    operandUse.set(relocation);
+                    auto *cached_relocation = alreadyRelocated.lookup(operand);
+                    if (cached_relocation != nullptr) {
+                        operandUse.set(cached_relocation);
+                    } else {
+
+                        builder.SetInsertPoint(&instruction);
+                        auto *relocation =
+                            relocate(builder, operand, stackFrameAssignments,
+                                     stackFramePointers);
+                        alreadyRelocated[operand] = relocation;
+                        operandUse.set(relocation);
+                    }
                 }
             }
 
@@ -697,13 +698,15 @@ void RunShadowStackPass(LLVMModuleRef moduleRef) {
                 auto *callInstruction = dyn_cast<CallInst>(&instruction);
                 if (callInstruction == nullptr ||
                     !callInstruction->hasOperandBundles() ||
-                    !callInstruction->getOperandBundle(LLVMContext::OB_gc_transition)) {
+                    !callInstruction->getOperandBundle(
+                        LLVMContext::OB_gc_transition)) {
                     continue;
                 }
 
                 CallInst *replacement;
 
-                // We won't ever need any operand bundles other than gc-transition
+                // We won't ever need any operand bundles other than
+                // gc-transition
                 assert(!callInstruction->hasOperandBundlesOtherThan(
                     {LLVMContext::OB_gc_transition}));
                 replacement = CallInst::Create(callInstruction, {},
