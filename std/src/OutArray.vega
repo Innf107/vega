@@ -23,7 +23,7 @@ write : forall a. (OutArray(a), a) -> ()
 write(OutArray(impl) as outArray, value) = {
     if remainingCapacity(outArray) > 0 then {
         let index = Ref.read(impl.nextIndex)
-        unsafeWriteMutableArray(impl.buffer, index, value)
+        Array.writeMutable(impl.buffer, index, value)
         Ref.write(impl.nextIndex, index + 1)
     } else {
         panic("std:OutArray:write: trying to write to a filled OutArray")

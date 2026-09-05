@@ -1,4 +1,3 @@
-import internal:Internal (emptyArray, unsafeWriteMutableArray, replicateArray, unsafeFreezeArray)
 import std:Array
 
 data Range = Range({fromInclusive : Int, toInclusive : Int})

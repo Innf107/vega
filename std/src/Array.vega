@@ -30,6 +30,12 @@ read(array, index) = {
     unsafeReadArray(array, index)
 }
 
+readMutable : forall a. (MutableArray(a), Int) -> a
+readMutable(array, index) = {
+    boundsCheckMutable(array, index, "std:Array:readMutable")
+    unsafeReadMutableArray(array, index)
+}
+
 writeMutable : forall a. (MutableArray(a), Int, a) -> ()
 writeMutable(array, index, value) = {
     boundsCheckMutable(array, index, "std:Array:writeMutable")
@@ -69,7 +75,7 @@ copyArray : forall a. ({
 copyArray({targetArray, targetOffset, sourceArray, sourceOffset, length}) = {
     let go(i) = {
         if i >= length then () else {
-            unsafeWriteMutableArray(targetArray, targetOffset + i, unsafeReadArray(sourceArray, sourceOffset + i))
+            writeMutable(targetArray, targetOffset + i, read(sourceArray, sourceOffset + i))
             go(i + 1)
         }
     }
@@ -86,7 +92,7 @@ copyMutableArray : forall a. ({
 copyMutableArray({targetArray, targetOffset, sourceArray, sourceOffset, length}) = {
     let go(i) = {
         if i >= length then () else {
-            unsafeWriteMutableArray(targetArray, targetOffset + i, unsafeReadMutableArray(sourceArray, sourceOffset + i))
+            writeMutable(targetArray, targetOffset + i, readMutable(sourceArray, sourceOffset + i))
             go(i + 1)
         }
     }
@@ -108,7 +114,7 @@ fromList(list) = match list {
         let go(i, toCopy) = match toCopy {
             Nil -> ()
             Cons(x, shadow rest) -> {
-                unsafeWriteMutableArray(array, i, x)
+                writeMutable(array, i, x)
                 go(i + 1, rest)
             }
         }
@@ -133,7 +139,7 @@ fromSliceUnsafe({array, offset, length}) = {
 for : forall a. (Array(a), a -> ()) -> ()
 for(array, f) = {
     let go(i) = if i < arrayLength(array) then {
-        f(unsafeReadArray(array, i))
+        f(read(array, i))
         go(i + 1)
     } else {}
     go(0)
@@ -142,7 +148,7 @@ for(array, f) = {
 forIndexed : forall a. (Array(a), (a, Int) -> ()) -> ()
 forIndexed(array, f) = {
     let go(i) = if i < arrayLength(array) then {
-        f(unsafeReadArray(array, i), i)
+        f(read(array, i), i)
         go(i + 1)
     } else {}
     go(0)
@@ -155,7 +161,7 @@ generate(length, makeElement) = if length <= 0 then {
     let firstElement = makeElement(0)
     let array = replicateMutableArray(length, firstElement)
     let go(i) = if i < length then {
-        unsafeWriteMutableArray(array, i, makeElement(i))
+        writeMutable(array, i, makeElement(i))
         go(i + 1)
     } else {}
     -- We already set the first element (everywhere) so we start at 1
