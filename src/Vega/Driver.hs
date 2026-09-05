@@ -5,6 +5,7 @@ module Vega.Driver (
     execute,
     CompilationResult (..),
     DriverConfig (..),
+    OptimizationLevel (..),
     Monomorphized (..),
 ) where
 
@@ -47,13 +48,14 @@ import Vega.Compilation.JavaScript.Assemble (assembleFromEntryPoint)
 import Vega.Compilation.JavaScript.CoreToJavaScript qualified as JavaScript
 import Vega.Compilation.JavaScript.Syntax qualified as JavaScript.Syntax
 import Vega.Compilation.LLVM.MIRToLLVM qualified as MIRToLLVM
+import Vega.Compilation.LLVM.ShadowStack (runShadowStackPass)
 import Vega.Compilation.MIR.CoreToMIR qualified as CoreToMIR
 import Vega.Compilation.MIR.Monomorphize qualified as Monomorphize
 import Vega.Compilation.MIR.Syntax qualified as MIR
 import Vega.Compilation.MIR.Verify qualified as VerifyMIR
 import Vega.Diff (DiffChange (..))
 import Vega.Diff qualified as Diff
-import Vega.Effect.DebugEmit (DebugEmit, debugEmit, debugEmitMIR, debugEmitIncrementalMIR)
+import Vega.Effect.DebugEmit (DebugEmit, debugEmit, debugEmitIncrementalMIR, debugEmitMIR)
 import Vega.Effect.DebugEmit qualified as DebugEmit
 import Vega.Effect.GraphPersistence (GraphData (..), GraphPersistence)
 import Vega.Effect.GraphPersistence qualified as GraphPersistence
@@ -75,7 +77,6 @@ import Vega.Seq.NonEmpty (NonEmpty, pattern NonEmpty)
 import Vega.Syntax
 import Vega.TypeCheck qualified as TypeCheck
 import Vega.Util (decodeOsPathUnchecked, viaList)
-import Vega.Compilation.LLVM.ShadowStack (runShadowStackPass)
 
 data CompilationResult
     = CompilationSuccessful
@@ -85,7 +86,14 @@ data CompilationResult
 data DriverConfig = MkDriverConfig
     { verifyMIR :: Bool
     , linker :: Text
+    , optimizationLevel :: OptimizationLevel
     }
+
+data OptimizationLevel
+    = O0
+    | O1
+    | O2
+    | O3
 
 -- TODO: distinguish between new and repeated errors
 type Driver es =
@@ -361,13 +369,19 @@ compileBackend = do
                 DebugEmit.debugEmitLLVM DebugEmit.LLVM llvmModule
                 {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
 
-                -- TODO: add proper optimization flags that control this
-                LLVM.runPasses llvmModule "default<O3>" (Just targetMachine) LLVM.defaultPassBuilderOptions
+                MkDriverConfig {optimizationLevel} <- ask
+                let llvmOptimizationPasses = case optimizationLevel of
+                        O0 -> "default<O0>"
+                        O1 -> "default<O1>"
+                        O2 -> "default<O2>"
+                        O3 -> "default<O3>"
+
+                LLVM.runPasses llvmModule llvmOptimizationPasses (Just targetMachine) LLVM.defaultPassBuilderOptions
 
                 DebugEmit.debugEmitLLVM DebugEmit.OptimizedLLVM llvmModule
 
                 liftIO $ runShadowStackPass llvmModule
-                
+
                 DebugEmit.debugEmitLLVM DebugEmit.LLVMWithShadowStack llvmModule
 
                 -- We verify the module a second time after our own shadow stack pass has run

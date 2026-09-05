@@ -43,7 +43,8 @@ data PersistenceBackend
 
 data Options
     = Build
-        { persistence :: PersistenceBackend
+        { optimizationLevel :: Driver.OptimizationLevel
+        , persistence :: PersistenceBackend
         , linker :: Text
         , includeUnique :: Bool
         , debugEmitConfig :: DebugEmit.EmitConfig
@@ -68,8 +69,25 @@ instance Read DebugEmitOption where
         "none" -> [(None, "")]
         _ -> []
 
+showOptimizationLevel :: Driver.OptimizationLevel -> String
+showOptimizationLevel = \case
+    Driver.O0 -> "0"
+    Driver.O1 -> "1"
+    Driver.O2 -> "2"
+    Driver.O3 -> "3"
+
+parseOptimizationLevel :: ReadM Driver.OptimizationLevel
+parseOptimizationLevel = maybeReader \case
+    "0" -> Just Driver.O0
+    "1" -> Just Driver.O1
+    "2" -> Just Driver.O2
+    "3" -> Just Driver.O3
+    _ -> Nothing
+
 buildOptions :: Parser Options
 buildOptions = do
+    optimizationLevel <- option parseOptimizationLevel (long "optimization-level" <> short 'O' <> metavar "LEVEL" <> value Driver.O0 
+        <> showDefaultWith showOptimizationLevel <> help ("The overall optimization level used by Vega and LLVM. Can be one of 0, 1, 2, 3"))
     persistence <-
         option
             auto
@@ -105,7 +123,7 @@ buildOptions = do
                 <> help ("For debugging the compiler only: Make the generated LLVM code use the ccc calling convention instead of tailcc. This will break all tail calls, lead to stack overflows and possibly performance losses, but it might make it easier to debug miscompilations.")
             )
 
-    pure Build{persistence, linker, includeUnique, debugEmitConfig, verifyMIR, useCCallingConvention}
+    pure Build{optimizationLevel, persistence, linker, includeUnique, debugEmitConfig, verifyMIR, useCCallingConvention}
 
 parseDebugEmitConfig :: Parser DebugEmit.EmitConfig
 parseDebugEmitConfig = do
@@ -171,7 +189,8 @@ main = do
                 }
     let driverConfig =
             Driver.MkDriverConfig
-                { verifyMIR = options.verifyMIR
+                { optimizationLevel = options.optimizationLevel
+                , verifyMIR = options.verifyMIR
                 , linker = options.linker
                 }
     case options of
