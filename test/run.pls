@@ -6,10 +6,24 @@ options {
     "--hide-known" as hideKnown: "Don't print immediate output for known failures"
     "--skip-mir-verification" as skipMIRVerification: "Do not run MIR verification on the native backend. This might be desirable if you want to see what LLVM is generated for something that MIR verification doesn't implement correctly yet"
     "--debug-runtime" as debugRuntime: "Compile the runtime in debug instead of release mode"
-    "-O" "--optimized" as optimized: "Build the vega compiler with optimizations. This may take longer to build but can drastically improve the time spent actually running tests."
+    "--optimized-compiler" as optimized: "Build the vega compiler with optimizations. This may take longer to build but can drastically improve the time spent actually running tests."
+    "--optimization-level" (*) as rawOptimizationLevels: "The optimization levels to run. Can be specified multiple times. If omitted, this will use 3. `type: compile` and `type: error` tests will always use optimization level 0."
 }
 
 module List = import("@std/list.pls")
+
+let optimizationLevels = match rawOptimizationLevels {
+    [] -> ["3"]
+    _ -> rawOptimizationLevels
+}
+# We don't enable optimizations for tests that we don't actually need to run.
+# It might even be nice to disable the backend entirely for these in the future
+# (although we would probably still want the ability to turn that off as a sanity check)
+let optimizationLevelsForTestKind(testKind) = match testKind {
+    ExpectCompile -> ["0"]
+    ExpectFail(_) -> ["0"]
+    ExpectPrint(_) -> optimizationLevels
+}
 
 let parseBackends(backends, strings) = match strings {
     [] -> backends
@@ -116,12 +130,12 @@ let shouldSkip(backend, testFile) = {
     }
 }
 
-let runTest : (Backend, String) -> < Passed, Failed(String) >
+let runTest : (Backend, String) -> List(< Passed, Failed({ optimizationLevel : String, message : String }) >)
 let runTest(backend, testFile) = {
     chdir(testdir)
 
     if shouldSkip(backend, testFile) then {
-        Passed
+        []
     }
     else {
         let testName = !basename "-s" ".vega" testFile
@@ -134,44 +148,63 @@ let runTest(backend, testFile) = {
         !cp testFile "./run/Main.vega"
 
         chdir("./run")
-        let compileResult = try {
-            let _ = !bash "-c" "${vega} build ${if skipMIRVerification then "" else "--verify-mir"} 2>&1"
-            Compiled
-        } with {
-            CommandFailure(failure) -> {
-                CompilerError(failure.stdout)
+
+        let runTestWithOptimizationLevel(optimizationLevel) = {
+            let compileResult = try {
+                let _ = !bash "-c" "${vega} build ${if skipMIRVerification then "" else "--verify-mir"} -O${optimizationLevel} 2>&1"
+                Compiled
+            } with {
+                CommandFailure(failure) -> {
+                    CompilerError(failure.stdout)
+                }
             }
-        }
-        match testKind {
-            ExpectCompile -> match compileResult {
-                Compiled -> Passed
-                CompilerError(output) -> Failed("\e[31m${output}")
-            }
-            ExpectFail(expectedMessage) -> match compileResult {
-                Compiled -> Failed("\e[31m\e[1mTest should have failed to compile. Expected error message:\n\e[0m\e[31m${expectedMessage}\e[0m")
-                CompilerError(actualMessage) -> {
-                    # We don't want to include the exact, machine-dependent path of the file here
-                    # so we allow error files to use $FILE to refer to it.
-                    let expectedMessage = regexpReplace("\\$FILE", "${!pwd}/./Main.vega", expectedMessage)
-                    if (expectedMessage == actualMessage) then {
-                        Passed
-                    } else {
-                        Failed("\e[0m\n\e[31m\e[1mExpected error message:\e[0m\e[31m ${expectedMessage}\n\e[1mActual error message:\e[0m\e[31m ${actualMessage}\e[0m")
+            match testKind {
+                ExpectCompile -> match compileResult {
+                    Compiled -> Passed
+                    CompilerError(output) -> Failed(
+                        { optimizationLevel = optimizationLevel
+                        , message = "\e[31m${output}"
+                        })
+                }
+                ExpectFail(expectedMessage) -> match compileResult {
+                    Compiled -> Failed(
+                        { optimizationLevel = optimizationLevel
+                        , message = "\e[31m\e[1mTest should have failed to compile. Expected error message:\n\e[0m\e[31m${expectedMessage}\e[0m"
+                        } )
+                    CompilerError(actualMessage) -> {
+                        # We don't want to include the exact, machine-dependent path of the file here
+                        # so we allow error files to use $FILE to refer to it.
+                        let expectedMessage = regexpReplace("\\$FILE", "${!pwd}/./Main.vega", expectedMessage)
+                        if (expectedMessage == actualMessage) then {
+                            Passed
+                        } else {
+                            Failed(
+                                { optimizationLevel = optimizationLevel
+                                , message = "\e[0m\n\e[31m\e[1mExpected error message:\e[0m\e[31m ${expectedMessage}\n\e[1mActual error message:\e[0m\e[31m ${actualMessage}\e[0m"
+                                })
+                        }
+                    }
+                }
+                ExpectPrint(expectation) -> match compileResult {
+                    CompilerError(output) -> Failed(
+                        { optimizationLevel = optimizationLevel
+                        , message = "\e[31m${output}"
+                        })
+                    Compiled -> {
+                        let actualOutput = runCompiledProgram(backend, testName)
+                        if (actualOutput == expectation) then {
+                            Passed
+                        } else {
+                            Failed(
+                                { optimizationLevel = optimizationLevel
+                                , message = "\e[0m\e[31m\e[1mExpected:\e[0m\e[31m ${expectation}\n\e[0m\e[31m\e[1m  Actual:\e[0m\e[31m ${actualOutput}"
+                                })
+                        }
                     }
                 }
             }
-            ExpectPrint(expectation) -> match compileResult {
-                CompilerError(output) -> Failed("\e[31m${output}")
-                Compiled -> {
-                    let actualOutput = runCompiledProgram(backend, testName)
-                    if (actualOutput == expectation) then {
-                        Passed
-                    } else {
-                        Failed("\e[0m\e[31m\e[1mExpected:\e[0m\e[31m ${expectation}\n\e[0m\e[31m\e[1m  Actual:\e[0m\e[31m ${actualOutput}")
-                    }
-                }
-            }
         }
+        List.map(runTestWithOptimizationLevel, optimizationLevelsForTestKind(testKind))
     }
 }
 let isKnownFailure(testFile) = {
@@ -194,11 +227,13 @@ List.for(compileTests, \testFile -> {
         print("\e[30m[${testFile}]\e[0m")
     } else {}
 
-    let failuresForThisTest = List.filterMap(\backend -> 
-        match runTest(backend, testFile) {
+    let failuresForThisTest = List.concatMap(\backend -> {
+        let results = runTest(backend, testFile)
+        List.filterMap(\result -> match result {
             Passed -> Nothing
-            Failed(message) -> Just((backend, message))
-        }, backends)
+            Failed({optimizationLevel, message}) -> Just({backend=backend, optimizationLevel=optimizationLevel, message=message})
+        }, results)
+    }, backends)
     chdir(baseDirectory)
     let knownFailure = isKnownFailure(testFile)
     match failuresForThisTest {
@@ -215,16 +250,16 @@ List.for(compileTests, \testFile -> {
                 knownFailures := knownFailures! + 1
                 if not hideKnown then {
                     print("\e[35m[${testFile}]: known failure on ${List.length(failuresForThisTest)}/${numberOfBackends} backends\e[0m")
-                    List.for(failuresForThisTest, \(backend, message) -> {
-                        print("\e[1m\e[35m[${backendToString(backend)}]:\e[0m ${message}")
+                    List.for(failuresForThisTest, \{backend, optimizationLevel, message} -> {
+                        print("\e[1m\e[35m[${backendToString(backend)}](-O${optimizationLevel}):\e[0m ${message}")
                     })
                 } else {}
             } else {
 
                 failures := failures! + 1
                 print("\e[1m\e[31m[${testFile}]: FAILED on ${List.length(failuresForThisTest)}/${numberOfBackends} backends\e[0m")
-                List.for(failuresForThisTest, \(backend, message) -> {
-                    print("\e[1m\e[31m[${backendToString(backend)}]:\e[0m ${message}")
+                List.for(failuresForThisTest, \{backend, optimizationLevel, message} -> {
+                    print("\e[1m\e[31m[${backendToString(backend)}](-O${optimizationLevel}):\e[0m ${message}")
                 })
             }
         }
