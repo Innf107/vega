@@ -6,88 +6,96 @@ import Relude.Extra
 import Effectful
 
 import Data.HashSet qualified as HashSet
-import Data.UUID (UUID)
 import Data.UUID.V4 (nextRandom)
 
-import Vega.Effect.Trace (Trace, trace, Category(..))
-import Vega.Pretty (number)
+import Vega.Effect.ST (STE, STRef, liftST, modifySTRef, newSTRef, readSTRef, runSTE, (=:))
+import Vega.Effect.Trace (Category (..), Trace, trace)
+import Vega.Panic (assertM, panic)
+import Vega.Pretty (Pretty, number, pretty)
+import Vega.Pretty qualified as Pretty
+import Vega.Syntax (DeclarationName)
 
--- TODO: try to use something more efficient (maybe twitter-style snowflakes?)
-newtype SCCId = MkSCCId UUID
-    deriving (Show, Eq)
+-- We use the "root" declaration (the first one that was found by the DFS) as the representative of an SCC.
+-- This is valid, even across different invocations of the algorithm, since SCCs are unique, we compute the representative
+-- for every element of an SCC in one go (so they cannot disagree on their representative) and changes that extend or shrink an
+-- SCC will invalidate the entire SCC anyway.
+--
+-- Which declaration *exactly* is chosen as the SCC may vary depending on the order the DFS takes and which declaration is checked first.
+newtype SCCId = MkSCCId {representative :: DeclarationName}
+    deriving stock (Eq)
 
-newSCCId :: (IOE :> es) => Eff es SCCId
-newSCCId = MkSCCId <$> liftIO nextRandom
+instance Pretty SCCId where
+    -- This is a bit hacky but we only use it for debugging anyway so it's fine
+    pretty id = Pretty.keyword (Pretty.prettyPlain (pretty id.representative))
 
--- Technically IOE isn't necessary here but manually using State effects gets messy
--- and effectful doesn't really have a great alternative to ST (yet).
--- (and also every place we use this in is in IOE anyway so it doesn't really matter).
+{- | Compute the set of all not previously computed SCCs that are reachable from this node.
+
+The algorithm is based on Cheriyan-Mehlhorn-Gabow (https://arxiv.org/pdf/1703.10023)
+
+If the entry point has already been assigned an SCC, this will return an empty map
+-}
 computeSCC ::
-    forall node es.
-    (Show node, Hashable node, Trace :> es, IOE :> es) =>
+    forall es.
+    (Trace :> es) =>
     -- | Return a list of nodes only if the node has not been assigned an SCC already
-    (node -> Eff es (Maybe [node])) ->
-    node ->
-    Eff es (HashMap node SCCId)
-computeSCC outEdgesOrPrecomputedSCC node = do
-    visited :: IORef (HashSet node) <- newIORef [node]
-    currentDFSNum :: IORef Int <- newIORef 0
-    dfsNums :: IORef (HashMap node Int) <- newIORef mempty
+    (DeclarationName -> Eff es (Maybe [DeclarationName])) ->
+    DeclarationName ->
+    Eff es (HashMap DeclarationName SCCId)
+computeSCC outEdgesOrPrecomputedSCC entryPoint = runSTE \(type s) -> do
+    currentDFSNum :: STRef s Int <- newSTRef 0
+    -- This is -1 if the node is already part of a closed component
+    openDFSNums :: STRef s (HashMap DeclarationName Int) <- newSTRef mempty
+    sccs :: STRef s (HashMap DeclarationName SCCId) <- newSTRef mempty
 
-    openSCCs :: IORef [node] <- newIORef [node]
-    openNodes :: IORef [node] <- newIORef [node]
+    roots :: STRef s [DeclarationName] <- newSTRef []
+    open :: STRef s [DeclarationName] <- newSTRef []
 
-    sccs :: IORef (HashMap node SCCId) <- newIORef mempty
-
-    let go node = do
-            dfsNum <- readIORef currentDFSNum
-            trace SCC ("(" <> number dfsNum <> ") " <> show node)
-            writeIORef currentDFSNum (dfsNum + 1)
-            modifyIORef' dfsNums (insert node dfsNum)
-            outEdgesOrPrecomputedSCC node >>= \case
-                Nothing -> do
-                    pure ()
+    let dfs node =
+            raise (outEdgesOrPrecomputedSCC node) >>= \case
+                -- We can pretend that nodes with precomputed SCCs aren't there since they can never
+                -- be part of any component we care about anyway
+                Nothing -> pure ()
                 Just neighbors -> do
+                    dfsNum <- readSTRef currentDFSNum
+                    currentDFSNum =: (dfsNum + 1)
+                    modifySTRef openDFSNums (insert node dfsNum)
+                    modifySTRef roots (node :)
+                    modifySTRef open (node :)
+
                     for_ neighbors \neighbor -> do
-                        visitedUntilNow <- readIORef visited
-                        case HashSet.member neighbor visitedUntilNow of
-                            False -> outEdgesOrPrecomputedSCC neighbor >>= \case
-                                    Nothing -> 
-                                        -- If the neighboring node cannot be part of this SCC, we shouldn't insert it into
-                                        -- openSCCs/openNodes
-                                        pure ()
-                                    Just _ -> do
-                                        modifyIORef' visited (HashSet.insert neighbor)
-                                        modifyIORef' openSCCs (neighbor :)
-                                        modifyIORef' openNodes (neighbor :)
+                        currentOpenDFSNums <- readSTRef openDFSNums
+                        case lookup neighbor currentOpenDFSNums of
+                            Nothing -> dfs neighbor
+                            Just neighborDFSNum
+                                | neighborDFSNum == -1 -> pure ()
+                                | otherwise -> do
+                                    let dfsNumOf representative = case lookup representative currentOpenDFSNums of
+                                            Nothing -> panic $ "DFS number for potential root " <> pretty representative <> " not found"
+                                            Just dfsNum -> dfsNum
+                                    modifySTRef roots (dropWhile (\representative -> dfsNumOf representative > neighborDFSNum))
+                    readSTRef roots >>= \case
+                        [] -> panic $ "No roots left after processing neighbors of " <> pretty node
+                        (top : rest)
+                            | top == node -> do
+                                roots =: rest
+                                currentOpen <- readSTRef open
+                                let (inComponent, remainingOpen) = spanIncluding (/= node) currentOpen
+                                for_ inComponent \nodeToClose -> do
+                                    modifySTRef openDFSNums (insert nodeToClose -1)
+                                    modifySTRef sccs (insert nodeToClose (MkSCCId{representative = node}))
+                                open =: remainingOpen
+                            | otherwise -> pure ()
+    assertM (null <$> readSTRef roots)
+    assertM (null <$> readSTRef open)
+    dfs entryPoint
+    readSTRef sccs
 
-                                        go neighbor
-                            True -> do
-                                dfsNumsUntilNow <- readIORef dfsNums
-                                let dfsNumOf otherNode = case lookup otherNode dfsNumsUntilNow of
-                                        Nothing -> error $ "DFS number of '" <> show node <> "' not found"
-                                        Just dfsNum -> dfsNum
-
-                                modifyIORef' openSCCs (dropWhile (\representative -> dfsNumOf representative >= dfsNum))
-                    -- backtrack
-                    readIORef openSCCs >>= \case
-                        (topRepresentative : rest)
-                            | topRepresentative == node -> do
-                                writeIORef openSCCs rest
-
-                                sccId <- newSCCId
-
-                                let assignSCC = \case
-                                        [] -> pure []
-                                        (openNode : rest) -> do
-                                            modifyIORef' sccs (insert openNode sccId)
-                                            if openNode == node
-                                                then pure rest
-                                                else assignSCC rest
-                                currentOpenNodes <- readIORef openNodes
-                                remainingOpenNodes <- assignSCC currentOpenNodes
-                                writeIORef openNodes remainingOpenNodes
-                        _ -> pure ()
-
-    go node
-    readIORef sccs
+-- | Variant of 'span' that includes the first element that does not match the predicate in the left result
+spanIncluding :: (a -> Bool) -> [a] -> ([a], [a])
+spanIncluding predicate = \case
+    [] -> ([], [])
+    (x : xs)
+        | predicate x -> do
+            let (prefix, rest) = spanIncluding predicate xs
+            (x : prefix, rest)
+        | otherwise -> ([x], xs)

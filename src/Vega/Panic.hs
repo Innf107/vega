@@ -8,6 +8,7 @@ module Vega.Panic (
     assertIn,
     assertWith,
     assertWithIn,
+    assertM,
 ) where
 
 import Control.Exception (throw)
@@ -48,3 +49,21 @@ assert ~condition = GHC.Base.assert condition (pure ())
 {-# INLINE assertIn #-}
 assertIn :: (HasCallStack) => Bool -> a -> a
 assertIn = GHC.Base.assert
+
+{- | Assert in debug mode that some condition holds.
+For this to be safe, the condition must not have any
+side effects that are observable from the outside.
+
+It should primarily be used with (possibly expensive) lookups
+in mutable data structures.
+-}
+{-# INLINE assertM #-}
+assertM :: (HasCallStack, Monad m) => m Bool -> m ()
+#ifdef __GLASGOW_HASKELL_ASSERTS_IGNORED__
+assertM _ = pure ()
+#else
+assertM condition = do
+    condition >>= \case
+        True -> pure ()
+        False -> panic $ Pretty.errorText "Assertion failed"
+#endif

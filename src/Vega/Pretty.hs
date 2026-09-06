@@ -47,6 +47,9 @@ module Vega.Pretty (
     vsep,
     cat,
     vcat,
+    -- Mostly meant for debugging
+    prettyDocList,
+    prettyList,
 ) where
 
 import Relude
@@ -278,6 +281,12 @@ cat :: (Foldable t) => t (Doc ann) -> Doc ann
 cat foldable = PP.cat (toList foldable)
 vcat :: (Foldable t) => t (Doc ann) -> Doc ann
 vcat foldable = PP.vcat (toList foldable)
+
+prettyDocList :: (Foldable f, Functor f) => f (Doc Ann) -> Doc Ann
+prettyDocList list = lparen "[" <> intercalateDoc (keyword ",") list <> rparen "]"
+
+prettyList :: (Pretty a, Foldable f, Functor f) => f a -> Doc Ann
+prettyList list = lparen "[" <> intercalateDoc (keyword ",") (fmap pretty list) <> rparen "]"
 
 instance (Generic a, PrettyGenUntagged (Rep a)) => Pretty (Untagged a) where
     pretty (MkUntagged x) = prettyGenUntagged (from x)

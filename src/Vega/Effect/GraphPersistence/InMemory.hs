@@ -69,6 +69,7 @@ import Vega.Effect.Trace (Category (SCC), Trace, trace, withTrace)
 import Vega.Package (Backend (..))
 import Vega.Panic (panic)
 import Vega.Pretty (Pretty (pretty))
+import Vega.Pretty qualified as Pretty
 import Vega.SCC (SCCId, computeSCC)
 
 -- TODO: this currently isn't thread safe
@@ -356,7 +357,6 @@ addDependency dependent dependency = do
 
 getSCC :: forall es. (InMemory es) => DeclarationName -> Eff es SCCId
 getSCC declarationName = do
-    trace SCC $ "getSCC " <> pretty declarationName
     data_ <- declarationData declarationName
     readIORef data_.scc >>= \case
         Just scc -> pure scc
@@ -377,10 +377,15 @@ getSCC declarationName = do
             sccs <- computeSCC outEdgesOrPrecomputedSCC declarationName
 
             withTrace SCC ("SCCs determined for " <> pretty declarationName <> ":") $ for_ (HashMap.toList sccs) \(declaration, scc) -> do
-                trace SCC $ pretty declaration <> ": " <> show scc
+                trace SCC $ pretty declaration <> ": " <> pretty scc
                 setSCCId declaration scc
             case lookup declarationName sccs of
-                Nothing -> error $ "SCC map for declaration " <> show declarationName <> " is missing its own binding.\nSCCs: " <> show sccs
+                Nothing ->
+                    panic $
+                        "SCC map for declaration "
+                            <> pretty declarationName
+                            <> " is missing its own binding.\nSCCs: "
+                            <> Pretty.align ("[" <> Pretty.intercalateDoc "\n, " (fmap (\(key, value) -> pretty key <> Pretty.keyword ": " <> pretty value) (HashMap.toList sccs)) <> "]")
                 Just scc -> pure scc
 
 getGlobalType :: (HasCallStack, InMemory es) => GlobalName -> Eff es CachedType
