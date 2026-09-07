@@ -1030,6 +1030,7 @@ getOrCreateLayoutInfoTablePointer layout = do
 
             llvmInfoTableGlobal <- LLVM.addGlobal ?module_ infoTableLLVMType identifier
             LLVM.setAlignment (LLVM.globalAsValue llvmInfoTableGlobal) 8
+            LLVM.setGlobalConstant llvmInfoTableGlobal True
             LLVM.setInitializer llvmInfoTableGlobal infoTableConstant
             pure (LLVM.globalAsValue llvmInfoTableGlobal)
 
@@ -1053,6 +1054,8 @@ getOrCreateArrayInfoTablePointer static elementLayout = do
             (infoTableLLVMType, infoTableConstant) <- toLLVMConstant infoTable
 
             llvmInfoTableGlobal <- LLVM.addGlobal ?module_ infoTableLLVMType identifier
+            LLVM.setAlignment (LLVM.globalAsValue llvmInfoTableGlobal) 8
+            LLVM.setGlobalConstant llvmInfoTableGlobal True
             LLVM.setInitializer llvmInfoTableGlobal infoTableConstant
             pure (LLVM.globalAsValue llvmInfoTableGlobal)
 
@@ -1067,6 +1070,8 @@ createStaticByteArray bytes = do
 
     let arrayHeapType = LLVM.structType [LLVM.pointerType, LLVM.int64Type, LLVM.arrayType LLVM.int8Type (fromIntegral (ByteString.length bytes))] False
     global <- LLVM.addGlobalInAddressSpace ?module_ arrayHeapType ("string_" <> show (hashUnique unique)) 1
+    LLVM.setAlignment (LLVM.globalAsValue global) 8
+    LLVM.setGlobalConstant global True
 
     structValue <-
         LLVM.constStructInContext
