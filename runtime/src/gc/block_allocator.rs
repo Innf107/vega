@@ -1,78 +1,20 @@
 use std::{
+    debug_assert_matches,
     io::Error,
     ptr::{NonNull, null_mut},
+    sync::Mutex,
 };
 
 use libc::{MAP_ANONYMOUS, PROT_READ, PROT_WRITE, mmap};
 
-use crate::heap::HeapObject;
+use crate::{
+    gc::block::{BLOCK_SIZE, BlockList, BlockPointer},
+    heap::HeapObject,
+    make_send::UnsafeMakeSend,
+    settings::settings,
+};
 
-pub const BLOCK_SIZE: usize = 4096;
-const BLOCK_DESCRIPTOR_MASK: usize = !(BLOCK_SIZE - 1);
-
-pub struct BlockDescriptor {
-    pub next: Option<BlockPointer>,
-}
-
-#[derive(Clone, Copy)]
-pub struct BlockPointer {
-    contents: NonNull<u8>,
-}
-impl BlockPointer {
-    pub fn descriptor(self) -> *mut BlockDescriptor {
-        // The descriptor is stored immediately at the start of the block
-        self.contents.as_ptr() as *mut BlockDescriptor
-    }
-    /// SAFETY: the pointer must point to a valid dynamically allocated heap object.
-    /// In particular, passing a statically allocated heap object (like a static array), a pointer to the null object
-    /// or a null pointer is *not* valid.
-    pub unsafe fn from_heap_object_pointer(heap_object: *const HeapObject) -> Self {
-        // Blocks are always aligned to BLOCK_SIZE, so we can mask off the last few bits
-        // to get a pointer to the start of the block
-        let content_ptr =
-            heap_object.map_addr(|address| address & BLOCK_DESCRIPTOR_MASK) as *mut u8;
-        let contents = unsafe { NonNull::new_unchecked(content_ptr) };
-        BlockPointer { contents }
-    }
-
-    /// Return a pointer to the space for the first heap object.
-    /// There is *NOT* necessarily a valid heap object there.
-    ///
-    /// In particular, if this block has just been allocated, the
-    /// "object" this points to is just going to be uninitialized memory.
-    pub fn first_heap_object_pointer(self) -> *mut HeapObject {
-        // BlockDescriptor is at least 8 byte aligned, so this will give us
-        // an 8 byte aligned pointer (which is what we need for a heap object)
-        unsafe {
-            self.contents
-                .byte_add(size_of::<BlockDescriptor>())
-                .as_ptr() as *mut HeapObject
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct BlockList {
-    first: BlockPointer,
-    last: BlockPointer,
-}
-impl BlockList {
-    /// Return a dummy block list that is technically initialized, but not actually valid.
-    /// SAFETY: The result must be overridden by something real before
-    /// calling any functions on it.
-    pub const unsafe fn dummy() -> Self {
-        BlockList {
-            first: BlockPointer {
-                contents: NonNull::dangling(),
-            },
-            last: BlockPointer {
-                contents: NonNull::dangling(),
-            },
-        }
-    }
-}
-
-pub fn allocate_page_aligned_memory(size_in_bytes: usize) -> NonNull<u8> {
+fn allocate_page_aligned_memory(size_in_bytes: usize) -> NonNull<u8> {
     let memory = unsafe {
         mmap(
             null_mut(),
@@ -89,17 +31,44 @@ pub fn allocate_page_aligned_memory(size_in_bytes: usize) -> NonNull<u8> {
     unsafe { NonNull::new_unchecked(memory as *mut u8) }
 }
 
-pub fn allocate_block() -> BlockPointer {
-    let block_memory = allocate_page_aligned_memory(BLOCK_SIZE);
-
-    let block_pointer = BlockPointer {
-        contents: block_memory,
-    };
-    unsafe { *(block_pointer.descriptor()) = BlockDescriptor { next: None } }
-
-    block_pointer
+struct BlockAllocator {
+    free_blocks: Mutex<UnsafeMakeSend<BlockList>>,
 }
 
-pub fn allocate_block_list(count: usize) -> BlockList {
+static GLOBAL_BLOCK_ALLOCATOR: BlockAllocator = BlockAllocator {
+    free_blocks: Mutex::new(UnsafeMakeSend::new(BlockList::new())),
+};
+
+#[allow(static_mut_refs)]
+pub fn allocate_block() -> BlockPointer {
+    let mut free_blocks_guard = GLOBAL_BLOCK_ALLOCATOR.free_blocks.lock().unwrap();
+    let free_blocks = unsafe { free_blocks_guard.get_mut() };
+
+    match free_blocks.pop_back() {
+        Some(block) => block,
+        None => {
+            // We could in principle release the lock here while we allocate new blocks, but if we did, that would only
+            // lead to more memory than necessary being allocated by any racing threads.
+            let underlying_memory =
+                allocate_page_aligned_memory(settings().block_allocation_batch_size * BLOCK_SIZE);
+
+            for i in 0..settings().block_allocation_batch_size {
+                let pointer_to_start_of_block =
+                    unsafe { underlying_memory.byte_add(i * BLOCK_SIZE) };
+                let block = BlockPointer {
+                    contents: pointer_to_start_of_block,
+                };
+
+                
+                todo!()
+            }
+            todo!()
+        }
+    }
+}
+
+pub fn allocate_block_list(size: usize) -> BlockList {
     todo!()
 }
+
+pub unsafe fn free_block(block: BlockPointer) {}

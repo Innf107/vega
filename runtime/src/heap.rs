@@ -1,12 +1,22 @@
 use std::{
+    debug_assert_matches,
     ffi::c_void,
-    ptr::{addr_of, null},
+    ptr::{addr_of, null, null_mut},
 };
 
-use crate::{
-    either::Either,
-    gc::roots::ShadowStackFrame,
-};
+use crate::{either::Either, gc::roots::ShadowStackFrame, tagged_pointer::TaggedPointer};
+use std::fmt::Debug;
+
+pub const HEAP_ALIGNMENT: usize = 8;
+
+pub fn round_up_to_heap_alignment(value: usize) -> usize {
+    let aligned_down = value & !(HEAP_ALIGNMENT - 1);
+    if value == aligned_down {
+        aligned_down
+    } else {
+        aligned_down + HEAP_ALIGNMENT
+    }
+}
 
 /// The type of Vega heap objects.
 /// The fields of this type only contain the heap header
@@ -24,9 +34,16 @@ impl HeapObject {
             null()
         } else {
             unsafe {
-                let heap_object_pointer = data_pointer.byte_sub(HeapObject::HEADER_SIZE_IN_BYTES);
+                let heap_object_pointer =
+                    data_pointer.byte_sub(HeapObject::HEADER_SIZE_IN_BYTES) as *const HeapObject;
 
-                heap_object_pointer as *const HeapObject
+                // The argument must not be a forward pointer
+                debug_assert!(matches!(
+                    HeapObject::header(heap_object_pointer).info_table_or_forward_pointer(),
+                    Either::Left(_)
+                ));
+
+                heap_object_pointer
             }
         }
     }
@@ -55,6 +72,21 @@ impl HeapObject {
         } else {
             unsafe { (*object).header }
         }
+    }
+
+    // SAFETY: This function must not race with any other accesses to the header.
+    // TODO: This is really only safe in a single-threaded context and we should get
+    // rid of it once we parallelize the GC
+    pub unsafe fn set_header_unsynchronized(object: *mut HeapObject, header: Header) {
+        debug_assert!(object != null_mut());
+        unsafe { (*object).header = header }
+    }
+
+    pub unsafe fn override_with_forward_pointer_unsynchronized(
+        object: *mut HeapObject,
+        pointer: ForwardPointer,
+    ) {
+        unsafe { (*object).header = Header::new_forward_pointer(pointer) }
     }
 
     pub unsafe fn as_array_object_unchecked(object: *const HeapObject) -> *const ArrayHeapObject {
@@ -91,6 +123,26 @@ impl HeapObject {
             },
         }
     }
+
+    // SAFETY: the pointer must point to a valid heap object.
+    // This will panic if passed a forward pointer
+    pub unsafe fn total_stride(object: *const HeapObject) -> usize {
+        match unsafe { HeapObject::as_handle(object) } {
+            HeapObjectHandle::Boxed(boxed_handle) => boxed_handle.stride(),
+            HeapObjectHandle::Array(array_handle) => array_handle.stride(),
+            HeapObjectHandle::StaticArray(static_array_handle) => {
+                static_array_handle.stride()
+            }
+            HeapObjectHandle::Null => {
+                // There isn't really a *good* reason to call total_size on something that could be Null but there might eventually
+                // be an edge case where this is better than panicking
+                round_up_to_heap_alignment(HeapObject::HEADER_SIZE_IN_BYTES)
+            }
+            HeapObjectHandle::ForwardPointer(forward_pointer) => {
+                panic!("HeapObject::total_size called on a forward pointer: {forward_pointer:?}")
+            }
+        }
+    }
 }
 
 /// A HeapObjectHandle is a more rust-friendly view onto a heap object.
@@ -102,6 +154,12 @@ pub enum HeapObjectHandle {
     ForwardPointer(ForwardPointer),
     Null,
 }
+impl Debug for ForwardPointer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.to_space_allocation.fmt(f)
+    }
+}
+
 pub struct BoxedHandle {
     pub object: *const HeapObject,
     pub layout: &'static BoxedLayout,
@@ -116,6 +174,11 @@ impl BoxedHandle {
         let start_of_boxed_elements = HeapObject::data(self.object) as *mut *const u8;
         unsafe { start_of_boxed_elements.add(index) }
     }
+
+    // The full size of this heap object including the header, rounded up to heap alignment
+    pub fn stride(&self) -> usize {
+        round_up_to_heap_alignment(HeapObject::HEADER_SIZE_IN_BYTES + self.layout.size_in_bytes)
+    }
 }
 pub struct ArrayHandle {
     pub object: *const ArrayHeapObject,
@@ -124,6 +187,16 @@ pub struct ArrayHandle {
 impl ArrayHandle {
     pub fn length(&self) -> usize {
         unsafe { (*(self.object)).length }
+    }
+
+    // The total size of this heap object including the object header, rounded up to heap alignment
+    pub fn stride(&self) -> usize {
+        let length_counter_size = size_of::<usize>();
+        round_up_to_heap_alignment(
+            HeapObject::HEADER_SIZE_IN_BYTES
+                + length_counter_size
+                + self.length() * self.layout.element_stride_in_bytes,
+        )
     }
 
     pub unsafe fn boxed_element(&self, element_index: usize, boxed_index: usize) -> *mut *const u8 {
@@ -150,6 +223,16 @@ pub struct StaticArrayHandle {
 impl StaticArrayHandle {
     pub fn length(&self) -> usize {
         unsafe { (*(self.object)).length }
+    }
+
+    // The total size of this heap object including the object header, rounded up to heap alignment
+    pub fn stride(&self) -> usize {
+        let length_counter_size = size_of::<usize>();
+        round_up_to_heap_alignment(
+            HeapObject::HEADER_SIZE_IN_BYTES
+                + length_counter_size
+                + self.length() * self.layout.element_stride_in_bytes,
+        )
     }
 
     pub unsafe fn boxed_element(&self, element_index: usize, boxed_index: usize) -> *mut *const u8 {
@@ -184,39 +267,50 @@ Layout:
 
 Normal heap object:
 ```rs
-63                  3        2            1   0
-┌───────────────────┬────────┬────────────┬───┐
-│info table pointer │ unused │ generation │ 0 │
-└───────────────────┴────────┴────────────┴───┘
+64                  3          2            1   0
+┌───────────────────┬──────────┬────────────┬───┐
+│info table pointer │ (unused) │ generation │ 0 │
+└───────────────────┴──────────┴────────────┴───┘
 ```
 Forward pointer:
 ```rs
-63                3        1
-┌─────────────────┬────────┬───┐
-│ forward pointer │ unused │ 1 │
-└─────────────────┴────────┴───┘
+64                  3                       1   0
+┌───────────────────┬───────────────────────┬───┐
+│ forward pointer   │ (unused)              │ 1 │
+└───────────────────┴───────────────────────┴───┘
 ```
 */
 
+const FORWARD_POINTER_TAG: u8 = 0;
+const GENERATION_TAG: u8 = 1;
+
 #[derive(Clone, Copy)]
 pub struct Header {
-    raw_pointer_with_tags: *const InfoTable,
+    info_table_pointer_with_tags: TaggedPointer<InfoTable, HEAP_ALIGNMENT>,
 }
 impl Header {
-    pub fn new(info_table: &'static InfoTable, generation: Generation) -> Self {
-        let raw_pointer_with_tags = (info_table as *const InfoTable)
-            .map_addr(|address| address | (generation.as_usize() << 1));
-        Header {
-            raw_pointer_with_tags,
+    pub fn new(info_table: &'static InfoTable, generation: GenerationIndex) -> Self {
+        let info_table_pointer_with_tags = TaggedPointer::new(info_table as *const InfoTable)
+            .set_tag::<GENERATION_TAG>(generation.is_major());
+        Self {
+            info_table_pointer_with_tags,
         }
     }
-
+    pub fn new_forward_pointer(pointer: ForwardPointer) -> Self {
+        let info_table_pointer_with_tags =
+            TaggedPointer::new(pointer.to_space_allocation as *const InfoTable)
+                .set_tag::<FORWARD_POINTER_TAG>(true);
+        Self {
+            info_table_pointer_with_tags,
+        }
+    }
     pub fn info_table_or_forward_pointer(self) -> Either<&'static InfoTable, ForwardPointer> {
-        let actual_pointer: *const InfoTable = self
-            .raw_pointer_with_tags
-            .map_addr(|address| address & !0b111);
+        let actual_pointer = self.info_table_pointer_with_tags.pointer();
         // The last bit indicates if this is a forward pointer
-        if self.raw_pointer_with_tags.addr() & 1 == 1 {
+        if self
+            .info_table_pointer_with_tags
+            .get_tag::<FORWARD_POINTER_TAG>()
+        {
             Either::Right(ForwardPointer {
                 to_space_allocation: actual_pointer as *const HeapObject,
             })
@@ -227,28 +321,38 @@ impl Header {
         }
     }
 
-    pub fn generation(&self) -> Generation {
-        if self.raw_pointer_with_tags.addr() & 0b10 == 0 {
-            Generation::MINOR
+    pub fn generation(self) -> GenerationIndex {
+        if self
+            .info_table_pointer_with_tags
+            .get_tag::<GENERATION_TAG>()
+        {
+            GenerationIndex::MINOR
         } else {
-            Generation::MAJOR
+            GenerationIndex::MAJOR
+        }
+    }
+    pub fn set_generation(self, generation: GenerationIndex) -> Self {
+        Self {
+            info_table_pointer_with_tags: self
+                .info_table_pointer_with_tags
+                .set_tag::<GENERATION_TAG>(generation.is_major()),
         }
     }
 }
 
 #[derive(Clone, Copy)]
-pub struct Generation {
+pub struct GenerationIndex {
     is_major: bool,
 }
-impl Generation {
+impl GenerationIndex {
     pub fn as_usize(self) -> usize {
         if self.is_major { 1 } else { 0 }
     }
     pub fn is_major(self) -> bool {
         self.is_major
     }
-    pub const MAJOR: Self = Generation { is_major: true };
-    pub const MINOR: Self = Generation { is_major: false };
+    pub const MAJOR: Self = GenerationIndex { is_major: true };
+    pub const MINOR: Self = GenerationIndex { is_major: false };
 }
 
 #[repr(C)]
@@ -303,7 +407,9 @@ const STATIC_NULL_HEADER: Header = Header {
     // It is okay to keep the tags here at 0.
     // This means that it is not a forward pointer (obviously)
     // and at the minor generation (irrelevant for a static heap object)
-    raw_pointer_with_tags: addr_of!(STATIC_NULL_INFO_TABLE),
+    info_table_pointer_with_tags: TaggedPointer::new_without_assertion(addr_of!(
+        STATIC_NULL_INFO_TABLE
+    )),
 };
 
 #[repr(C)]
@@ -338,7 +444,7 @@ pub unsafe extern "C" fn vega_allocate_boxed(
         libc::malloc(HeapObject::HEADER_SIZE_IN_BYTES + layout.size_in_bytes) as *mut HeapObject
     };
 
-    let header = Header::new(info_table, Generation::MINOR);
+    let header = Header::new(info_table, GenerationIndex::MINOR);
     unsafe {
         *object_pointer = HeapObject { header };
     };
@@ -362,7 +468,7 @@ pub unsafe fn allocate_uninitialized_array(
         unsafe { libc::malloc(size_of::<ArrayHeapObject>() + size_in_bytes as usize) }
             as *mut ArrayHeapObject;
 
-    let header = Header::new(array_info_table, Generation::MINOR);
+    let header = Header::new(array_info_table, GenerationIndex::MINOR);
     unsafe { (*object_pointer).base = HeapObject { header } };
 
     unsafe { (*object_pointer).length = length_in_elements };
