@@ -6,10 +6,12 @@ use roots::{ShadowStackFrame, for_stack_roots};
 
 use crate::{
     either::Either,
+    gc::block::BlockDescriptor,
     heap::{
-        ForwardPointer, GenerationIndex, HeapObject, HeapObjectHandle, InfoTable,
+        ForwardPointer, GenerationIndex, Header, HeapObject, HeapObjectHandle, InfoTable,
         round_up_to_heap_alignment,
     },
+    make_send::UnsafeMakeSend,
     settings::RuntimeSettings,
 };
 
@@ -18,8 +20,8 @@ pub mod block_allocator;
 pub mod roots;
 
 pub struct Generation {
-    used_blocks: Mutex<BlockList>,
-    pending_blocks: Mutex<BlockList>,
+    used_blocks: Mutex<UnsafeMakeSend<BlockList>>,
+    pending_blocks: Mutex<UnsafeMakeSend<BlockList>>,
     max_block_count: usize,
     index: GenerationIndex,
 }
@@ -27,8 +29,8 @@ pub struct Generation {
 impl Generation {
     const fn new(index: GenerationIndex, max_block_count: usize) -> Self {
         Generation {
-            used_blocks: unsafe { Mutex::new(BlockList::new()) },
-            pending_blocks: unsafe { Mutex::new(BlockList::new()) },
+            used_blocks: unsafe { Mutex::new(UnsafeMakeSend::new(BlockList::new())) },
+            pending_blocks: unsafe { Mutex::new(UnsafeMakeSend::new(BlockList::new())) },
             max_block_count,
             index,
         }
@@ -62,12 +64,17 @@ struct GCState {
     target_generation: &'static Generation,
 }
 
+#[allow(static_mut_refs)]
 pub fn collect_garbage(shadow_stack_pointer: *const ShadowStackFrame) {
-    let mut state = GCState {
-        allocation_pointer: todo!(),
-        allocation_limit: todo!(),
-        allocation_block: todo!(),
-        target_generation: todo!(),
+    let mut state = {
+        let allocation_block = block_allocator::allocate_block();
+
+        GCState {
+            allocation_pointer: allocation_block.first_heap_object_pointer(),
+            allocation_limit: allocation_block.allocation_limit(),
+            allocation_block,
+            target_generation: unsafe { &MAJOR_HEAP },
+        }
     };
     for_stack_roots(shadow_stack_pointer, |stack_root| unsafe {
         let from_object = HeapObject::from_data(*stack_root);
@@ -75,7 +82,23 @@ pub fn collect_garbage(shadow_stack_pointer: *const ShadowStackFrame) {
         let relocated_heap_object = evacuate(&mut state, from_object);
         *stack_root = HeapObject::data(relocated_heap_object);
     });
-    todo!("scavenge")
+
+    loop {
+        // TODO: this will be much more interesting once it is multi-threaded
+        let block = unsafe {
+            let mut pending_set_guard = MAJOR_HEAP.pending_blocks.lock().unwrap();
+            let pending_set = pending_set_guard.get_mut();
+            pending_set.pop_back()
+        };
+        match block {
+            None => break, // We are done for now. In the future, we will wait until either all threads are done or more work is being added
+            Some(block) => unsafe {
+                for heap_object in block.iter_heap_objects() {
+                    scavenge(&mut state, heap_object.cast_const());
+                }
+            },
+        }
+    }
 }
 
 /// SAFETY: heap_object must point to a valid heap object or a forward pointer
@@ -208,17 +231,33 @@ fn allocate_for_evacuation(gc_state: &mut GCState, size: usize) -> *mut HeapObje
         } else {
             let filled_block = gc_state.allocation_block;
 
+            // We need to make sure that we clearly mark the end of this block so that
+            // the heap objects can be traversed properly when scavenging
+            if filled_block
+                .allocation_limit()
+                .offset_from(gc_state.allocation_pointer)
+                >= size_of::<Header>() as isize
+            {
+                *(gc_state.allocation_pointer.cast::<Header>()) = Header::end_of_block_header();
+            }
+
             // This block has been filled as much as we can so we move it into the pending set that will be
             // scavenged in a moment
             {
                 let mut pending_blocks = gc_state.target_generation.pending_blocks.lock().unwrap();
-                pending_blocks.append(filled_block);
+                pending_blocks.get_mut().append(filled_block);
             }
             let new_block = block_allocator::allocate_block();
             gc_state.allocation_block = new_block;
             gc_state.allocation_pointer = new_block.first_heap_object_pointer();
             gc_state.allocation_limit = new_block.allocation_limit();
-            todo!()
+
+            // Now that we have a new block, we can unconditionally allocate a heap object from it
+            let pointer = gc_state.allocation_pointer;
+            gc_state.allocation_pointer = gc_state
+                .allocation_pointer
+                .byte_add(round_up_to_heap_alignment(size));
+            pointer
         }
     }
 }

@@ -130,9 +130,7 @@ impl HeapObject {
         match unsafe { HeapObject::as_handle(object) } {
             HeapObjectHandle::Boxed(boxed_handle) => boxed_handle.stride(),
             HeapObjectHandle::Array(array_handle) => array_handle.stride(),
-            HeapObjectHandle::StaticArray(static_array_handle) => {
-                static_array_handle.stride()
-            }
+            HeapObjectHandle::StaticArray(static_array_handle) => static_array_handle.stride(),
             HeapObjectHandle::Null => {
                 // There isn't really a *good* reason to call total_size on something that could be Null but there might eventually
                 // be an edge case where this is better than panicking
@@ -303,6 +301,14 @@ impl Header {
         Self {
             info_table_pointer_with_tags,
         }
+    }
+    pub const fn end_of_block_header() -> Self {
+        Header {
+            info_table_pointer_with_tags: TaggedPointer::new_without_assertion(null()),
+        }
+    }
+    pub fn is_end_of_block_header(&self) -> bool {
+        self.info_table_pointer_with_tags.pointer().is_null()
     }
     pub fn info_table_or_forward_pointer(self) -> Either<&'static InfoTable, ForwardPointer> {
         let actual_pointer = self.info_table_pointer_with_tags.pointer();

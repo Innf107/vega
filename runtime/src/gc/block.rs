@@ -1,6 +1,6 @@
 use std::{debug_assert_matches, ptr::NonNull};
 
-use crate::heap::HeapObject;
+use crate::heap::{Header, HeapObject};
 use std::fmt::Debug;
 
 pub const BLOCK_SIZE: usize = 4096;
@@ -47,7 +47,18 @@ impl BlockPointer {
         }
     }
 
-    pub fn allocation_limit(self) -> *const HeapObject {
+    // Iterate over the heap objects in this block pointer.
+    // This will only work correctly if the block is either completely filled
+    // (such that there wouldn't be any space left for another header)
+    // or ends in a Descriptor::end_of_block_header()
+    pub unsafe fn iter_heap_objects(self) -> HeapObjectIterator {
+        HeapObjectIterator {
+            current: self.first_heap_object_pointer(),
+            limit: self.allocation_limit(),
+        }
+    }
+
+    pub fn allocation_limit(self) -> *mut HeapObject {
         unsafe { self.contents.byte_add(BLOCK_SIZE).as_ptr() as *mut HeapObject }
     }
 
@@ -73,6 +84,28 @@ impl BlockPointer {
 impl Debug for BlockPointer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.contents.fmt(f)
+    }
+}
+
+pub struct HeapObjectIterator {
+    current: *mut HeapObject,
+    limit: *mut HeapObject,
+}
+impl Iterator for HeapObjectIterator {
+    type Item = *mut HeapObject;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        unsafe {
+            if self.limit.byte_offset_from(self.current) < (size_of::<Header>() as isize) {
+                return None;
+            } else if HeapObject::header(self.current).is_end_of_block_header() {
+                return None;
+            } else {
+                let heap_object: *mut HeapObject = self.current;
+                self.current = self.current.byte_add(HeapObject::total_stride(heap_object));
+                Some(heap_object)
+            }
+        }
     }
 }
 
