@@ -65,7 +65,7 @@ library:
   - llvm-shadow-stack/VegaShadowStackPlugin.cpp
 
 executables:
-  vega:
+  vega-exe:
     main:                Main.hs
     source-dirs:         app
     ghc-options:

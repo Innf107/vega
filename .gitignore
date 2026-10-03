@@ -1,3 +1,13 @@
 .stack-work/
 .build/
 *~
+.buckconfig
+BUCK
+BUCK.cabal.bzl
+PACKAGE
+buck-out
+buck2
+cabal-buck2
+cabal.project
+dist-newstyle
+third-party

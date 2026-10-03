@@ -144,7 +144,7 @@ library
     , yaml
   default-language: GHC2024
 
-executable vega
+executable vega-exe
   main-is: Main.hs
   other-modules:
       ShadowStackDependency
