@@ -1,5 +1,4 @@
 use std::{
-    debug_assert_matches,
     io::Error,
     ptr::{NonNull, null_mut},
     sync::Mutex,
@@ -9,7 +8,7 @@ use libc::{MAP_ANONYMOUS, PROT_READ, PROT_WRITE, mmap};
 
 use crate::{
     gc::block::{BLOCK_SIZE, BlockList, BlockPointer},
-    heap::HeapObject,
+    heap::{Header, HeapObject},
     make_send::UnsafeMakeSend,
     settings::settings,
 };
@@ -52,6 +51,7 @@ pub fn allocate_block() -> BlockPointer {
             let underlying_memory =
                 allocate_page_aligned_memory(settings().block_allocation_batch_size * BLOCK_SIZE);
 
+            let mut new_block_list = BlockList::new();
             for i in 0..settings().block_allocation_batch_size {
                 let pointer_to_start_of_block =
                     unsafe { underlying_memory.byte_add(i * BLOCK_SIZE) };
@@ -59,16 +59,31 @@ pub fn allocate_block() -> BlockPointer {
                     contents: pointer_to_start_of_block,
                 };
 
-                
-                todo!()
+                unsafe {
+                    HeapObject::set_header_unsynchronized(
+                        block.first_heap_object_pointer(),
+                        Header::end_of_block_header(),
+                    );
+                }
+
+                new_block_list.append(block);
             }
-            todo!()
+
+            free_blocks.concat(new_block_list);
+
+            free_blocks
+                .pop_back()
+                .expect("free_blocks is empty after allocating new blocks from the OS")
         }
     }
 }
 
-pub fn allocate_block_list(size: usize) -> BlockList {
-    todo!()
-}
+// SAFETY: The freed block must not already be free
+// and there cannot be any racing accesses to its BlockList
+// while this function is called.
+pub unsafe fn free_block(block: BlockPointer) {
+    block.unlink();
 
-pub unsafe fn free_block(block: BlockPointer) {}
+    let mut free_blocks_guard = GLOBAL_BLOCK_ALLOCATOR.free_blocks.lock().unwrap();
+    unsafe { free_blocks_guard.get_mut().append(block) };
+}

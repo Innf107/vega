@@ -1,12 +1,9 @@
-use crate::{
-    either::Either,
-    heap::{HeapObject, HeapObjectHandle},
-};
-use std::{
-    arch::asm,
-    io::{self, Write},
-    ptr::null,
-};
+use crate::
+    heap::HeapObject
+;
+use std::
+    ptr::null
+;
 
 #[repr(C)]
 pub struct ShadowStackFrame {

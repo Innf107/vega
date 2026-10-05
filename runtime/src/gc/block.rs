@@ -186,4 +186,19 @@ impl BlockList {
             }
         }
     }
+
+    pub fn concat(&mut self, mut other: BlockList) {
+        match &mut other.contents {
+            None => {}
+            Some(other_contents) => match &mut self.contents {
+                None => *self = other,
+                Some(self_contents) => unsafe {
+                    (*self_contents.last.descriptor()).next = Some(other_contents.first);
+                    (*other_contents.first.descriptor()).previous = Some(self_contents.last);
+
+                    self_contents.last = other_contents.last;
+                },
+            },
+        }
+    }
 }

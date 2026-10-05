@@ -1,10 +1,19 @@
 use std::{
-    debug_assert_matches,
     ffi::c_void,
+    hint::cold_path,
     ptr::{addr_of, null, null_mut},
 };
 
-use crate::{either::Either, gc::roots::ShadowStackFrame, tagged_pointer::TaggedPointer};
+use crate::{
+    either::Either,
+    gc::{
+        Generation, NURSERY,
+        block::{BLOCK_SIZE, BlockPointer},
+        block_allocator,
+    },
+    tagged_pointer::TaggedPointer,
+    thread_state::ThreadState,
+};
 use std::fmt::Debug;
 
 pub const HEAP_ALIGNMENT: usize = 8;
@@ -372,7 +381,7 @@ pub union Layout {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BoxedLayout {
-    /// The full size of the object data including boxed pointers
+    /// The full size of the object data including boxed pointers (but not including the header)
     pub size_in_bytes: usize,
     /// The number of boxed pointers in the layout. These are always the first elements
     pub boxed_count: usize,
@@ -433,6 +442,82 @@ impl ArrayHeapObject {
     }
 }
 
+// Finish the current block and allocate a new one from the block allocator.
+// This is shared between GC and mutator allocation.
+// The arguments should typically be pointers to the allocation pointer and limit of their respective state objects.
+#[inline]
+pub fn finish_block(
+    allocation_pointer: &mut *mut HeapObject,
+    allocation_limit: &mut *mut HeapObject,
+    target_generation: &'static Generation,
+) {
+    unsafe {
+        // TOOD: i don't love the duplication between this and gc::allocate_for_evacuation
+        let filled_block = BlockPointer::from_heap_object_pointer(*allocation_pointer);
+        debug_assert!(filled_block.allocation_limit() == *allocation_limit);
+        debug_assert!(
+            filled_block.first_heap_object_pointer() <= *allocation_pointer
+                && allocation_pointer <= allocation_limit
+        );
+
+        // We need to make sure that we clearly mark the end of this block so that
+        // the heap objects can be traversed properly when scavenging
+        if filled_block
+            .allocation_limit()
+            .offset_from(*allocation_pointer)
+            >= size_of::<Header>() as isize
+        {
+            HeapObject::set_header_unsynchronized(
+                *allocation_pointer,
+                Header::end_of_block_header(),
+            );
+        }
+
+        {
+            let mut pending_blocks = target_generation.pending_blocks.lock().unwrap();
+            pending_blocks.get_mut().append(filled_block);
+        }
+
+        let new_block = block_allocator::allocate_block();
+
+        *allocation_pointer = new_block.first_heap_object_pointer();
+        *allocation_limit = new_block.allocation_limit();
+    }
+}
+
+// Allocate 'byte_count' bytes in the current allocation block.
+// This does *not* include the size of a heap object header
+// and the returned memory is not initialized in any way.
+#[inline]
+#[allow(static_mut_refs)]
+pub fn allocate_generic(thread_state: &mut ThreadState, byte_count: usize) -> *mut HeapObject {
+    let remaining_size_in_block = unsafe {
+        thread_state
+            .allocation_limit
+            .offset_from(thread_state.allocation_pointer)
+    };
+    if remaining_size_in_block < byte_count as isize {
+        cold_path();
+        finish_block(
+            &mut thread_state.allocation_pointer,
+            &mut thread_state.allocation_limit,
+            unsafe { &NURSERY },
+        );
+    }
+    debug_assert!(
+        unsafe {
+            thread_state
+                .allocation_limit
+                .offset_from(thread_state.allocation_pointer)
+        } >= byte_count as isize
+    );
+
+    let pointer = thread_state.allocation_pointer;
+    thread_state.allocation_pointer =
+        unsafe { thread_state.allocation_pointer.byte_add(byte_count) };
+    pointer
+}
+
 /// Allocate a box for the given info table and return a pointer to the (uninitialized) *data*.
 /// To access the heap object header, use [HeapObject::from_data].
 // TODO: eventually we will want to inline this directly into the generated code but
@@ -440,15 +525,25 @@ impl ArrayHeapObject {
 // SAFETY: this assumes that info_table points to a boxed heap object info table
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vega_allocate_boxed(
-    shadow_stack_pointer: *const ShadowStackFrame,
+    thread_state: &mut ThreadState,
     info_table: &'static InfoTable,
 ) -> *mut u8 {
     // vega_debug_stack_roots(shadow_stack_pointer);
     let layout = unsafe { info_table.layout.boxed };
 
-    let object_pointer = unsafe {
-        libc::malloc(HeapObject::HEADER_SIZE_IN_BYTES + layout.size_in_bytes) as *mut HeapObject
-    };
+    // TODO: do something different for large objects
+    // There are two aspects to this: If an object is too large to fit in a block,
+    // we need to put it in some sort of special large-object space.
+    // But if it only takes up *most* of a block, we should give it its own block
+    // (with a special info table so the GC only re-links the block without copying anything)
+    // and then keep using the current block for other allocations
+
+    assert!(HeapObject::HEADER_SIZE_IN_BYTES + layout.size_in_bytes < BLOCK_SIZE);
+
+    let object_pointer = allocate_generic(
+        thread_state,
+        HeapObject::HEADER_SIZE_IN_BYTES + layout.size_in_bytes,
+    );
 
     let header = Header::new(info_table, GenerationIndex::MINOR);
     unsafe {
@@ -463,16 +558,17 @@ pub unsafe extern "C" fn vega_allocate_boxed(
 ///
 /// If you need an array that can survive across a garbage collection, try [allocate_zero_initialized_array]
 pub unsafe fn allocate_uninitialized_array(
-    shadow_stack_pointer: *const ShadowStackFrame,
+    thread_state: &mut ThreadState,
     array_info_table: &'static InfoTable,
     length_in_elements: usize,
 ) -> *mut ArrayHeapObject {
     let stride_in_bytes = unsafe { (*array_info_table).layout.array.element_stride_in_bytes };
     let size_in_bytes = length_in_elements * stride_in_bytes;
 
-    let object_pointer =
-        unsafe { libc::malloc(size_of::<ArrayHeapObject>() + size_in_bytes as usize) }
-            as *mut ArrayHeapObject;
+    let object_pointer = allocate_generic(
+        thread_state,
+        size_of::<ArrayHeapObject>() + size_in_bytes as usize,
+    ) as *mut ArrayHeapObject;
 
     let header = Header::new(array_info_table, GenerationIndex::MINOR);
     unsafe { (*object_pointer).base = HeapObject { header } };
@@ -484,12 +580,12 @@ pub unsafe fn allocate_uninitialized_array(
 /// See [allocate_uninitialized_array]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vega_allocate_uninitialized_array(
-    shadow_stack_pointer: *const ShadowStackFrame,
+    thread_state: &mut ThreadState,
     array_info_table: &'static InfoTable,
     size_in_elements: usize,
 ) -> *mut u8 {
     let object_pointer = unsafe {
-        allocate_uninitialized_array(shadow_stack_pointer, array_info_table, size_in_elements)
+        allocate_uninitialized_array(thread_state, array_info_table, size_in_elements)
     };
     HeapObject::data(ArrayHeapObject::as_base(object_pointer))
 }
@@ -501,12 +597,12 @@ pub unsafe extern "C" fn vega_allocate_uninitialized_array(
 ///
 /// Also, this assumes that array_info_table points to a valid array info table (with object_type = Array)
 pub unsafe fn allocate_zero_initialized_array(
-    shadow_stack_pointer: *const ShadowStackFrame,
+    thread_state: &mut ThreadState,
     array_info_table: &'static InfoTable,
     size_in_elements: usize,
 ) -> *mut ArrayHeapObject {
     let array = unsafe {
-        allocate_uninitialized_array(shadow_stack_pointer, array_info_table, size_in_elements)
+        allocate_uninitialized_array(thread_state, array_info_table, size_in_elements)
     };
     let size_in_bytes =
         size_in_elements * unsafe { (*array_info_table).layout.array.element_stride_in_bytes };
@@ -523,12 +619,12 @@ pub unsafe fn allocate_zero_initialized_array(
 /// See [allocate_zero_initialized_array]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn vega_allocate_zero_initialized_array(
-    shadow_stack_pointer: *const ShadowStackFrame,
+    thread_state: &mut ThreadState,
     array_info_table: &'static InfoTable,
     size_in_elements: usize,
 ) -> *mut u8 {
     let array = unsafe {
-        allocate_zero_initialized_array(shadow_stack_pointer, array_info_table, size_in_elements)
+        allocate_zero_initialized_array(thread_state, array_info_table, size_in_elements)
     };
     HeapObject::data(ArrayHeapObject::as_base(array))
 }
