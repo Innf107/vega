@@ -8,6 +8,7 @@ options {
     "--debug-runtime" as debugRuntime: "Compile the runtime in debug instead of release mode"
     "--optimized-compiler" as optimized: "Build the vega compiler with optimizations. This may take longer to build but can drastically improve the time spent actually running tests."
     "--optimization-level" (*) as rawOptimizationLevels: "The optimization levels to run. Can be specified multiple times. If omitted, this will use 3. `type: compile` and `type: error` tests will always use optimization level 0."
+    "--buck2" as buck2: "Use buck2 to build the compiler. The buck2 setup needs to be set up manually using cabal-buck2."
 }
 
 module List = import("@std/list.pls")
@@ -71,16 +72,24 @@ if debugRuntime then {
 }
 chdir(testdir)
 
-if optimized then {
-    !stack "build"
-    ()
+let vega = if buck2 then {
+    if optimized then {
+        !buck2 "build" "-mopt" "//:vega-exe"
+        !readlink "-f" "../${!buck2 "targets" "-mopt" "--show-json-output" "//:vega-exe" | jq "-r" '.["root//:vega-exe"]'}"
+    } else {
+        !buck2 "build" "//:vega-exe"
+        !readlink "-f" "../${!buck2 "targets" "--show-json-output" "//:vega-exe" | jq "-r" '.["root//:vega-exe"]'}"
+    }
 } else {
-    !stack "build" "--fast"
-    ()
+    if optimized then {
+        !stack "build"
+        ()
+    } else {
+        !stack "build" "--fast"
+        ()
+    }
+    !readlink "-f" "../${!stack "path" "--dist-dir"}/build/vega-exe/vega-exe"
 }
-
-
-let vega = !readlink "-f" "../${!stack "path" "--dist-dir"}/build/vega/vega"
 
 let compileTests = lines(!find "categories" "-name" "*.vega")
 
