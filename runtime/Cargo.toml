@@ -7,4 +7,5 @@ edition = "2024"
 crate-type = ["staticlib"]
 
 [dependencies]
+argh = { version = "0.1.19", features = ["help"], default-features = false }
 libc = "0.2.183"
