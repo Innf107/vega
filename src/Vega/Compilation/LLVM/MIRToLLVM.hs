@@ -23,7 +23,7 @@ import Data.Vector.Strict qualified as Strict hiding ((!))
 import Effectful (Eff, IOE, (:>))
 import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import GHC.Records (HasField, getField)
-import GHC.TypeLits (Symbol)
+import GHC.TypeLits (Symbol, symbolVal, KnownSymbol)
 import LLVM.Core qualified as LLVM
 import LLVM.Core.Context qualified as LLVM
 import LLVM.Core.Phi qualified as LLVM.Phi
@@ -80,8 +80,8 @@ data FunctionEnv = MkFunctionEnv
     { sretVariable :: Maybe (LLVM.Value, Layout)
     }
 
-shadowStackPointer :: (?function :: LLVM.Value, ?functionEnv :: FunctionEnv) => LLVM.Value
-shadowStackPointer = case ?functionEnv.sretVariable of
+threadStatePointer :: (?function :: LLVM.Value, ?functionEnv :: FunctionEnv) => LLVM.Value
+threadStatePointer = case ?functionEnv.sretVariable of
     Nothing -> LLVM.getParam ?function 0
     Just{} -> LLVM.getParam ?function 1
 
@@ -115,8 +115,12 @@ compile program module_ = do
                     }
         evalState initialState $ compileDeclaration declaration
 
-addMainFunction :: (?context :: LLVM.Context, IOE :> es) => Vega.GlobalName -> LLVM.Module -> Eff es ()
+addMainFunction :: (?context :: LLVM.Context, IOE :> es) 
+    => Vega.GlobalName 
+        -> LLVM.Module -> Eff es ()
 addMainFunction entryPoint module_ = do
+    runtimeDefinitions <- declareRuntimeDefinitions module_
+    let ?runtimeDefinitions = runtimeDefinitions
     main <- LLVM.addFunction module_ "main" (LLVM.functionType [] LLVM.int32Type False)
     LLVM.setFunctionCallConv main LLVM.ccallConv
 
@@ -132,16 +136,21 @@ addMainFunction entryPoint module_ = do
         LLVM.getNamedFunction module_ (renderLLVMName entryPoint) >>= \case
             Nothing -> panic $ "Entry point not found: " <> Vega.prettyGlobal Vega.VarKind entryPoint
             Just entryPointFunction -> pure entryPointFunction
-    -- The initial shadow stack pointer is always null so that the runtime knows that it needs to stop here
+
+    threadStatePointer <- buildNonSafepointRuntimeCall builder "vega_create_thread" [] "thread-state"
+
     callInstruction <-
         LLVMBuilder.buildCallWithOperandBundles
             builder
             (LLVM.functionType [LLVM.pointerType] LLVM.voidType False)
             entryPointFunction
-            [LLVM.constNullPointer]
+            [threadStatePointer]
             [("gc-transition", [])]
             ""
     LLVM.setInstructionCallConv callInstruction vegaCallingConvention
+
+    _ <- buildNonSafepointRuntimeCall builder "vega_destroy_thread" [threadStatePointer] ""
+
     _ <- LLVMBuilder.buildRet builder (LLVM.constInt LLVM.int32Type 0 False)
     pure ()
 
@@ -152,12 +161,12 @@ functionLLVMType ::
     Eff es (AttributeFunctionType, "sretParameter" ? Maybe (Int, Layout))
 functionLLVMType parameters returnLayout = do
     let baseParameterTypes = foldMap Layout.llvmParameters parameters
-    let shadowStackPointer = (LLVM.pointerType, [])
+    let threadStatePointer = (LLVM.pointerType, [])
 
     (parameterTypes, returnType, usesSRet) <- case Layout.returnConvention returnLayout of
-        Layout.Void -> pure (shadowStackPointer :<| baseParameterTypes, LLVM.voidType, False)
-        Layout.SingleBoxed -> pure (shadowStackPointer :<| baseParameterTypes, Layout.boxedPointerType, False)
-        Layout.SingleScalar scalar -> pure (shadowStackPointer :<| baseParameterTypes, scalar, False)
+        Layout.Void -> pure (threadStatePointer :<| baseParameterTypes, LLVM.voidType, False)
+        Layout.SingleBoxed -> pure (threadStatePointer :<| baseParameterTypes, Layout.boxedPointerType, False)
+        Layout.SingleScalar scalar -> pure (threadStatePointer :<| baseParameterTypes, scalar, False)
         Layout.SRetPointer -> do
             let returnLLVMType = case Layout.atRestLLVMType returnLayout of
                     Nothing -> panic "Trying to return zero-sized layout via an sret pointer"
@@ -167,14 +176,14 @@ functionLLVMType parameters returnLayout = do
             alignmentAttribute <- alignAttribute (Layout.alignment returnLayout)
             pure
                 ( (LLVM.pointerType, [sretAttribute, alignmentAttribute])
-                    :<| shadowStackPointer
+                    :<| threadStatePointer
                     :<| baseParameterTypes
                 , LLVM.voidType
                 , True
                 )
         Layout.ScalarStruct -> do
             assert (Size.inBits (Layout.unboxedSize returnLayout) == 0)
-            pure (shadowStackPointer :<| baseParameterTypes, Layout.scalarStructType returnLayout, False)
+            pure (threadStatePointer :<| baseParameterTypes, Layout.scalarStructType returnLayout, False)
 
     -- The sret parameter is always the first one
     let sretParameter = if usesSRet then Just (0, returnLayout) else Nothing
@@ -258,7 +267,7 @@ forwardDeclareDeclaration = \case
         -- future.
         let llvmParameterCount = length (AttributeFunctionType.parametersWithAttributes internalFunctionType)
         let forwardedParameters = fromList $ fmap (LLVM.getParam wrapperFunction) $ case Layout.returnConvention returnLayout of
-                -- We don't want to forward the shadow stack pointer
+                -- We don't want to forward the thread state pointer
                 Layout.SRetPointer -> 0 : [2 .. llvmParameterCount - 1]
                 _ -> [1 .. llvmParameterCount - 1]
 
@@ -340,13 +349,13 @@ compileDeclaration = \case
                         addParameterMappings (currentIndex + Layout.parameterCount layout) rest
 
             case sretParameter of
-                Nothing -> LLVM.setValueName (LLVM.getParam function 0) "shadow-stack"
+                Nothing -> LLVM.setValueName (LLVM.getParam function 0) "thread-state"
                 Just{} -> do
                     LLVM.setValueName (LLVM.getParam function 0) "sret"
-                    LLVM.setValueName (LLVM.getParam function 1) "shadow-stack"
+                    LLVM.setValueName (LLVM.getParam function 1) "thread-state"
 
             -- The first parameter may or may not be an sret pointer but either way we always need to
-            -- skip the shadow stack pointer, which is either the first or second parameter depending on whether
+            -- skip the thread state pointer, which is either the first or second parameter depending on whether
             -- there is an sret pointer
             let initialIndex = case sretParameter of
                     Nothing -> 1
@@ -659,7 +668,7 @@ compileNonTailCall ::
     Seq CompoundValue ->
     Eff es ()
 compileNonTailCall builder var returnLayout functionType function argumentCompounds = do
-    let argumentValues = viaList $ shadowStackPointer :<| foldMap Layout.compoundAsFunctionArguments argumentCompounds
+    let argumentValues = viaList $ threadStatePointer :<| foldMap Layout.compoundAsFunctionArguments argumentCompounds
     callInstr <- case Layout.returnConvention returnLayout of
         Layout.Void -> do
             insertVarMapping var Layout.unitCompoundValue returnLayout
@@ -700,7 +709,7 @@ compileTailCall ::
     Seq CompoundValue ->
     Eff es ()
 compileTailCall builder returnLayout functionType function argumentCompounds = do
-    let argumentValues = viaList $ shadowStackPointer :<| foldMap Layout.compoundAsFunctionArguments argumentCompounds
+    let argumentValues = viaList $ threadStatePointer :<| foldMap Layout.compoundAsFunctionArguments argumentCompounds
     callInstr <- case Layout.returnConvention returnLayout of
         Layout.Void -> do
             callInstr <- buildCallWithAttributes builder functionType function argumentValues ""
@@ -943,7 +952,7 @@ outOfLineBuiltin builder functionName arguments returnRepresentation varName = d
 
     let fullArguments = case isSafepoint of
             False -> viaList arguments
-            True -> viaList (shadowStackPointer :<| arguments)
+            True -> viaList (threadStatePointer :<| arguments)
 
     buildCCCCall builder type_ value fullArguments returnLayout varName
 
@@ -1097,7 +1106,23 @@ buildRuntimeCall builder name arguments varName = do
     let MkDefinition{value, type_, isSafepoint} = getField @name ?runtimeDefinitions
     case isSafepoint of
         False -> buildCallWithAttributes builder type_ value arguments varName
-        True -> buildCallWithAttributes builder type_ value ([shadowStackPointer] <> arguments) varName
+        True -> buildCallWithAttributes builder type_ value ([threadStatePointer] <> arguments) varName
+
+-- | This is like 'buildRuntimeCall' but requires fewer constraints and in turn does not support calls to
+-- runtime functions that are safe points and would need to pass the thread state pointer
+buildNonSafepointRuntimeCall
+    :: (IOE :> es, ?runtimeDefinitions :: RuntimeDefinitions, HasCallStack) =>
+    LLVMBuilder.Builder ->
+    forall (name :: Symbol) ->
+    (HasField name RuntimeDefinitions Runtime.Definition, KnownSymbol name) =>
+    Storable.Vector LLVM.Value ->
+    Text ->
+    Eff es LLVM.Value
+buildNonSafepointRuntimeCall builder name arguments varName = do
+    let MkDefinition{value, type_, isSafepoint} = getField @name ?runtimeDefinitions
+    case isSafepoint of
+        False -> buildCallWithAttributes builder type_ value arguments varName
+        True -> panic ("buildNonSafepointRuntimeCall called on runtime call safepoint " <> fromString (symbolVal (Proxy @name)))
 
 accessLocation :: (HasCallStack, Compile es) => LLVMBuilder.Builder -> CompoundValue -> Layout -> Layout.ElementLocation -> Text -> Eff es CompoundValue
 accessLocation builder value layout location varName = case location of

@@ -10,7 +10,7 @@ data Definition = MkDefinition
     { value :: LLVM.Value
     , type_ :: AttributeFunctionType
     , -- Functions that are safe points are special in two ways
-      -- 1) they are passed the shadow stack pointer
+      -- 1) they are passed the thread state pointer
       -- 2) they are marked with the (fake) vegagc gc strategy so that the
       -- shadow stack pass preserves all pointers that are live across it.
       --
@@ -26,11 +26,15 @@ data RuntimeDefinitions = MkRuntimeDefinitions
     , vega_debug_int :: Definition
     , vega_debug_stack_roots :: Definition
     , vega_errno :: Definition
+    , vega_create_thread :: Definition
+    , vega_destroy_thread :: Definition
     }
 
 defineFunction :: (MonadIO io) => LLVM.Module -> Text -> Bool -> AttributeFunctionType -> io Definition
 defineFunction module_ name isSafepoint type_ = do
-    value <- addFunctionWithAttributes module_ name type_
+    value <- LLVM.getNamedFunction module_ name >>= \case
+        Nothing -> addFunctionWithAttributes module_ name type_
+        Just function_ -> pure function_
     when isSafepoint do
         LLVM.setGC value "vegagc"
     pure (MkDefinition{value, type_, isSafepoint})
@@ -49,6 +53,10 @@ declareRuntimeDefinitions module_ = do
 
     vega_errno <- defineFunction module_ "vega_errno" False $ attributeFunctionType [] (LLVM.int32Type, [])
 
+    vega_create_thread <- defineFunction module_ "vega_create_thread_state" False $ attributeFunctionType [] (LLVM.pointerType, [])
+
+    vega_destroy_thread <- defineFunction module_ "vega_destroy_thread" False $ attributeFunctionType [(LLVM.pointerType, [])] (LLVM.voidType, [])
+
     pure
         ( MkRuntimeDefinitions
             { vega_allocate_boxed
@@ -57,5 +65,7 @@ declareRuntimeDefinitions module_ = do
             , vega_debug_int
             , vega_debug_stack_roots
             , vega_errno
+            , vega_create_thread
+            , vega_destroy_thread
             }
         )
