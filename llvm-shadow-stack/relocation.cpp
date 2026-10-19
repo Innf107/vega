@@ -1,6 +1,6 @@
+#include "relocation.h"
 #include "frame_allocation.h"
 #include "pointer_ids.h"
-#include "relocation.h"
 #include <llvm/ADT/DepthFirstIterator.h>
 
 using namespace llvm;
@@ -86,7 +86,7 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
 
     auto &context = function.getContext();
 
-    const auto previousShadowStackPointer =
+    const auto threadStatePointer =
         function.hasParamAttribute(0, Attribute::AttrKind::StructRet)
             ? function.getArg(1)
             : function.getArg(0);
@@ -108,14 +108,15 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
     auto *shadowStackStruct =
         builder.CreateAlloca(frameStructType, nullptr, "shadow-stack-frame");
 
-    // We need to do this before saving the previous pointer, since otherwise
-    // that one would be replaced and create a cyclical shadow stack frame
-    previousShadowStackPointer->replaceAllUsesWith(shadowStackStruct);
+    // The thread state contains the shadow stack at offset 0
+    auto *previousShadowStackPointer =
+        builder.CreateLoad(PointerType::get(context, 0), threadStatePointer,
+                           "previous-shadow-stack-frame");
 
-    auto *pointerToPrevious = builder.CreateInBoundsGEP(
-        frameStructType, shadowStackStruct,
-        {builder.getInt32(0), builder.getInt32(0)}, "previous-slot");
-    builder.CreateStore(previousShadowStackPointer, pointerToPrevious);
+    // the previous pointer is stored at offset 0 in the shadow stack frame
+    builder.CreateStore(previousShadowStackPointer, shadowStackStruct);
+
+    builder.CreateStore(shadowStackStruct, threadStatePointer);
 
     auto *pointerToSize = builder.CreateInBoundsGEP(
         frameStructType, shadowStackStruct,

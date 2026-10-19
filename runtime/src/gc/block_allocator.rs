@@ -25,7 +25,7 @@ fn allocate_page_aligned_memory(size_in_bytes: usize) -> NonNull<u8> {
         )
     };
     if memory.addr() as isize == -1 {
-        panic!("memory allocation failed: {}", Error::last_os_error());
+        panic!("memory allocation of size {size_in_bytes} failed: {}", Error::last_os_error());
     }
     unsafe { NonNull::new_unchecked(memory as *mut u8) }
 }
