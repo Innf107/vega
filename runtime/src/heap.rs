@@ -12,7 +12,7 @@ use crate::{
         block_allocator,
     },
     tagged_pointer::TaggedPointer,
-    thread_state::ThreadState,
+    thread::ThreadState,
 };
 use std::fmt::Debug;
 

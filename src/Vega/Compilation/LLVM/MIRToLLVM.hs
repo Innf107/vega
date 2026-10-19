@@ -504,7 +504,9 @@ compileInstruction builder = \case
         let tagValue = LLVM.constInt (LLVM.intType (Size.inBits tagSize)) (fromIntegral tag) False
         fillLocation builder valueBuilder tagLocation tagValue
 
+        trace Debug (pretty var <> ": " <> Pretty.plain (Layout.identifier payloadLayout) Pretty.<+> Pretty.keyword "->" Pretty.<+> Pretty.plain (Layout.identifier layout))
         Layout.forContainedElementsAtSumConstructorIndex tag layout \path targetLocation -> do
+            trace Debug $ "element: " <> show path <> " ~> " <> show targetLocation
             let sourceLocation = accessElementByPath path payloadLayout
             copyElement builder sourceLocation payload targetLocation layout valueBuilder
 
@@ -1143,7 +1145,7 @@ accessElementByPath fullPath layout = case Layout.details layout of
         _ -> mismatched "sum"
 
 copyElement ::
-    (STE s :> es, Compile es) =>
+    (HasCallStack, STE s :> es, Compile es) =>
     LLVMBuilder.Builder ->
     Layout.ElementLocation ->
     Layout.CompoundValue ->

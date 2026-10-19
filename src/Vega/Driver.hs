@@ -336,8 +336,6 @@ compileBackend = do
             LLVM.withContext $ LLVM.withModule "idkwhattoputhereyet" \llvmModule -> do
                 MIRToLLVM.compile monomorphizedMIRProgram llvmModule
                 MIRToLLVM.addMainFunction entryPoint llvmModule
-                -- TODO: emit unoptimized LLVM here
-                -- debugEmit llvmModule
 
                 LLVM.initializeNativeTarget >>= \case
                     False -> pure ()
