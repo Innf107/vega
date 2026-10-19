@@ -63,6 +63,12 @@ library:
   source-dirs: src
   cxx-sources:
   - llvm-shadow-stack/VegaShadowStackPlugin.cpp
+  - llvm-shadow-stack/frame_allocation.cpp
+  - llvm-shadow-stack/intervals.cpp
+  - llvm-shadow-stack/liveness.cpp
+  - llvm-shadow-stack/pointer_ids.cpp
+  - llvm-shadow-stack/relocation.cpp
+  - llvm-shadow-stack/schedule.cpp
 
 executables:
   vega-exe:

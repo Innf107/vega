@@ -1,9 +1,10 @@
 module Vega.ShadowStackDependency.TH (addShadowStackDependency) where
 
-import Relude (pure)
+import Relude
 
 import Language.Haskell.TH qualified as TH
 import Language.Haskell.TH.Syntax qualified as TH
+import System.Directory (getDirectoryContents)
 
 {- | Even though we compile the plugin using stack, stack does not
 re-compile the project when its source file changes.
@@ -20,5 +21,7 @@ version for some reason (this might be a bug).
 -}
 addShadowStackDependency :: TH.DecsQ
 addShadowStackDependency = do
-    TH.addDependentFile "llvm-shadow-stack/VegaShadowStackPlugin.cpp"
+    files <- liftIO $ getDirectoryContents "llvm-shadow-stack"
+    for_ files \file -> when (file /= "." && file /= "..") do
+        TH.addDependentFile ("llvm-shadow-stack/" <> file)
     pure []
