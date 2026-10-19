@@ -1,4 +1,7 @@
-use std::{hint::cold_path, sync::Mutex};
+use std::{
+    hint::cold_path,
+    sync::{Mutex, atomic::AtomicUsize},
+};
 
 use block::{BLOCK_SIZE, BlockList};
 use libc::{_SC_PAGESIZE, sysconf};
@@ -6,7 +9,8 @@ use roots::{ShadowStackFrame, for_stack_roots};
 
 use crate::{
     heap::{
-        ForwardPointer, GenerationIndex, HeapObject, HeapObjectHandle, finish_block, round_up_to_heap_alignment,
+        ForwardPointer, GenerationIndex, HeapObject, HeapObjectHandle, finish_block,
+        round_up_to_heap_alignment,
     },
     make_send::UnsafeMakeSend,
     settings::RuntimeSettings,

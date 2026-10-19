@@ -128,7 +128,7 @@ impl NonEmptyBlockList {
 
             (*previous.descriptor()).next = Some(block);
 
-            self.last = previous;
+            self.last = block;
         }
         self.length_in_blocks += 1;
     }
@@ -178,6 +178,8 @@ impl BlockList {
 
                             (*previous.descriptor()).next = None;
                             (*last_block.descriptor()).previous = None;
+
+                            non_empty_block_list.last = previous;
                         }
 
                         Some(last_block)

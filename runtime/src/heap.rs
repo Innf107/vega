@@ -19,14 +19,11 @@ use std::fmt::Debug;
 pub const HEAP_ALIGNMENT: usize = 8;
 
 pub fn round_up_to_heap_alignment(value: usize) -> usize {
-    let aligned_down = value & !(HEAP_ALIGNMENT - 1);
-    if value == aligned_down {
-        aligned_down
-    } else {
-        aligned_down + HEAP_ALIGNMENT
-    }
+    (value + (HEAP_ALIGNMENT - 1)) & (0usize.wrapping_sub(HEAP_ALIGNMENT))
 }
-
+pub fn round_pointer_up_to_heap_alignment<T>(pointer: *mut T) -> *mut T {
+    unsafe { pointer.byte_add(pointer.cast::<u8>().align_offset(HEAP_ALIGNMENT)) }
+}
 /// The type of Vega heap objects.
 /// The fields of this type only contain the heap header
 #[repr(C)]
@@ -513,8 +510,11 @@ pub fn allocate_generic(thread_state: &mut ThreadState, byte_count: usize) -> *m
     );
 
     let pointer = thread_state.allocation_pointer;
-    thread_state.allocation_pointer =
-        unsafe { thread_state.allocation_pointer.byte_add(byte_count) };
+    unsafe {
+        thread_state.allocation_pointer = round_pointer_up_to_heap_alignment(
+            thread_state.allocation_pointer.byte_add(byte_count),
+        );
+    };
     pointer
 }
 
@@ -584,9 +584,8 @@ pub unsafe extern "C" fn vega_allocate_uninitialized_array(
     array_info_table: &'static InfoTable,
     size_in_elements: usize,
 ) -> *mut u8 {
-    let object_pointer = unsafe {
-        allocate_uninitialized_array(thread_state, array_info_table, size_in_elements)
-    };
+    let object_pointer =
+        unsafe { allocate_uninitialized_array(thread_state, array_info_table, size_in_elements) };
     HeapObject::data(ArrayHeapObject::as_base(object_pointer))
 }
 
@@ -601,9 +600,8 @@ pub unsafe fn allocate_zero_initialized_array(
     array_info_table: &'static InfoTable,
     size_in_elements: usize,
 ) -> *mut ArrayHeapObject {
-    let array = unsafe {
-        allocate_uninitialized_array(thread_state, array_info_table, size_in_elements)
-    };
+    let array =
+        unsafe { allocate_uninitialized_array(thread_state, array_info_table, size_in_elements) };
     let size_in_bytes =
         size_in_elements * unsafe { (*array_info_table).layout.array.element_stride_in_bytes };
     unsafe {

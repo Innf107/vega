@@ -4,7 +4,7 @@ use std::{
     sync::Mutex,
 };
 
-use libc::{MAP_ANONYMOUS, PROT_READ, PROT_WRITE, mmap};
+use libc::{MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE, mmap};
 
 use crate::{
     gc::block::{BLOCK_SIZE, BlockList, BlockPointer},
@@ -19,7 +19,7 @@ fn allocate_page_aligned_memory(size_in_bytes: usize) -> NonNull<u8> {
             null_mut(),
             size_in_bytes,
             PROT_READ | PROT_WRITE,
-            MAP_ANONYMOUS,
+            MAP_ANONYMOUS | MAP_PRIVATE,
             -1,
             0,
         )
