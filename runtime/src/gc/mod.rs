@@ -1,5 +1,7 @@
 use std::{
+    cmp::max,
     hint::cold_path,
+    mem::swap,
     sync::{Mutex, atomic::AtomicUsize},
 };
 
@@ -8,38 +10,16 @@ use libc::{_SC_PAGESIZE, sysconf};
 use roots::{ShadowStackFrame, for_stack_roots};
 
 use crate::{
-    heap::{
+    gc::generations::{MAJOR_HEAP, initialize_generations, major_heap, nursery}, heap::{
         ForwardPointer, GenerationIndex, HeapObject, HeapObjectHandle, finish_block,
         round_up_to_heap_alignment,
-    },
-    make_send::UnsafeMakeSend,
-    settings::RuntimeSettings,
+    }, make_send::UnsafeMakeSend, settings::{RuntimeSettings, settings}, thread::ThreadState,
 };
 
 pub mod block;
 pub mod block_allocator;
+pub mod generations;
 pub mod roots;
-
-pub struct Generation {
-    pub used_blocks: Mutex<UnsafeMakeSend<BlockList>>,
-    pub pending_blocks: Mutex<UnsafeMakeSend<BlockList>>,
-    pub max_block_count: usize,
-    pub index: GenerationIndex,
-}
-
-impl Generation {
-    const fn new(index: GenerationIndex, max_block_count: usize) -> Self {
-        Generation {
-            used_blocks: Mutex::new(UnsafeMakeSend::new(BlockList::new())),
-            pending_blocks: Mutex::new(UnsafeMakeSend::new(BlockList::new())),
-            max_block_count,
-            index,
-        }
-    }
-}
-
-pub static mut NURSERY: Generation = Generation::new(GenerationIndex::MINOR, 0);
-pub static mut MAJOR_HEAP: Generation = Generation::new(GenerationIndex::MAJOR, 0);
 
 pub fn initialize_gc(settings: &RuntimeSettings) {
     let page_size = unsafe { sysconf(_SC_PAGESIZE) } as usize;
@@ -47,13 +27,7 @@ pub fn initialize_gc(settings: &RuntimeSettings) {
         page_size >= BLOCK_SIZE,
         "The system page size ({page_size}) is smaller than the vega runtime's block size ({BLOCK_SIZE}). This is currently unsupported by the memory manager. If you're seeing this, open an issue."
     );
-
-    assert!(settings.nursery_size_in_blocks > 0);
-    assert!(settings.initial_major_heap_size_in_blocks > 0);
-    unsafe {
-        NURSERY.max_block_count = settings.nursery_size_in_blocks;
-        MAJOR_HEAP.max_block_count = settings.initial_major_heap_size_in_blocks;
-    }
+    initialize_generations(settings);
 }
 
 // The thread-local state carried by each GC thread during a collection.
@@ -61,31 +35,46 @@ pub fn initialize_gc(settings: &RuntimeSettings) {
 struct GCState {
     allocation_pointer: *mut HeapObject,
     allocation_limit: *mut HeapObject,
-    target_generation: &'static Generation,
+    collect_major_heap: bool,
 }
 
-#[allow(static_mut_refs)]
-pub fn collect_garbage(shadow_stack_pointer: *const ShadowStackFrame) {
-    let mut state = {
+pub fn collect_garbage(
+    shadow_stack_pointer: *const ShadowStackFrame,
+    force_major_collection: bool,
+) {
+    let collect_major_heap = force_major_collection
+        || unsafe {
+            major_heap().max_block_count
+                - major_heap()
+                    .used_blocks
+                    .lock()
+                    .unwrap()
+                    .get()
+                    .size_in_blocks()
+                < nursery().max_block_count
+        };
+
+    let mut gc_state = {
         let allocation_block = block_allocator::allocate_block();
 
         GCState {
             allocation_pointer: allocation_block.first_heap_object_pointer(),
             allocation_limit: allocation_block.allocation_limit(),
-            target_generation: unsafe { &MAJOR_HEAP },
+            collect_major_heap,
         }
     };
+
     for_stack_roots(shadow_stack_pointer, |stack_root| unsafe {
         let from_object = HeapObject::from_data(*stack_root);
 
-        let relocated_heap_object = evacuate(&mut state, from_object);
+        let relocated_heap_object = evacuate(&mut gc_state, from_object);
         *stack_root = HeapObject::data(relocated_heap_object);
     });
 
     loop {
         // TODO: this will be much more interesting once it is multi-threaded
         let block = unsafe {
-            let mut pending_set_guard = MAJOR_HEAP.pending_blocks.lock().unwrap();
+            let mut pending_set_guard = major_heap().pending_blocks.lock().unwrap();
             let pending_set = pending_set_guard.get_mut();
             pending_set.pop_back()
         };
@@ -93,15 +82,59 @@ pub fn collect_garbage(shadow_stack_pointer: *const ShadowStackFrame) {
             None => break, // We are done for now. In the future, we will wait until either all threads are done or more work is being added
             Some(block) => unsafe {
                 for heap_object in block.iter_heap_objects() {
-                    scavenge(&mut state, heap_object.cast_const());
+                    scavenge(&mut gc_state, heap_object.cast_const());
                 }
+                major_heap()
+                    .to_space
+                    .lock()
+                    .unwrap()
+                    .get_mut()
+                    .append(block);
             },
         }
     }
+    {
+        let mut used = major_heap().used_blocks.lock().unwrap();
+        let mut to_space = major_heap().to_space.lock().unwrap();
+        swap(&mut *used, &mut *to_space);
+    }
+
+    let current_size = unsafe { major_heap().max_block_count };
+    let live_size = unsafe {
+        major_heap()
+            .used_blocks
+            .lock()
+            .unwrap()
+            .get()
+            .size_in_blocks()
+    };
+    let scale_factor = settings().major_heap_scaling_factor;
+    let nursery_capacity = nursery().max_block_count;
+
+    // TODO: it would be nice to also scale the heap down occasionally but we should be a bit more careful about that
+    let new_major_size = max(
+        current_size,
+        (scale_factor * ((live_size + nursery_capacity) as f64)) as usize,
+    );
+
+    // SAFETY: this is fine since GC has finished and every other thread is still blocked in a safe point
+    // so we are the only thread operating on the MAJOR heap.
+    unsafe {
+        MAJOR_HEAP.max_block_count = new_major_size;
+    }
+
+    // TODO: release other threads *now*, doing so earlier could race the resizing above.
 }
 
 /// SAFETY: heap_object must point to a valid heap object or a forward pointer
 unsafe fn evacuate(state: &mut GCState, heap_object: *const HeapObject) -> *const HeapObject {
+    if !state.collect_major_heap
+        && unsafe { HeapObject::header(heap_object).generation().is_major() }
+    {
+        // We won't collect this generation so we just leave it where it is and do as little work as possible.
+        return heap_object;
+    }
+
     match unsafe { HeapObject::as_handle(heap_object) } {
         // Null pointers and static arrays are not actually allocated on the heap and never move,
         // so we don't need to evacuate them.
@@ -226,7 +259,17 @@ fn allocate_for_evacuation(gc_state: &mut GCState, size: usize) -> *mut HeapObje
             finish_block(
                 &mut gc_state.allocation_pointer,
                 &mut gc_state.allocation_limit,
-                gc_state.target_generation,
+                &major_heap().pending_blocks,
+                // We don't need any limit checks during garbage collection.
+                // We always make sure that a minor collection has enough space in the major generation.
+                // If there is not enough space, we trigger a full GC
+                |heap_size| {
+                    debug_assert!(
+                        gc_state.collect_major_heap
+                            || (heap_size
+                                <= major_heap().max_block_count - nursery().max_block_count)
+                    );
+                },
             );
         }
         debug_assert!(

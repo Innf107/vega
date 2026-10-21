@@ -2,15 +2,17 @@ use std::{
     ffi::c_void,
     hint::cold_path,
     ptr::{addr_of, null, null_mut},
+    sync::Mutex,
 };
 
 use crate::{
     either::Either,
     gc::{
-        Generation, NURSERY,
-        block::{BLOCK_SIZE, BlockPointer},
-        block_allocator,
+        block::{BLOCK_SIZE, BlockList, BlockPointer},
+        block_allocator, collect_garbage,
+        generations::nursery,
     },
+    make_send::UnsafeMakeSend,
     tagged_pointer::TaggedPointer,
     thread::ThreadState,
 };
@@ -446,7 +448,8 @@ impl ArrayHeapObject {
 pub fn finish_block(
     allocation_pointer: &mut *mut HeapObject,
     allocation_limit: &mut *mut HeapObject,
-    target_generation: &'static Generation,
+    target_list: &'static Mutex<UnsafeMakeSend<BlockList>>,
+    mut block_limit_check: impl FnMut(usize),
 ) {
     unsafe {
         // TOOD: i don't love the duplication between this and gc::allocate_for_evacuation
@@ -471,8 +474,10 @@ pub fn finish_block(
         }
 
         {
-            let mut pending_blocks = target_generation.pending_blocks.lock().unwrap();
+            let mut pending_blocks = target_list.lock().unwrap();
             pending_blocks.get_mut().append(filled_block);
+
+            block_limit_check(pending_blocks.get().size_in_blocks());
         }
 
         let new_block = block_allocator::allocate_block();
@@ -486,7 +491,6 @@ pub fn finish_block(
 // This does *not* include the size of a heap object header
 // and the returned memory is not initialized in any way.
 #[inline]
-#[allow(static_mut_refs)]
 pub fn allocate_generic(thread_state: &mut ThreadState, byte_count: usize) -> *mut HeapObject {
     let remaining_size_in_block = unsafe {
         thread_state
@@ -498,7 +502,13 @@ pub fn allocate_generic(thread_state: &mut ThreadState, byte_count: usize) -> *m
         finish_block(
             &mut thread_state.allocation_pointer,
             &mut thread_state.allocation_limit,
-            unsafe { &NURSERY },
+            &nursery().used_blocks,
+            |nursery_size| {
+                if nursery_size >= nursery().max_block_count {
+                    cold_path();
+                    collect_garbage(thread_state.shadow_stack_pointer, false);
+                }
+            },
         );
     }
     debug_assert!(

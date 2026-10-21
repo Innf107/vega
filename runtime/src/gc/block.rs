@@ -203,4 +203,11 @@ impl BlockList {
             },
         }
     }
+
+    pub fn size_in_blocks(&self) -> usize {
+        match &self.contents {
+            None => 0,
+            Some(non_empty) => non_empty.length_in_blocks,
+        }
+    }
 }
