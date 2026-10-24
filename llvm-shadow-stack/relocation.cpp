@@ -2,6 +2,8 @@
 #include "frame_allocation.h"
 #include "pointer_ids.h"
 #include <llvm/ADT/DepthFirstIterator.h>
+#include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Instructions.h>
 
 using namespace llvm;
 
@@ -75,6 +77,42 @@ Value *relocate(IRBuilder<> &builder, Value *valueToRelocate,
                               valueToRelocate->getName() + ".relocated");
 }
 
+bool isTailCallInstruction(Instruction *instruction) {
+    if (instruction == nullptr) {
+        return false;
+    }
+    auto *callInstruction = dyn_cast<CallBase>(instruction);
+    return callInstruction->isTailCall();
+}
+
+void popStackOnExits(Function &function, Value *threadStatePointer,
+                     Value *shadowStackFrame) {
+    for (auto &block : function) {
+        if (isa<ReturnInst>(block.getTerminator())) {
+            auto *lastNonReturnInstruction =
+                block.getTerminator()->getPrevNode();
+
+            IRBuilder builder(function.getContext());
+            // We don't need to check if the tail call here is a *literal* tail
+            // call. Even if it keeps its stack frame, every pointer in it is
+            // still dead after the return so we can still pop its shadow stack
+            // frame.
+            // (If it is a real tail call, we *need* to pop its shadow stack
+            // frame however)
+            if (lastNonReturnInstruction != nullptr &&
+                isa<CallBase>(lastNonReturnInstruction)) {
+                builder.SetInsertPoint(lastNonReturnInstruction);
+            } else {
+                builder.SetInsertPoint(block.getTerminator());
+            }
+
+            auto *previousFrame = builder.CreateLoad(
+                PointerType::get(function.getContext(), 0), shadowStackFrame);
+            builder.CreateStore(previousFrame, threadStatePointer);
+        }
+    }
+}
+
 // TODO: we need to clear out stack slots once
 // they're dead
 void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
@@ -130,6 +168,8 @@ void saveAndRelocateBoxedPointers(Function &function, PointerIDs pointerIDs,
     builder.CreateMemSetInline(
         stackFramePointers, MaybeAlign(8), builder.getInt8(0),
         builder.getInt64(8 * stackFrameAssignments.frameSize));
+
+    popStackOnExits(function, threadStatePointer, shadowStackStruct);
 
     for (Argument &argument : function.args()) {
         saveToShadowStackIfNecessary(builder, std::nullopt, pointerIDs,

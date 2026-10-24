@@ -18,10 +18,25 @@ pub struct RuntimeSettings {
     pub block_allocation_batch_size: usize,
 
     /// the amount by which to scale the major heap based on the live set size after each major collection.
-    /// the major heap will always contain at least enough space for this, but will not scale down to match it.
+    /// The major heap will always contain at least enough space for this, but will not scale down to match it.
     /// default: 3.0
     #[argh(option, long = "major-scale", default = "3.0")]
     pub major_heap_scaling_factor: f64,
+
+    /// the name of the file that the event log should be written to.
+    /// Use `-` for stdout or "" (empty string) to disable the event log.
+    /// default: ""
+    #[argh(option, long = "event-log-output", default = "String::new()")]
+    pub event_log_output: String,
+
+    /// emit stack roots to the event log at every garbage collection for debugging purposes.
+    #[argh(switch, long = "debug-stack-roots")]
+    pub debug_stack_roots: bool,
+
+    /// hide the object types of heap objects. The object types are usually useful information but
+    /// determining them can sometimes segfault.
+    #[argh(switch, long = "hide-stack-root-types")]
+    pub hide_stack_root_types: bool,
 }
 
 static mut SETTINGS: MaybeUninit<RuntimeSettings> = MaybeUninit::zeroed();

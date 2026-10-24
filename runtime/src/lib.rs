@@ -1,4 +1,5 @@
 pub mod either;
+pub mod eventlog;
 pub mod gc;
 pub mod heap;
 pub mod init;

@@ -57,8 +57,6 @@ ghc-options:
 - -fmax-relevant-binds=0
 - -fdefer-diagnostics
 
-# extra-libraries: VegaShadowStackPlugin
-
 library:
   source-dirs: src
   cxx-sources:

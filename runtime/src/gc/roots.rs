@@ -1,9 +1,8 @@
-use crate::
-    heap::HeapObject
-;
-use std::
-    ptr::null
-;
+use crate::{heap::HeapObject, settings::settings};
+use std::{
+    io::{self, Write},
+    ptr::null,
+};
 
 #[repr(C)]
 pub struct ShadowStackFrame {
@@ -40,9 +39,20 @@ pub extern "C" fn vega_debug_stack_roots(shadow_stack_pointer: *const ShadowStac
             let pointers = frame.byte_add(size_of::<ShadowStackFrame>()) as *mut *const u8;
             for i in 0..(size as usize) {
                 let pointer_to_data_pointer = pointers.add(i);
-                print!("   {pointer_to_data_pointer:?}(");
-                let object_type_description = HeapObject::object_type_description(HeapObject::from_data(*pointer_to_data_pointer));
-                println!("{object_type_description})");
+
+                if settings().hide_stack_root_types {
+                    println!("   {pointer_to_data_pointer:?}");
+                } else {
+                    print!("   {pointer_to_data_pointer:?}(");
+                    io::stdout().flush().unwrap();
+
+                    let heap_object_pointer = HeapObject::from_data(*pointer_to_data_pointer);
+                    let object_type_description =
+                        HeapObject::object_type_description(heap_object_pointer);
+                    print!("{object_type_description}): ");
+
+                    println!(" {heap_object_pointer:?}")
+                }
             }
             frame = (*frame).previous;
         }

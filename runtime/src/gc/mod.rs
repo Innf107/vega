@@ -10,10 +10,17 @@ use libc::{_SC_PAGESIZE, sysconf};
 use roots::{ShadowStackFrame, for_stack_roots};
 
 use crate::{
-    gc::generations::{MAJOR_HEAP, initialize_generations, major_heap, nursery}, heap::{
+    gc::{
+        generations::{MAJOR_HEAP, initialize_generations, major_heap, nursery},
+        roots::vega_debug_stack_roots,
+    },
+    heap::{
         ForwardPointer, GenerationIndex, HeapObject, HeapObjectHandle, finish_block,
         round_up_to_heap_alignment,
-    }, make_send::UnsafeMakeSend, settings::{RuntimeSettings, settings}, thread::ThreadState,
+    },
+    make_send::UnsafeMakeSend,
+    settings::{RuntimeSettings, settings},
+    thread::ThreadState,
 };
 
 pub mod block;
@@ -53,6 +60,7 @@ pub fn collect_garbage(
                     .size_in_blocks()
                 < nursery().max_block_count
         };
+    // println!("GC start (major: {collect_major_heap}, forced: {force_major_collection})");
 
     let mut gc_state = {
         let allocation_block = block_allocator::allocate_block();
@@ -63,6 +71,12 @@ pub fn collect_garbage(
             collect_major_heap,
         }
     };
+
+    if settings().debug_stack_roots {
+        println!("~~~~~~GC (major: {collect_major_heap})~~~~~~~");
+        vega_debug_stack_roots(shadow_stack_pointer);
+        println!("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
+    }
 
     for_stack_roots(shadow_stack_pointer, |stack_root| unsafe {
         let from_object = HeapObject::from_data(*stack_root);
@@ -99,30 +113,33 @@ pub fn collect_garbage(
         swap(&mut *used, &mut *to_space);
     }
 
-    let current_size = unsafe { major_heap().max_block_count };
-    let live_size = unsafe {
-        major_heap()
-            .used_blocks
-            .lock()
-            .unwrap()
-            .get()
-            .size_in_blocks()
-    };
-    let scale_factor = settings().major_heap_scaling_factor;
-    let nursery_capacity = nursery().max_block_count;
+    if collect_major_heap {
+        let current_size = unsafe { major_heap().max_block_count };
+        let live_size = unsafe {
+            major_heap()
+                .used_blocks
+                .lock()
+                .unwrap()
+                .get()
+                .size_in_blocks()
+        };
+        let scale_factor = settings().major_heap_scaling_factor;
+        let nursery_capacity = nursery().max_block_count;
 
-    // TODO: it would be nice to also scale the heap down occasionally but we should be a bit more careful about that
-    let new_major_size = max(
-        current_size,
-        (scale_factor * ((live_size + nursery_capacity) as f64)) as usize,
-    );
+        // TODO: it would be nice to also scale the heap down occasionally but we should be a bit more careful about that
+        let new_major_size = max(
+            current_size,
+            (scale_factor * ((live_size + nursery_capacity) as f64)) as usize,
+        );
 
-    // SAFETY: this is fine since GC has finished and every other thread is still blocked in a safe point
-    // so we are the only thread operating on the MAJOR heap.
-    unsafe {
-        MAJOR_HEAP.max_block_count = new_major_size;
+        // SAFETY: this is fine since GC has finished and every other thread is still blocked in a safe point
+        // so we are the only thread operating on the MAJOR heap.
+        unsafe {
+            MAJOR_HEAP.max_block_count = new_major_size;
+        }
     }
 
+    // println!("GC end");
     // TODO: release other threads *now*, doing so earlier could race the resizing above.
 }
 
