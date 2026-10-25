@@ -41,32 +41,36 @@ class BitSet {
         }
     }
 
-    void operator|=(BitSet &other) {
+    void operator|=(BitSet& other) {
         if (other.vector.size() > vector.size()) {
             vector.resize(other.vector.size());
         }
         vector |= other.vector;
     }
 
-    void operator&=(BitSet &other) { vector &= other.vector; }
+    void operator&=(BitSet& other) {
+        vector &= other.vector;
+    }
 
-    void operator-=(BitSet &other) {
+    void operator-=(BitSet& other) {
         // his could be asymptotically faster but that doesn't matter
         // unless other has more than 63 entries and the ~ needs a
         // memory allocation (which is extremely unlikely)
         vector &= ~other.vector;
     }
 
-    bool operator==(BitSet &other) {
+    bool operator==(BitSet& other) {
         if (vector.size() == other.vector.size()) {
             return vector == other.vector;
         } else {
             return vector.subsetOf(other.vector) ||
-                   other.vector.subsetOf(vector);
+                other.vector.subsetOf(vector);
         }
     }
 
-    bool operator!=(BitSet &other) { return !this->operator==(other); }
+    bool operator!=(BitSet& other) {
+        return !this->operator==(other);
+    }
 
     iterator_range<llvm::SmallBitVector::const_set_bits_iterator>
     set_bits() const {

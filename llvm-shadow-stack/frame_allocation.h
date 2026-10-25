@@ -5,9 +5,9 @@
 using namespace llvm;
 
 struct StackFrameAssignments {
-    DenseMap<Value *, unsigned> assignments;
+    DenseMap<Value*, unsigned> assignments;
     unsigned frameSize;
 };
 
-StackFrameAssignments
-allocateStackFrameSlots(DenseMap<Value *, Interval> intervals);
+StackFrameAssignments allocateStackFrameSlots(
+    DenseMap<Value*, Interval> intervals);

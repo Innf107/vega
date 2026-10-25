@@ -13,7 +13,9 @@ struct Interval {
     int from = -1;
     int to = -1;
 
-    bool isUninitialized() { return from == -1 && to == -1; }
+    bool isUninitialized() {
+        return from == -1 && to == -1;
+    }
 
     void addRange(int newFrom, int newTo) {
         assert(newFrom < newTo);
@@ -39,6 +41,8 @@ struct Interval {
     }
 };
 
-DenseMap<Value *, Interval> computeIntervals(
-    const Function &function, Schedule &schedule, PointerIDs &pointerIDs,
-    DenseMap<BasicBlock *, BitSet> &liveIntoBlock, BitSet liveAcrossCalls);
+DenseMap<Value*, Interval> computeIntervals(const Function& function,
+    Schedule& schedule,
+    PointerIDs& pointerIDs,
+    DenseMap<BasicBlock*, BitSet>& liveIntoBlock,
+    BitSet liveAcrossCalls);

@@ -1,32 +1,32 @@
+#include "frame_allocation.h"
 #include "intervals.h"
 #include <llvm/ADT/DenseMap.h>
 #include <queue>
-#include "frame_allocation.h"
 
 using namespace llvm;
 
-StackFrameAssignments
-allocateStackFrameSlots(DenseMap<Value *, Interval> intervals) {
-    DenseMap<Value *, unsigned> stackSlots;
+StackFrameAssignments allocateStackFrameSlots(
+    DenseMap<Value*, Interval> intervals) {
+    DenseMap<Value*, unsigned> stackSlots;
     unsigned frameSize = 0;
 
     BitSet usedSlots;
 
-    std::vector<std::pair<Value *, Interval>> sortedIntervals(intervals.begin(),
-                                                              intervals.end());
-    llvm::sort(sortedIntervals, [](auto &pair1, auto &pair2) {
+    std::vector<std::pair<Value*, Interval>> sortedIntervals(
+        intervals.begin(), intervals.end());
+    llvm::sort(sortedIntervals, [](auto& pair1, auto& pair2) {
         return pair1.second.from < pair2.second.from;
     });
 
-    auto increasingEndpoint = [](auto &interval1, auto &interval2) {
+    auto increasingEndpoint = [](auto& interval1, auto& interval2) {
         return interval1.second.to < interval2.second.to;
     };
-    std::priority_queue<std::pair<Value *, Interval>,
-                        llvm::SmallVector<std::pair<Value *, Interval>>,
-                        decltype(increasingEndpoint)>
+    std::priority_queue<std::pair<Value*, Interval>,
+        llvm::SmallVector<std::pair<Value*, Interval>>,
+        decltype(increasingEndpoint)>
         active;
 
-    for (auto &[value, interval] : sortedIntervals) {
+    for (auto& [value, interval] : sortedIntervals) {
         while (!active.empty()) {
             if (active.top().second.to >= interval.from) {
                 break;
@@ -46,6 +46,6 @@ allocateStackFrameSlots(DenseMap<Value *, Interval> intervals) {
         frameSize = std::max(frameSize, slotForThisInterval + 1);
     }
 
-    return StackFrameAssignments{.assignments = stackSlots,
-                                 .frameSize = frameSize};
+    return StackFrameAssignments{
+        .assignments = stackSlots, .frameSize = frameSize};
 }

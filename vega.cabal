@@ -121,6 +121,7 @@ library
       llvm-shadow-stack/pointer_ids.cpp
       llvm-shadow-stack/relocation.cpp
       llvm-shadow-stack/schedule.cpp
+      llvm-shadow-stack/preprocessing.cpp
   build-depends:
       aeson
     , base >=4.7 && <5

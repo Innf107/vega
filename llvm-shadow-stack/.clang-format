@@ -1,1 +1,10 @@
 IndentWidth: 4
+DerivePointerAlignment: false
+PointerAlignment: Left
+AlignOperands: DontAlign
+AlignAfterOpenBracket: false
+BinPackArguments: false
+BinPackParameters: false
+AllowShortFunctionsOnASingleLine: false
+AllowAllArgumentsOnNextLine: true
+AllowAllParametersOfDeclarationOnNextLine: true

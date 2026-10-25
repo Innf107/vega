@@ -6,20 +6,20 @@
 
 using namespace llvm;
 
-DenseMap<BasicBlock *, BitSet> computeLiveness(Function &function,
-                                               PointerIDs &pointerIDs) {
-    llvm::DenseMap<BasicBlock *, BitSet> genSets;
-    llvm::DenseMap<BasicBlock *, BitSet> killSets;
+DenseMap<BasicBlock*, BitSet> computeLiveness(
+    Function& function, PointerIDs& pointerIDs) {
+    llvm::DenseMap<BasicBlock*, BitSet> genSets;
+    llvm::DenseMap<BasicBlock*, BitSet> killSets;
 
-    for (auto *block : post_order(&function)) {
+    for (auto* block : post_order(&function)) {
         BitSet genSet;
         BitSet killSet;
-        for (auto &instruction : llvm::reverse(*block)) {
+        for (auto& instruction : llvm::reverse(*block)) {
             if (isGCPointerVariable(&instruction)) {
                 killSet.set(idFor(pointerIDs, &instruction));
             }
-            for (auto &operand : instruction.operands()) {
-                auto *value = operand.get();
+            for (auto& operand : instruction.operands()) {
+                auto* value = operand.get();
                 if (isGCPointerVariable(value)) {
                     genSet.set(idFor(pointerIDs, value));
                 }
@@ -30,7 +30,7 @@ DenseMap<BasicBlock *, BitSet> computeLiveness(Function &function,
         killSets[block] = killSet;
     }
 
-    llvm::DenseMap<BasicBlock *, BitSet> liveIntoBlock;
+    llvm::DenseMap<BasicBlock*, BitSet> liveIntoBlock;
 
     bool changed = true;
     while (changed) {
@@ -39,9 +39,9 @@ DenseMap<BasicBlock *, BitSet> computeLiveness(Function &function,
         // TODO: we might be able to do something smarter than repeatedly
         // looping over all blocks here. This should converge pretty quickly
         // either way though.
-        for (auto *block : post_order(&function)) {
+        for (auto* block : post_order(&function)) {
             BitSet liveThisIteration;
-            for (auto *successor : successors(block)) {
+            for (auto* successor : successors(block)) {
                 liveThisIteration |= genSets[successor];
                 liveThisIteration -= killSets[successor];
             }
@@ -62,19 +62,20 @@ DenseMap<BasicBlock *, BitSet> computeLiveness(Function &function,
 // A bit more formally, a pointer is live across a call, if there is a vegagc
 // call instruction such that the pointer is live at the instruction before and
 // one after the call.
-BitSet filterLiveAcrossGCCalls(Function &function, PointerIDs &pointerIDs,
-                               DenseMap<BasicBlock *, BitSet> &liveIntoBlock) {
+BitSet filterLiveAcrossGCCalls(Function& function,
+    PointerIDs& pointerIDs,
+    DenseMap<BasicBlock*, BitSet>& liveIntoBlock) {
     BitSet pointersLiveAcrossGCCalls;
 
     // The order shouldn't matter here since we already have all the block-level
     // liveness information.
-    for (auto *block : post_order(&function)) {
+    for (auto* block : post_order(&function)) {
         BitSet livePointersAtAll;
-        for (auto *successor : successors(block)) {
+        for (auto* successor : successors(block)) {
             livePointersAtAll |= liveIntoBlock[successor];
         }
 
-        for (auto &instruction : reverse(*block)) {
+        for (auto& instruction : reverse(*block)) {
             if (isVegaGCCall(instruction)) {
                 BitSet pointersLiveBeforeAndAfterThis = livePointersAtAll;
                 if (isGCPointerVariable(&instruction)) {
@@ -92,8 +93,8 @@ BitSet filterLiveAcrossGCCalls(Function &function, PointerIDs &pointerIDs,
             // It is important that we update this *after* the call check, since
             // we want that one to use the state of the instruction one after
             // this one.
-            for (auto &operand : instruction.operands()) {
-                auto *value = operand.get();
+            for (auto& operand : instruction.operands()) {
+                auto* value = operand.get();
                 if (isGCPointerVariable(value)) {
                     livePointersAtAll.set(idFor(pointerIDs, value));
                 }

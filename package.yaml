@@ -67,6 +67,7 @@ library:
   - llvm-shadow-stack/pointer_ids.cpp
   - llvm-shadow-stack/relocation.cpp
   - llvm-shadow-stack/schedule.cpp
+  - llvm-shadow-stack/preprocessing.cpp
 
 executables:
   vega-exe:
