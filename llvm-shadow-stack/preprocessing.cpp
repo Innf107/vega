@@ -6,6 +6,7 @@
 #include <llvm/Support/Casting.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Transforms/Utils/BasicBlockUtils.h>
 
 unsigned numberOfReturnedBoxedPointers(Type* type) {
     if (type->isPointerTy() && type->getPointerAddressSpace() == 1) {
@@ -25,6 +26,18 @@ unsigned numberOfReturnedBoxedPointers(Type* type) {
     return 0;
 }
 
+bool isBoxedOrVectorOfBoxed(Type* type) {
+    if (type->isPointerTy()) {
+        return type->getPointerAddressSpace() == 1;
+    } else if (type->isVectorTy()) {
+        auto* vectorType = dyn_cast<VectorType>(type);
+        return vectorType->getElementType()->isPointerTy() &&
+            vectorType->getPointerAddressSpace() == 1;
+    } else {
+        return false;
+    }
+}
+
 std::string renderInstruction(Value* instruction) {
     std::string instruction_string;
     llvm::raw_string_ostream instruction_stream(instruction_string);
@@ -38,13 +51,19 @@ void replaceReadsFromPointer(unsigned byteOffsetFromBase,
     IRBuilder<>& readBuilder,
     Value* sretPointer,
     SmallVector<std::optional<Value*>>& cachedDirectReads) {
-    for (auto& use : pointerToReplace->uses()) {
+
+    // We save the instructions that we replace and delete them in one go at the
+    // end. If we deleted them inline we would invalidate something about our
+    // iterator here.
+    SmallVector<Instruction*> instructionsToErase;
+    for (Use& use : pointerToReplace->uses()) {
         auto* instruction = use.getUser();
         if (isa<CallBase>(instruction)) {
-            outs() << "pointer: " << *pointerToReplace << " |    instr: " << *instruction << "\n";
-            // tiny sanity check that this is probably (hopefully) only the
-            // original sret that wrote to this
-            assert(dyn_cast<CallBase>(instruction)->hasStructRetAttr());
+            // These uses track *all* derived uses of the alloca, not just ones
+            // that use the segment that contains boxed pointers. While there
+            // can never be any calls that access the boxed pointers, accessing
+            // the unboxed segment of the sret alloca is totally fine, so we
+            // just ned to skip this case.
             continue;
         } else if (isa<GetElementPtrInst>(instruction)) {
             auto* gepInstruction = dyn_cast<GetElementPtrInst>(instruction);
@@ -69,8 +88,8 @@ void replaceReadsFromPointer(unsigned byteOffsetFromBase,
                 cachedDirectReads);
         } else if (isa<LoadInst>(instruction)) {
             auto* readAsType = instruction->getType();
-            if (readAsType->isPointerTy()) {
-                assert(readAsType->getPointerAddressSpace() == 1);
+            auto* loadInstruction = dyn_cast<LoadInst>(instruction);
+            if (isBoxedOrVectorOfBoxed(instruction->getType())) {
                 assert((byteOffsetFromBase & 0b111) == 0);
 
                 auto* pointer = (byteOffsetFromBase != 0)
@@ -79,28 +98,12 @@ void replaceReadsFromPointer(unsigned byteOffsetFromBase,
                     : sretPointer;
                 auto earlyLoad = readBuilder.CreateLoad(
                     readAsType, pointer, instruction->getName());
-                instruction->replaceAllUsesWith(earlyLoad);
-            } else if (readAsType->isVectorTy()) {
-                assert(dyn_cast<VectorType>(readAsType)
-                           ->getElementType()
-                           ->isPointerTy() &&
-                    readAsType->getPointerAddressSpace() == 1);
-
-                auto* pointer = (byteOffsetFromBase != 0)
-                    ? readBuilder.CreateInBoundsPtrAdd(
-                          sretPointer, readBuilder.getInt64(byteOffsetFromBase))
-                    : sretPointer;
-                auto earlyLoad = readBuilder.CreateLoad(
-                    readAsType, pointer, instruction->getName());
-                instruction->replaceAllUsesWith(earlyLoad);
+                loadInstruction->replaceAllUsesWith(earlyLoad);
+                instructionsToErase.push_back(loadInstruction);
             } else {
-                llvm::reportFatalUsageError(
-                    Twine("sret (or sret-derived) pointer '" +
-                        Twine(pointerToReplace->getName()) +
-                        "' loaded from as non-pointer or pointer vector in "
-                        "instruction: " +
-                        renderInstruction(instruction)));
-                return;
+                // This reads a non-pointer from the unboxed section of the
+                // alloca so we can just ignore it.
+                continue;
             }
         } else {
             llvm::reportFatalUsageError(
@@ -110,6 +113,9 @@ void replaceReadsFromPointer(unsigned byteOffsetFromBase,
                     renderInstruction(instruction)));
             return;
         }
+    }
+    for (auto* instruction : instructionsToErase) {
+        instruction->eraseFromParent();
     }
 }
 

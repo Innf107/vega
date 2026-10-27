@@ -23,7 +23,7 @@ import Data.Vector.Strict qualified as Strict hiding ((!))
 import Effectful (Eff, IOE, (:>))
 import Effectful.State.Static.Local (State, evalState, get, modify, put)
 import GHC.Records (HasField, getField)
-import GHC.TypeLits (Symbol, symbolVal, KnownSymbol)
+import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import LLVM.Core qualified as LLVM
 import LLVM.Core.Context qualified as LLVM
 import LLVM.Core.Phi qualified as LLVM.Phi
@@ -115,9 +115,11 @@ compile program module_ = do
                     }
         evalState initialState $ compileDeclaration declaration
 
-addMainFunction :: (?context :: LLVM.Context, IOE :> es) 
-    => Vega.GlobalName 
-        -> LLVM.Module -> Eff es ()
+addMainFunction ::
+    (?context :: LLVM.Context, IOE :> es) =>
+    Vega.GlobalName ->
+    LLVM.Module ->
+    Eff es ()
 addMainFunction entryPoint module_ = do
     runtimeDefinitions <- declareRuntimeDefinitions module_
     let ?runtimeDefinitions = runtimeDefinitions
@@ -1108,10 +1110,11 @@ buildRuntimeCall builder name arguments varName = do
         False -> buildCallWithAttributes builder type_ value arguments varName
         True -> buildCallWithAttributes builder type_ value ([threadStatePointer] <> arguments) varName
 
--- | This is like 'buildRuntimeCall' but requires fewer constraints and in turn does not support calls to
--- runtime functions that are safe points and would need to pass the thread state pointer
-buildNonSafepointRuntimeCall
-    :: (IOE :> es, ?runtimeDefinitions :: RuntimeDefinitions, HasCallStack) =>
+{- | This is like 'buildRuntimeCall' but requires fewer constraints and in turn does not support calls to
+runtime functions that are safe points and would need to pass the thread state pointer
+-}
+buildNonSafepointRuntimeCall ::
+    (IOE :> es, ?runtimeDefinitions :: RuntimeDefinitions, HasCallStack) =>
     LLVMBuilder.Builder ->
     forall (name :: Symbol) ->
     (HasField name RuntimeDefinitions Runtime.Definition, KnownSymbol name) =>

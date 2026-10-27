@@ -367,7 +367,7 @@ compileBackend = do
                 DebugEmit.debugEmitLLVM DebugEmit.LLVM llvmModule
                 {-# SCC "LLVM.verifyModule" #-} LLVM.verifyModule llvmModule
 
-                MkDriverConfig {optimizationLevel} <- ask
+                MkDriverConfig{optimizationLevel} <- ask
                 let llvmOptimizationPasses = case optimizationLevel of
                         O0 -> "default<O0>"
                         O1 -> "default<O1>"
