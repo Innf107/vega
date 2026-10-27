@@ -15,6 +15,13 @@ class BitSet {
         };
         vector.set(index);
     }
+    void set_range(unsigned index, unsigned size) {
+        // We could in principle do something more efficient here but in
+        // practice these sizes are all tiny so it's fine
+        for (int i = 0; i < size; i++) {
+            set(index + i);
+        }
+    }
     bool test(unsigned index) {
         if (index >= vector.size()) {
             return false;
@@ -29,6 +36,11 @@ class BitSet {
             vector.reset(index);
         }
     }
+    void reset_range(unsigned index, unsigned size) {
+        for (int i = 0; i < size; i++) {
+            reset(index + i);
+        }
+    }
 
     unsigned find_first_unset() {
         int in_underlying = vector.find_first_unset();
@@ -38,6 +50,28 @@ class BitSet {
             return vector.size();
         } else {
             return (unsigned)in_underlying;
+        }
+    }
+
+    unsigned find_unset_range_of_size(unsigned size) {
+        auto unset = find_first_unset();
+        while (true) {
+            bool isValid = true;
+            for (int i = 0; i < size; i++) {
+                if (test(unset + i)) {
+                    isValid = false;
+                    break;
+                }
+            }
+            if (isValid) {
+                return unset;
+            }
+
+            unset = vector.find_next_unset(unset + size - 1);
+            if (unset == -1) {
+                // All the untouched bits are definitely unset
+                return vector.size();
+            }
         }
     }
 

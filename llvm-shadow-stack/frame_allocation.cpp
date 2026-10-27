@@ -5,6 +5,17 @@
 
 using namespace llvm;
 
+unsigned vectorSize(Value* pointer) {
+    auto* type = pointer->getType();
+    if (type->isVectorTy()) {
+        assert(isa<FixedVectorType>(type));
+        auto* vectorType = dyn_cast<FixedVectorType>(type);
+        return vectorType->getNumElements();
+    } else {
+        return 1;
+    }
+}
+
 StackFrameAssignments allocateStackFrameSlots(
     DenseMap<Value*, Interval> intervals) {
     DenseMap<Value*, unsigned> stackSlots;
@@ -35,15 +46,17 @@ StackFrameAssignments allocateStackFrameSlots(
             active.pop();
 
             assert(stackSlots.contains(inactiveValue));
-            usedSlots.reset(stackSlots[inactiveValue]);
+            usedSlots.reset_range(
+                stackSlots[inactiveValue], vectorSize(inactiveValue));
         }
 
-        unsigned slotForThisInterval = usedSlots.find_first_unset();
-        usedSlots.set(slotForThisInterval);
+        unsigned slotForThisInterval =
+            usedSlots.find_unset_range_of_size(vectorSize(value));
+        usedSlots.set_range(slotForThisInterval, vectorSize(value));
         stackSlots[value] = slotForThisInterval;
         active.push(std::make_pair(value, interval));
 
-        frameSize = std::max(frameSize, slotForThisInterval + 1);
+        frameSize = std::max(frameSize, slotForThisInterval + vectorSize(value));
     }
 
     return StackFrameAssignments{

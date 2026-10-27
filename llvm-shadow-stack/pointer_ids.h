@@ -11,9 +11,13 @@ struct PointerIDs {
 
 unsigned idFor(PointerIDs& pointerIDs, Value* value);
 inline bool isGCPointerVariable(Value* value) {
+    if (isa<Constant>(value)) {
+        return false;
+    }
     auto type = value->getType();
-    return type->isPointerTy() && type->getPointerAddressSpace() == 1 &&
-        !isa<Constant>(value);
+
+    return type->getScalarType()->isPointerTy() &&
+        type->getPointerAddressSpace() == 1;
 }
 
 bool isVegaGCCall(Instruction& instruction);

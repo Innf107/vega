@@ -26,11 +26,11 @@ void saveToShadowStackIfNecessary(IRBuilder<>& builder,
         }
         assert(stackFrameAssignments.assignments.contains(value));
         unsigned slot = stackFrameAssignments.assignments.lookup(value);
-        auto* stackSlotPointer =
-            builder.CreateGEP(PointerType::get(value->getContext(), 1),
-                stackFramePointers,
-                {builder.getInt64(slot)},
-                "stack-slot");
+        auto* stackSlotPointer = slot == 0
+            ? stackFramePointers
+            : builder.CreateInBoundsPtrAdd(stackFramePointers,
+                  {builder.getInt64(8 * slot)},
+                  "stack-slot");
         builder.CreateStore(value, stackSlotPointer);
     }
 }
@@ -73,13 +73,10 @@ Value* relocate(IRBuilder<>& builder,
     assert(stackFrameAssignments.assignments.contains(valueToRelocate));
     unsigned slot = stackFrameAssignments.assignments.lookup(valueToRelocate);
 
-    auto* gcPointerType = PointerType::get(valueToRelocate->getContext(), 1);
-    auto* stackSlotPointer = builder.CreateGEP(gcPointerType,
-        stackFramePointers,
-        {builder.getInt64(slot)},
-        "stack-slot");
+    auto* stackSlotPointer = builder.CreateInBoundsPtrAdd(
+        stackFramePointers, {builder.getInt64(8 * slot)}, "stack-slot");
 
-    return builder.CreateLoad(gcPointerType,
+    return builder.CreateLoad(valueToRelocate->getType(),
         stackSlotPointer,
         valueToRelocate->getName() + ".relocated");
 }

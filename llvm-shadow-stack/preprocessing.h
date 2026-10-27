@@ -3,5 +3,3 @@
 using namespace llvm;
 
 void fixSRetAllocas(Function& function);
-
-// TODO: track vectors of pointers
