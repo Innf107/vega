@@ -111,7 +111,7 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
     }
 
     if collect_major_heap {
-        let current_size = unsafe { major_heap().max_block_count };
+        let current_size = major_heap().max_block_count;
         let live_size = unsafe {
             major_heap()
                 .used_blocks

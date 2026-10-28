@@ -18,7 +18,7 @@ impl<T, const ALIGNMENT: usize> TaggedPointer<T, ALIGNMENT> {
 
     pub fn pointer(self) -> *const T {
         self.pointer
-            .map_addr(|address| address & !(1 << ALIGNMENT.ilog2()))
+            .map_addr(|address| address & !(1 << ALIGNMENT.ilog2() - 1))
     }
     pub fn get_tag<const INDEX: u8>(self) -> bool {
         debug_assert!((1 << INDEX) < ALIGNMENT);
