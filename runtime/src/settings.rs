@@ -33,6 +33,12 @@ pub struct RuntimeSettings {
     #[argh(switch, long = "debug-stack-roots")]
     pub debug_stack_roots: bool,
 
+    /// print more detail about the heap object stored at each stack root.
+    /// This can be useful for figuring out if the objects look wrong at a glance
+    /// even if they have a sensible info table.
+    #[argh(switch, long = "detailed-stack-roots")]
+    pub detailed_stack_roots: bool,
+
     /// hide the object types of heap objects. The object types are usually useful information but
     /// determining them can sometimes segfault.
     #[argh(switch, long = "hide-stack-root-types")]

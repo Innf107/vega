@@ -73,6 +73,34 @@ impl HeapObject {
         }
     }
 
+    // A description of the details of this type for use in debugging
+    pub unsafe fn details(object: *const HeapObject) -> String {
+        match unsafe { HeapObject::as_handle(object) } {
+            HeapObjectHandle::Boxed(handle) => format!(
+                "[size={}, boxed={}]",
+                handle.layout.size_in_bytes, handle.layout.boxed_count
+            ),
+            HeapObjectHandle::Array(handle) => {
+                format!(
+                    "[count={}, element_stride={}, element_boxed={}]",
+                    handle.length(),
+                    handle.layout.element_stride_in_bytes,
+                    handle.layout.element_boxed_count
+                )
+            }
+            HeapObjectHandle::StaticArray(handle) => {
+                format!(
+                    "[count={}, element_stride={}, element_boxed={}]",
+                    handle.length(),
+                    handle.layout.element_stride_in_bytes,
+                    handle.layout.element_boxed_count
+                )
+            }
+            HeapObjectHandle::ForwardPointer(_handle) => String::from(""),
+            HeapObjectHandle::Null => String::from(""),
+        }
+    }
+
     // SAFETY: the heap object pointer needs to be either a null pointer or a pointer to a valid heap object
     pub unsafe fn header(object: *const HeapObject) -> Header {
         if object == null() {

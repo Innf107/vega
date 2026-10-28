@@ -53,6 +53,9 @@ pub extern "C" fn vega_debug_stack_roots(shadow_stack_pointer: *const ShadowStac
 
                     println!(" {heap_object_pointer:?}")
                 }
+                if settings().detailed_stack_roots {
+                    println!("        {}", HeapObject::details(HeapObject::from_data(*pointer_to_data_pointer)))
+                }
             }
             frame = (*frame).previous;
         }
