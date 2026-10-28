@@ -162,17 +162,13 @@ void saveAndRelocateBoxedPointers(Function& function,
 
     builder.CreateStore(shadowStackStruct, threadStatePointer);
 
-    auto* pointerToSize = builder.CreateInBoundsGEP(frameStructType,
-        shadowStackStruct,
-        {builder.getInt32(0), builder.getInt32(1)},
-        "size-slot");
+    auto* pointerToSize = builder.CreateInBoundsPtrAdd(
+        shadowStackStruct, builder.getInt64(8), "size-slot");
     builder.CreateStore(
         builder.getInt64(stackFrameAssignments.frameSize), pointerToSize);
 
-    auto* stackFramePointers = builder.CreateInBoundsGEP(frameStructType,
-        shadowStackStruct,
-        {builder.getInt32(0), builder.getInt32(2)},
-        "shadow-stack-pointers");
+    auto* stackFramePointers = builder.CreateInBoundsPtrAdd(
+        shadowStackStruct, builder.getInt64(16), "shadow-stack-pointers");
     builder.CreateMemSetInline(stackFramePointers,
         MaybeAlign(8),
         builder.getInt8(0),
