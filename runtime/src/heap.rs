@@ -501,12 +501,12 @@ pub fn finish_block(
             );
         }
 
-        {
+        let size = {
             let mut pending_blocks = target_list.lock().unwrap();
             pending_blocks.get_mut().append(filled_block);
-
-            block_limit_check(pending_blocks.get().size_in_blocks());
-        }
+            pending_blocks.get().size_in_blocks()
+        };
+        block_limit_check(size);
 
         let new_block = block_allocator::allocate_block();
 

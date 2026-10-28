@@ -25,7 +25,10 @@ fn allocate_page_aligned_memory(size_in_bytes: usize) -> NonNull<u8> {
         )
     };
     if memory.addr() as isize == -1 {
-        panic!("memory allocation of size {size_in_bytes} failed: {}", Error::last_os_error());
+        panic!(
+            "memory allocation of size {size_in_bytes} failed: {}",
+            Error::last_os_error()
+        );
     }
     unsafe { NonNull::new_unchecked(memory as *mut u8) }
 }
@@ -38,7 +41,6 @@ static GLOBAL_BLOCK_ALLOCATOR: BlockAllocator = BlockAllocator {
     free_blocks: Mutex::new(UnsafeMakeSend::new(BlockList::new())),
 };
 
-#[allow(static_mut_refs)]
 pub fn allocate_block() -> BlockPointer {
     let mut free_blocks_guard = GLOBAL_BLOCK_ALLOCATOR.free_blocks.lock().unwrap();
     let free_blocks = unsafe { free_blocks_guard.get_mut() };
@@ -86,4 +88,11 @@ pub unsafe fn free_block(block: BlockPointer) {
 
     let mut free_blocks_guard = GLOBAL_BLOCK_ALLOCATOR.free_blocks.lock().unwrap();
     unsafe { free_blocks_guard.get_mut().append(block) };
+}
+
+pub unsafe fn free_block_list(list: BlockList) {
+    unsafe {
+        let mut free_block_guard = GLOBAL_BLOCK_ALLOCATOR.free_blocks.lock().unwrap();
+        free_block_guard.get_mut().concat(list);
+    }
 }

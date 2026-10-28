@@ -104,6 +104,15 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
             },
         }
     }
+
+    unsafe {
+        // We do en-masse promotion so we can immediately give all nursery blocks back to the block allocator
+        let used_blocks = std::mem::replace(
+            nursery().used_blocks.lock().unwrap().get_mut(),
+            BlockList::new(),
+        );
+        block_allocator::free_block_list(used_blocks);
+    }
     {
         let mut used = major_heap().used_blocks.lock().unwrap();
         let mut to_space = major_heap().to_space.lock().unwrap();
@@ -135,6 +144,12 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
             MAJOR_HEAP.max_block_count = new_major_size;
         }
     }
+
+    // We do en-masse promotion so the nursery should be empty after every GC
+    debug_assert_eq!(
+        unsafe { nursery().used_blocks.lock().unwrap().get().size_in_blocks() },
+        0
+    );
 
     // println!("GC end");
     // TODO: release other threads *now*, doing so earlier could race the resizing above.
