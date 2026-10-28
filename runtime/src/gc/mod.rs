@@ -113,10 +113,12 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
         );
         block_allocator::free_block_list(used_blocks);
     }
-    {
+    unsafe {
         let mut used = major_heap().used_blocks.lock().unwrap();
         let mut to_space = major_heap().to_space.lock().unwrap();
         swap(&mut *used, &mut *to_space);
+        let previously_used_blocks = std::mem::replace(to_space.get_mut(), BlockList::new());
+        block_allocator::free_block_list(previously_used_blocks);
     }
 
     if collect_major_heap {
