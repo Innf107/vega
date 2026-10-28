@@ -12,7 +12,7 @@ use roots::{ShadowStackFrame, for_stack_roots};
 use crate::{
     gc::{
         generations::{MAJOR_HEAP, initialize_generations, major_heap, nursery},
-        roots::vega_debug_stack_roots,
+        roots::{debug_stack_roots, vega_debug_stack_roots},
     },
     heap::{
         ForwardPointer, GenerationIndex, HeapObject, HeapObjectHandle, finish_block,
@@ -45,10 +45,7 @@ struct GCState {
     collect_major_heap: bool,
 }
 
-pub fn collect_garbage(
-    shadow_stack_pointer: *const ShadowStackFrame,
-    force_major_collection: bool,
-) {
+pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_collection: bool) {
     let collect_major_heap = force_major_collection
         || unsafe {
             major_heap().max_block_count
@@ -74,7 +71,7 @@ pub fn collect_garbage(
 
     if settings().debug_stack_roots {
         println!("~~~~~~GC (major: {collect_major_heap})~~~~~~~");
-        vega_debug_stack_roots(shadow_stack_pointer);
+        debug_stack_roots(shadow_stack_pointer);
         println!("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
     }
 
