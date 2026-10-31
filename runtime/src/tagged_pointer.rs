@@ -1,7 +1,19 @@
-#[derive(Clone, Copy)]
+use std::fmt::Alignment;
+
 pub struct TaggedPointer<T, const ALIGNMENT: usize> {
     pointer: *const T,
 }
+// We need to write this out manually since rust's derived Clone implementation only
+// works if T also implements Clone
+impl<T, const ALIGNMENT: usize> Clone for TaggedPointer<T, ALIGNMENT> {
+    fn clone(&self) -> Self {
+        Self {
+            pointer: self.pointer.clone(),
+        }
+    }
+}
+impl<T, const ALIGNMENT: usize> Copy for TaggedPointer<T, ALIGNMENT> {}
+
 impl<T, const ALIGNMENT: usize> TaggedPointer<T, ALIGNMENT> {
     // We cannot make new const since `pointer.addr` isn't const, even though we only use that in a debug_assert.
     // This function skips that debug_assert so that it can be used in a const context
@@ -26,7 +38,7 @@ impl<T, const ALIGNMENT: usize> TaggedPointer<T, ALIGNMENT> {
         self.pointer.addr() & (1 << INDEX) != 0
     }
     pub fn set_tag<const INDEX: u8>(self, value: bool) -> Self {
-        TaggedPointer {
+        let result = TaggedPointer {
             pointer: self.pointer.map_addr(|address| {
                 if value {
                     address | (1 << INDEX)
@@ -34,6 +46,8 @@ impl<T, const ALIGNMENT: usize> TaggedPointer<T, ALIGNMENT> {
                     address & !(1 << INDEX)
                 }
             }),
-        }
+        };
+        debug_assert_eq!(result.get_tag::<INDEX>(), value);
+        result
     }
 }

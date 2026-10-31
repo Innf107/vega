@@ -368,9 +368,9 @@ impl Header {
             .info_table_pointer_with_tags
             .get_tag::<GENERATION_TAG>()
         {
-            GenerationIndex::MINOR
-        } else {
             GenerationIndex::MAJOR
+        } else {
+            GenerationIndex::MINOR
         }
     }
     pub fn set_generation(self, generation: GenerationIndex) -> Self {
@@ -382,7 +382,7 @@ impl Header {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct GenerationIndex {
     is_major: bool,
 }
@@ -584,6 +584,7 @@ pub unsafe extern "C" fn vega_allocate_boxed(
     );
 
     let header = Header::new(info_table, GenerationIndex::MINOR);
+    debug_assert_eq!(header.generation(), GenerationIndex::MINOR);
     unsafe {
         *object_pointer = HeapObject { header };
     };
