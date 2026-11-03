@@ -28,6 +28,8 @@ data RuntimeDefinitions = MkRuntimeDefinitions
     , vega_errno :: Definition
     , vega_create_thread :: Definition
     , vega_destroy_thread :: Definition
+    , vega_check_allocation_integrity :: Definition
+    , vega_register_allocation :: Definition
     }
 
 defineFunction :: (MonadIO io) => LLVM.Module -> Text -> Bool -> AttributeFunctionType -> io Definition
@@ -57,6 +59,10 @@ declareRuntimeDefinitions module_ = do
 
     vega_destroy_thread <- defineFunction module_ "vega_destroy_thread" False $ attributeFunctionType [(LLVM.pointerType, [])] (LLVM.voidType, [])
 
+    vega_check_allocation_integrity <- defineFunction module_ "vega_check_allocation_integrity" False $ attributeFunctionType [(LLVM.pointerTypeWithAddressSpace 1, [])] (LLVM.voidType, [])
+    
+    vega_register_allocation <- defineFunction module_ "vega_register_allocation" False $ attributeFunctionType [(LLVM.pointerTypeWithAddressSpace 1, [])] (LLVM.voidType, [])
+
     pure
         ( MkRuntimeDefinitions
             { vega_allocate_boxed
@@ -67,5 +73,7 @@ declareRuntimeDefinitions module_ = do
             , vega_errno
             , vega_create_thread
             , vega_destroy_thread
+            , vega_check_allocation_integrity
+            , vega_register_allocation
             }
         )

@@ -12,6 +12,7 @@ use roots::{ShadowStackFrame, for_stack_roots};
 use crate::{
     gc::{
         generations::{MAJOR_HEAP, initialize_generations, major_heap, nursery},
+        integrity::{register_major_heap_allocation, reset_tracked_allocations},
         roots::{debug_stack_roots, vega_debug_stack_roots},
     },
     heap::{
@@ -26,6 +27,7 @@ use crate::{
 pub mod block;
 pub mod block_allocator;
 pub mod generations;
+pub mod integrity;
 pub mod roots;
 
 pub fn initialize_gc(settings: &RuntimeSettings) {
@@ -58,6 +60,11 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
                 < nursery().max_block_count
         };
     // println!("GC start (major: {collect_major_heap}, forced: {force_major_collection})");
+
+    if settings().liveness_integrity {
+        cold_path();
+        reset_tracked_allocations(collect_major_heap);
+    }
 
     let mut gc_state = {
         let allocation_block = block_allocator::allocate_block();
@@ -313,6 +320,12 @@ fn allocate_for_evacuation(gc_state: &mut GCState, size: usize) -> *mut HeapObje
         gc_state.allocation_pointer = gc_state
             .allocation_pointer
             .byte_add(round_up_to_heap_alignment(size));
+
+        if settings().liveness_integrity {
+            cold_path();
+            register_major_heap_allocation(HeapObject::data(pointer));
+        }
+
         pointer
     }
 }

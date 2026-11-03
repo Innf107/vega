@@ -50,6 +50,7 @@ data Options
         , debugEmitConfig :: DebugEmit.EmitConfig
         , verifyMIR :: Bool
         , useCCallingConvention :: Bool
+        , heapIntegrityChecks :: Bool
         }
     | Exec
         { file :: FilePath
@@ -86,8 +87,16 @@ parseOptimizationLevel = maybeReader \case
 
 buildOptions :: Parser Options
 buildOptions = do
-    optimizationLevel <- option parseOptimizationLevel (long "optimization-level" <> short 'O' <> metavar "LEVEL" <> value Driver.O0 
-        <> showDefaultWith showOptimizationLevel <> help ("The overall optimization level used by Vega and LLVM. Can be one of 0, 1, 2, 3"))
+    optimizationLevel <-
+        option
+            parseOptimizationLevel
+            ( long "optimization-level"
+                <> short 'O'
+                <> metavar "LEVEL"
+                <> value Driver.O0
+                <> showDefaultWith showOptimizationLevel
+                <> help ("The overall optimization level used by Vega and LLVM. Can be one of 0, 1, 2, 3")
+            )
     persistence <-
         option
             auto
@@ -122,8 +131,20 @@ buildOptions = do
             ( long "use-c-calling-convention"
                 <> help ("For debugging the compiler only: Make the generated LLVM code use the ccc calling convention instead of tailcc. This will break all tail calls, lead to stack overflows and possibly performance losses, but it might make it easier to debug miscompilations.")
             )
+    heapIntegrityChecks <-
+        flag False True (long "heap-integrity-checks" <> help ("Enable additional heap integrity checks in the compiled code and runtime to catch memory corruptions. This has a significant time and space cost and should not be enabled in production."))
 
-    pure Build{optimizationLevel, persistence, linker, includeUnique, debugEmitConfig, verifyMIR, useCCallingConvention}
+    pure
+        Build
+            { optimizationLevel
+            , persistence
+            , linker
+            , includeUnique
+            , debugEmitConfig
+            , verifyMIR
+            , useCCallingConvention
+            , heapIntegrityChecks
+            }
 
 parseDebugEmitConfig :: Parser DebugEmit.EmitConfig
 parseDebugEmitConfig = do
@@ -192,6 +213,7 @@ main = do
                 { optimizationLevel = options.optimizationLevel
                 , verifyMIR = options.verifyMIR
                 , linker = options.linker
+                , heapIntegrityChecks = options.heapIntegrityChecks
                 }
     case options of
         Build{persistence, debugEmitConfig, useCCallingConvention} -> run driverConfig debugEmitConfig persistence do
@@ -209,12 +231,12 @@ main = do
                     exitFailure
                 Invalid parseException -> do
                     -- TODO: format these yourself so they're actually human readable
-                    eprint $
-                        pretty $
-                            MkPlainErrorMessage $
-                                emphasis "Malformed" <+> keyword "vega.yaml" <+> emphasis "file:"
-                                    <> "\n    "
-                                    <> align (fromString (prettyPrintParseException parseException))
+                    eprint
+                        $ pretty
+                        $ MkPlainErrorMessage
+                        $ emphasis "Malformed" <+> keyword "vega.yaml" <+> emphasis "file:"
+                            <> "\n    "
+                            <> align (fromString (prettyPrintParseException parseException))
                     exitFailure
                 Found packageConfig -> do
                     let ?mainPackage = packageConfig

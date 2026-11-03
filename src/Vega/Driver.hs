@@ -87,6 +87,7 @@ data DriverConfig = MkDriverConfig
     { verifyMIR :: Bool
     , linker :: Text
     , optimizationLevel :: OptimizationLevel
+    , heapIntegrityChecks :: Bool
     }
 
 data OptimizationLevel
@@ -298,7 +299,7 @@ compileBackend = do
             outputFile <- Package.ensureJavascriptOutputFile ?mainPackage
             liftIO $ writeFile outputFile (encodeUtf8 (TextBuilder.toText jsCode))
         Package.NativeRelease -> runNewUnique do
-            MkDriverConfig{verifyMIR} <- ask
+            MkDriverConfig{verifyMIR, heapIntegrityChecks} <- ask
             let compileToMIR declarationName = do
                     core <-
                         GraphPersistence.getCompiledCore declarationName >>= \case
@@ -334,7 +335,8 @@ compileBackend = do
                         Pretty.eprintANSII (Pretty.errorText "MIR VERIFICATION ERROR: " <> error)
 
             LLVM.withContext $ LLVM.withModule "idkwhattoputhereyet" \llvmModule -> do
-                MIRToLLVM.compile monomorphizedMIRProgram llvmModule
+                let config = MIRToLLVM.MkConfig { heapIntegrityChecks }
+                MIRToLLVM.compile config monomorphizedMIRProgram llvmModule
                 MIRToLLVM.addMainFunction entryPoint llvmModule
 
                 LLVM.initializeNativeTarget >>= \case

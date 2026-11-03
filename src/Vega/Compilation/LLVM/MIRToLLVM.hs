@@ -3,7 +3,7 @@
 {-# LANGUAGE RequiredTypeArguments #-}
 {-# LANGUAGE TypeAbstractions #-}
 
-module Vega.Compilation.LLVM.MIRToLLVM (compile, addMainFunction, useCCallingConvention) where
+module Vega.Compilation.LLVM.MIRToLLVM (compile, Config(..), addMainFunction, useCCallingConvention) where
 
 import Relude hiding (NonEmpty, State, evalState, get, modify, prettyCallStack, put, trace)
 
@@ -70,6 +70,10 @@ import Vega.Util (Sign (..), forIndexed_, viaList, type (?))
 import Vega.Util qualified as Util
 import Witherable qualified
 
+data Config = MkConfig {
+    heapIntegrityChecks :: Bool
+}
+
 data DeclarationState = MkDeclarationState
     { registeredBlocks :: HashMap MIR.BlockDescriptor LLVM.BasicBlock
     , outstandingBlocks :: Seq MIR.BlockDescriptor
@@ -87,6 +91,7 @@ threadStatePointer = case ?functionEnv.sretVariable of
 
 type Compile es =
     ( ?context :: LLVM.Context
+    , ?config :: Config
     , ?module_ :: LLVM.Module
     , ?runtimeDefinitions :: RuntimeDefinitions
     , IOE :> es
@@ -98,9 +103,10 @@ type Compile es =
     )
 
 {-# SCC compile #-}
-compile :: (?context :: LLVM.Context, IOE :> es, Trace :> es) => MIR.Program -> LLVM.Module -> Eff es ()
-compile program module_ = do
+compile :: (?context :: LLVM.Context, IOE :> es, Trace :> es) => Config -> MIR.Program -> LLVM.Module -> Eff es ()
+compile config program module_ = do
     runtimeDefinitions <- declareRuntimeDefinitions module_
+    let ?config = config
     let ?module_ = module_
     let ?runtimeDefinitions = runtimeDefinitions
     for_ program.declarations \declaration -> do
@@ -290,6 +296,7 @@ forwardDeclareDeclaration = \case
 
 compileDeclaration ::
     ( ?context :: LLVM.Context
+    , ?config :: Config
     , ?module_ :: LLVM.Module
     , ?runtimeDefinitions :: RuntimeDefinitions
     , IOE :> es
@@ -473,12 +480,14 @@ compileInstruction builder = \case
                 layoutInfoTablePointer <- getOrCreateLayoutInfoTablePointer targetLayout
 
                 memoryPointer <- buildRuntimeCall builder "vega_allocate_boxed" [layoutInfoTablePointer] (renderVariable var)
+                registerAllocation builder memoryPointer
                 let boxedCompoundValue = Layout.boxedCompoundValue memoryPointer
                 insertVarMapping var boxedCompoundValue Layout.boxedLayout
 
                 buildComplexStore builder targetLayout targetValue memoryPointer
     MIR.Unbox{var, boxedTarget, representation} -> do
         (targetValue, _) <- lookupVar boxedTarget
+        checkAllocationIntegrity builder (Layout.assertBoxed targetValue)
         layout <- Layout.representationLayout representation
         case Size.inBytes (Layout.sizeAtRest layout) of
             0 -> insertVarMapping var (Layout.unitCompoundValue) layout
@@ -1483,6 +1492,33 @@ is ever used, ideally immediately after argument parsing in main.
 -}
 useCCallingConvention :: Bool -> IO ()
 useCCallingConvention value = writeIORef useCCallingConventionRef value
+
+{- | Check that an LLVM pointer points to a valid, live allocation.
+This is only valid if the pointer is the pointer passed to 'registerAllocation'.
+Using it on interior pointers is not supported.
+
+If heap integrity checks are disabled, this function does nothing.
+ -}
+checkAllocationIntegrity :: Compile es => LLVMBuilder.Builder -> LLVM.Value -> Eff es ()
+checkAllocationIntegrity builder pointer = case ?config.heapIntegrityChecks of
+    False -> pure ()
+    True -> do
+        _ <- buildRuntimeCall builder "vega_check_allocation_integrity" [pointer] ""
+        pure ()
+
+{- | Register an allocation for heap integrity checking.
+This has to be the exact pointer that is saved in the shadow stack or stored on the heap, not an interior pointer.
+
+If heap integrity checks are disabled, this function does nothing.
+ -}
+registerAllocation :: Compile es => LLVMBuilder.Builder -> LLVM.Value -> Eff es ()
+registerAllocation builder pointer = case ?config.heapIntegrityChecks of
+    False -> pure ()
+    True -> do
+        _ <- buildRuntimeCall builder "vega_register_allocation" [pointer] ""
+        pure ()
+
+
 
 {- NOTE [Closure Representation]:
 Closures with payload representation `r` are *always* represented as products (FunctionPointer * r).
