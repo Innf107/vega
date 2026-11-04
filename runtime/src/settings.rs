@@ -45,10 +45,12 @@ pub struct RuntimeSettings {
     pub hide_stack_root_types: bool,
 
     /// make heap integrity checks include liveness analysis from garbage collection.
+    /// (incompatible with --evacuation-integrity for now)
     #[argh(switch, long = "liveness-integrity")]
     pub liveness_integrity: bool,
 
     /// add integrity checks to every evacuated heap object during garbage collection
+    /// (incompatible with --liveness-integrity for now)
     #[argh(switch, long = "evacuation-integrity")]
     pub evacuation_integrity: bool,
 }
@@ -113,6 +115,12 @@ pub fn parse_runtime_settings() -> &'static RuntimeSettings {
             }
         },
     };
+    if settings.liveness_integrity && settings.evacuation_integrity {
+        eprintln!(
+            "{executable_name} +RTS: Flags '--liveness-integrity' and '--evacuation-integrity' are incompatible"
+        );
+        exit(1)
+    }
 
     unsafe {
         SETTINGS.write(settings);

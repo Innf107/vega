@@ -20,6 +20,7 @@ import Effectful.Process (Process, runProcess)
 import Effectful.Reader.Static (Reader, runReader)
 import GHC.Read (readsPrec)
 import LLVM.Core qualified as LLVM
+import LLVM.Target qualified
 import System.IO (hIsTerminalDevice)
 import System.OsPath (osp)
 import Vega.Compilation.Core.Syntax qualified as Core
@@ -46,6 +47,7 @@ data Options
         { optimizationLevel :: Driver.OptimizationLevel
         , persistence :: PersistenceBackend
         , linker :: Text
+        , codeGenOptLevel :: Maybe LLVM.Target.CodeGenOptLevel
         , includeUnique :: Bool
         , debugEmitConfig :: DebugEmit.EmitConfig
         , verifyMIR :: Bool
@@ -85,6 +87,15 @@ parseOptimizationLevel = maybeReader \case
     "3" -> Just Driver.O3
     _ -> Nothing
 
+parseCodeGenOptLevel :: ReadM (Maybe LLVM.Target.CodeGenOptLevel)
+parseCodeGenOptLevel = maybeReader \case
+    "auto" -> Just Nothing
+    "none" -> Just (Just LLVM.Target.CodeGenLevelNone)
+    "less" -> Just (Just LLVM.Target.CodeGenLevelLess)
+    "default" -> Just (Just LLVM.Target.CodeGenLevelDefault)
+    "aggressive" -> Just (Just LLVM.Target.CodeGenLevelAggressive)
+    _ -> Nothing
+
 buildOptions :: Parser Options
 buildOptions = do
     optimizationLevel <-
@@ -110,6 +121,7 @@ buildOptions = do
                     )
             )
     linker <- option auto (long "linker" <> metavar "PATH" <> value "auto" <> showDefault <> help "The executable to use for linking. This should be a C compiler or similar that already links in system libraries. Setting it to 'auto' will automatically use clang or gcc from the PATH if available.")
+    codeGenOptLevel <- option parseCodeGenOptLevel (long "codegen-optimization-level" <> metavar "LEVEL" <> value Nothing <> help "The backend optimization level for LLVM codegen. Can be one of auto, none, less, default, aggressive (default: auto)")
     includeUnique <-
         flag
             False
@@ -139,6 +151,7 @@ buildOptions = do
             { optimizationLevel
             , persistence
             , linker
+            , codeGenOptLevel
             , includeUnique
             , debugEmitConfig
             , verifyMIR
@@ -213,6 +226,7 @@ main = do
                 { optimizationLevel = options.optimizationLevel
                 , verifyMIR = options.verifyMIR
                 , linker = options.linker
+                , codeGenOptLevel = options.codeGenOptLevel
                 , heapIntegrityChecks = options.heapIntegrityChecks
                 }
     case options of
@@ -231,12 +245,12 @@ main = do
                     exitFailure
                 Invalid parseException -> do
                     -- TODO: format these yourself so they're actually human readable
-                    eprint
-                        $ pretty
-                        $ MkPlainErrorMessage
-                        $ emphasis "Malformed" <+> keyword "vega.yaml" <+> emphasis "file:"
-                            <> "\n    "
-                            <> align (fromString (prettyPrintParseException parseException))
+                    eprint $
+                        pretty $
+                            MkPlainErrorMessage $
+                                emphasis "Malformed" <+> keyword "vega.yaml" <+> emphasis "file:"
+                                    <> "\n    "
+                                    <> align (fromString (prettyPrintParseException parseException))
                     exitFailure
                 Found packageConfig -> do
                     let ?mainPackage = packageConfig

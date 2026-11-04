@@ -31,8 +31,8 @@ import Effectful.Error.Static (Error, runErrorNoCallStack, throwError_)
 import Effectful.Exception (evaluate, try)
 import Effectful.Process (Process, callProcess, runProcess)
 import LLVM.Core qualified as LLVM
-import LLVM.Internal.Wrappers (CodeModel (CodeModelDefault), RelocMode (RelocDefault))
 import LLVM.Internal.Wrappers qualified as LLVM
+import LLVM.Target (CodeModel (CodeModelDefault), RelocMode (RelocDefault))
 import LLVM.Target qualified
 import Streaming.Prelude qualified as Streaming
 import System.Directory.OsPath qualified as OsPathDirectory
@@ -87,6 +87,7 @@ data DriverConfig = MkDriverConfig
     { verifyMIR :: Bool
     , linker :: Text
     , optimizationLevel :: OptimizationLevel
+    , codeGenOptLevel :: Maybe LLVM.CodeGenOptLevel
     , heapIntegrityChecks :: Bool
     }
 
@@ -335,7 +336,7 @@ compileBackend = do
                         Pretty.eprintANSII (Pretty.errorText "MIR VERIFICATION ERROR: " <> error)
 
             LLVM.withContext $ LLVM.withModule "idkwhattoputhereyet" \llvmModule -> do
-                let config = MIRToLLVM.MkConfig { heapIntegrityChecks }
+                let config = MIRToLLVM.MkConfig{heapIntegrityChecks}
                 MIRToLLVM.compile config monomorphizedMIRProgram llvmModule
                 MIRToLLVM.addMainFunction entryPoint llvmModule
 
@@ -351,10 +352,18 @@ compileBackend = do
                 triple <- LLVM.Target.getDefaultTargetTriple
                 target <- LLVM.Target.getTargetFromTriple triple
 
+                MkDriverConfig{optimizationLevel, codeGenOptLevel} <- ask
+                let fullCodeGenOptLevel = case codeGenOptLevel of
+                        Just level -> level
+                        Nothing -> case optimizationLevel of
+                            O0 -> LLVM.Target.CodeGenLevelNone
+                            O1 -> LLVM.Target.CodeGenLevelLess
+                            O2 -> LLVM.Target.CodeGenLevelDefault
+                            O3 -> LLVM.Target.CodeGenLevelAggressive
                 let targetMachineOptions =
                         LLVM.Target.defaultTargetMachineOptions
                             { LLVM.Target.relocMode = Just LLVM.Target.RelocPIC
-                            , LLVM.Target.codeGenOptLevel = Just LLVM.Target.CodeGenLevelDefault
+                            , LLVM.Target.codeGenOptLevel = Just fullCodeGenOptLevel
                             }
 
                 targetMachine <-
