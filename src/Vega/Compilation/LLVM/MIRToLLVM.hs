@@ -808,6 +808,7 @@ compilePrimopCall builder primop arguments representationArguments returnReprese
         Errno -> outOfLineBuiltin builder "vega_errno" simpleArgumentValues returnRepresentation varName
         DebugInt -> outOfLineBuiltin builder "vega_debug_int" simpleArgumentValues returnRepresentation varName
         DebugStackRoots -> outOfLineBuiltin builder "vega_debug_stack_roots" simpleArgumentValues returnRepresentation varName
+        DebugRecursiveIntegrityCheck -> outOfLineBuiltin builder "vega_debug_recursive_integrity_check" simpleArgumentValues returnRepresentation varName
         Panic -> undefined
         UnsafeCoerce -> identity
   where

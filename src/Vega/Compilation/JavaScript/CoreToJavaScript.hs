@@ -274,9 +274,12 @@ isUnitRepresentation = \case
 primopJSFunction :: Builtins.Primop -> (Int, Seq JS.Expr -> Eff es (Seq JS.Statement, JS.Expr))
 primopJSFunction = \case
     Builtins.ReplicateMutableArray -> asJSFunction 2 "internal$replicateArray"
-    Builtins.UnsafeUninitializedMutableArray -> (1, \arguments -> case arguments of 
-        [size] -> pure ([], JS.Application (JS.Var "internal$replicateArray") [size, JS.Undefined])
-        _ -> error "unreachable")
+    Builtins.UnsafeUninitializedMutableArray ->
+        ( 1
+        , \arguments -> case arguments of
+            [size] -> pure ([], JS.Application (JS.Var "internal$replicateArray") [size, JS.Undefined])
+            _ -> error "unreachable"
+        )
     Builtins.EmptyArray -> (0, \_ -> pure ([], JS.ArrayLiteral []))
     Builtins.UnsafeReadArray ->
         ( 2
@@ -353,6 +356,8 @@ primopJSFunction = \case
     -- under the JS backend so that it can be used to debug native code without having to remove the JS target
     Builtins.DebugStackRoots -> (0, \_ -> pure ([], JS.ArrayLiteral []))
     Builtins.UnsafeCoerce -> identity
+    -- The JS backend does not support integrity checks
+    Builtins.DebugRecursiveIntegrityCheck -> (1, \_ -> pure ([], JS.Undefined))
   where
     asJSFunction arity name = (arity, \arguments -> pure ([], JS.Application (JS.Var name) arguments))
     identity =

@@ -45,8 +45,12 @@ pub struct RuntimeSettings {
     pub hide_stack_root_types: bool,
 
     /// make heap integrity checks include liveness analysis from garbage collection.
-    #[argh(switch, long="liveness-integrity")]
+    #[argh(switch, long = "liveness-integrity")]
     pub liveness_integrity: bool,
+
+    /// add integrity checks to every evacuated heap object during garbage collection
+    #[argh(switch, long = "evacuation-integrity")]
+    pub evacuation_integrity: bool,
 }
 
 static mut SETTINGS: MaybeUninit<RuntimeSettings> = MaybeUninit::zeroed();

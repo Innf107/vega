@@ -84,6 +84,7 @@ data Primop
       Panic
     | DebugInt
     | DebugStackRoots
+    | DebugRecursiveIntegrityCheck
     | -- Evil
       UnsafeCoerce
     deriving (Show, Enum, Bounded)
@@ -129,6 +130,7 @@ primopVarName = \case
     Panic -> "panic"
     DebugInt -> "debugInt"
     DebugStackRoots -> "debugStackRoots"
+    DebugRecursiveIntegrityCheck -> "debugRecursiveIntegrityCheck"
     UnsafeCoerce -> "unsafeCoerce"
 
 primops :: HashMap Text Primop
@@ -252,6 +254,7 @@ primopType = \case
         forallVisible Parametric "a" (Type r) \a ->
             forallVisible Parametric "b" (Type r) \b ->
                 [a] --> b
+    DebugRecursiveIntegrityCheck -> forallVisible Parametric "a" (Type (PrimitiveRep BoxedRep)) \a -> [a] --> unitType
 
 -- This should really be determined by primopType but we can't currently do that without
 -- involving the type checker so we have to write it out manually for now.
@@ -292,6 +295,7 @@ primopRepresentation primop arguments = case primop of
     UnsafeRem -> ([intRep 64, intRep 64], intRep 64)
     Errno -> ([], intRep 32)
     UnsafeCoerce -> ([argument 0], argument 0)
+    DebugRecursiveIntegrityCheck -> ([Core.PrimitiveRep BoxedRep], unitRep)
   where
     argument i = case Seq.lookup i arguments of
         Just representation -> representation

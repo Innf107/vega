@@ -12,7 +12,10 @@ use roots::{ShadowStackFrame, for_stack_roots};
 use crate::{
     gc::{
         generations::{MAJOR_HEAP, initialize_generations, major_heap, nursery},
-        integrity::{register_major_heap_allocation, reset_tracked_allocations},
+        integrity::{
+            register_major_heap_allocation, reset_tracked_allocations,
+            vega_check_allocation_integrity,
+        },
         roots::{debug_stack_roots, vega_debug_stack_roots},
     },
     heap::{
@@ -180,6 +183,10 @@ unsafe fn evacuate(state: &mut GCState, heap_object: *const HeapObject) -> *cons
         // a static array being unreachable from the heap doesn't mean that it isn't still reachable from *code*.
         HeapObjectHandle::Null | HeapObjectHandle::StaticArray(_) => heap_object,
         HeapObjectHandle::Boxed(_) | HeapObjectHandle::Array(_) => {
+            if settings().evacuation_integrity {
+                cold_path();
+                vega_check_allocation_integrity(HeapObject::data(heap_object));
+            }
             let size = unsafe { HeapObject::total_stride(heap_object) };
             let to_space_allocation: *mut HeapObject = allocate_for_evacuation(state, size);
 
