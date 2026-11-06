@@ -19,6 +19,7 @@ use crate::{
         finish_block, round_up_to_heap_alignment,
     },
     settings::{RuntimeSettings, settings},
+    thread::ThreadState,
 };
 
 pub mod block;
@@ -51,6 +52,15 @@ impl GCState {
                 == BlockPointer::SIZE_FOR_ALLOCATION
         };
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn vega_collect_garbage(
+    thread_state: *mut ThreadState,
+    force_major_collection: bool,
+) {
+    let shadow_stack_pointer = unsafe { (*thread_state).shadow_stack_pointer };
+    collect_garbage(shadow_stack_pointer, force_major_collection);
 }
 
 pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_collection: bool) {

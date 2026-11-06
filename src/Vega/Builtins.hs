@@ -85,6 +85,7 @@ data Primop
     | DebugInt
     | DebugStackRoots
     | DebugRecursiveIntegrityCheck
+    | CollectGarbage
     | -- Evil
       UnsafeCoerce
     deriving (Show, Enum, Bounded)
@@ -131,6 +132,7 @@ primopVarName = \case
     DebugInt -> "debugInt"
     DebugStackRoots -> "debugStackRoots"
     DebugRecursiveIntegrityCheck -> "debugRecursiveIntegrityCheck"
+    CollectGarbage -> "collectGarbage"
     UnsafeCoerce -> "unsafeCoerce"
 
 primops :: HashMap Text Primop
@@ -250,11 +252,12 @@ primopType = \case
     IntToUInt -> [intType] --> uintType
     UnsafeRem -> [intType, intType] --> intType
     Errno -> [] --> int32Type
+    DebugRecursiveIntegrityCheck -> forallVisible Parametric "a" (Type (PrimitiveRep BoxedRep)) \a -> [a] --> unitType
+    CollectGarbage -> [boolType] --> unitType
     UnsafeCoerce -> forallInferred Monomorphized "r" Rep \r ->
         forallVisible Parametric "a" (Type r) \a ->
             forallVisible Parametric "b" (Type r) \b ->
                 [a] --> b
-    DebugRecursiveIntegrityCheck -> forallVisible Parametric "a" (Type (PrimitiveRep BoxedRep)) \a -> [a] --> unitType
 
 -- This should really be determined by primopType but we can't currently do that without
 -- involving the type checker so we have to write it out manually for now.
@@ -294,8 +297,9 @@ primopRepresentation primop arguments = case primop of
     IntToUInt -> ([intRep 64], intRep 64)
     UnsafeRem -> ([intRep 64, intRep 64], intRep 64)
     Errno -> ([], intRep 32)
-    UnsafeCoerce -> ([argument 0], argument 0)
     DebugRecursiveIntegrityCheck -> ([Core.PrimitiveRep BoxedRep], unitRep)
+    CollectGarbage -> ([boolRep], unitRep)
+    UnsafeCoerce -> ([argument 0], argument 0)
   where
     argument i = case Seq.lookup i arguments of
         Just representation -> representation
@@ -451,6 +455,9 @@ intRep sizeInBits = Core.PrimitiveRep (Vega.IntRep sizeInBits)
 
 unitRep :: Core.Representation
 unitRep = Core.ProductRep []
+
+boolRep :: Core.Representation
+boolRep = Core.SumRep [unitRep, unitRep]
 
 pointerRep :: Core.Representation
 pointerRep = Core.PrimitiveRep Vega.PointerRep

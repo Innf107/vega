@@ -808,6 +808,7 @@ compilePrimopCall builder primop arguments representationArguments returnReprese
         Errno -> outOfLineBuiltin builder "vega_errno" simpleArgumentValues returnRepresentation varName
         DebugInt -> outOfLineBuiltin builder "vega_debug_int" simpleArgumentValues returnRepresentation varName
         DebugStackRoots -> outOfLineBuiltin builder "vega_debug_stack_roots" simpleArgumentValues returnRepresentation varName
+        CollectGarbage -> outOfLineBuiltin builder "vega_collect_garbage" simpleArgumentValues returnRepresentation varName
         DebugRecursiveIntegrityCheck -> 
             if ?config.heapIntegrityChecks then
                 outOfLineBuiltin builder "vega_debug_recursive_integrity_check" simpleArgumentValues returnRepresentation varName

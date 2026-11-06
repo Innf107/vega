@@ -33,6 +33,14 @@ void RunShadowStackPass(LLVMModuleRef moduleRef) {
         auto schedule = computeSchedule(function);
         auto intervals = computeIntervals(
             function, schedule, pointerIDs, liveIntoBlock, liveAcrossCalls);
+        for (auto &[instruction, interval] : intervals) {
+            if (isa<Instruction>(instruction)) {
+                std::string annotation;
+                raw_string_ostream stream(annotation);
+                stream << "interval: " << interval.from << " .. " << interval.to;
+                dyn_cast<Instruction>(instruction)->addAnnotationMetadata(annotation);
+            }
+        }
         auto StackFrameAssignments = allocateStackFrameSlots(intervals);
         saveAndRelocateBoxedPointers(
             function, pointerIDs, liveAcrossCalls, StackFrameAssignments);

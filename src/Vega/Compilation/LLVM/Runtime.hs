@@ -30,6 +30,7 @@ data RuntimeDefinitions = MkRuntimeDefinitions
     , vega_destroy_thread :: Definition
     , vega_check_allocation_integrity :: Definition
     , vega_register_allocation :: Definition
+    , vega_collect_garbage :: Definition
     , vega_debug_recursive_integrity_check :: Definition
     }
 
@@ -65,6 +66,8 @@ declareRuntimeDefinitions module_ = do
 
     vega_register_allocation <- defineFunction module_ "vega_register_allocation" False $ attributeFunctionType [(LLVM.pointerTypeWithAddressSpace 1, [])] (LLVM.voidType, [])
 
+    vega_collect_garbage <- defineFunction module_ "vega_collect_garbage" True $ attributeFunctionType [(LLVM.pointerType, []), (LLVM.int1Type, [])] (LLVM.voidType, [])
+
     vega_debug_recursive_integrity_check <- defineFunction module_ "vega_debug_recursive_integrity_check" False $ attributeFunctionType [(LLVM.pointerTypeWithAddressSpace 1, [])] (LLVM.voidType, [])
 
     pure
@@ -79,6 +82,7 @@ declareRuntimeDefinitions module_ = do
             , vega_destroy_thread
             , vega_check_allocation_integrity
             , vega_register_allocation
+            , vega_collect_garbage
             , vega_debug_recursive_integrity_check
             }
         )

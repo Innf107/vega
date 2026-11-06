@@ -355,9 +355,11 @@ primopJSFunction = \case
     -- There is nothing interesting we can do with this call, but it also doesn't hurt to compile it to a noop
     -- under the JS backend so that it can be used to debug native code without having to remove the JS target
     Builtins.DebugStackRoots -> (0, \_ -> pure ([], JS.ArrayLiteral []))
-    Builtins.UnsafeCoerce -> identity
     -- The JS backend does not support integrity checks
     Builtins.DebugRecursiveIntegrityCheck -> (1, \_ -> pure ([], JS.Undefined))
+    -- We don't have control over  the GC in JS
+    Builtins.CollectGarbage -> (1, \_ -> pure ([], JS.Undefined))
+    Builtins.UnsafeCoerce -> identity
   where
     asJSFunction arity name = (arity, \arguments -> pure ([], JS.Application (JS.Var name) arguments))
     identity =
