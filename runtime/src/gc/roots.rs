@@ -1,7 +1,7 @@
 use crate::{heap::HeapObject, settings::settings, thread::ThreadState};
 use std::{
     io::{self, Write},
-    ptr::{null, null_mut},
+    ptr::null_mut,
 };
 
 #[repr(C)]

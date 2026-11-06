@@ -1,8 +1,7 @@
 use std::{
-    array,
     cell::LazyCell,
     collections::HashSet,
-    sync::{LazyLock, Mutex},
+    sync::Mutex,
 };
 
 use crate::{

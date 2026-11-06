@@ -57,6 +57,9 @@ impl HeapObject {
     }
 
     pub fn data(object: *const HeapObject) -> *mut u8 {
+        if object.is_null()  {
+            return null_mut();
+        }
         unsafe { object.byte_add(HeapObject::HEADER_SIZE_IN_BYTES) as *mut u8 }
     }
 

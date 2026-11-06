@@ -1,9 +1,4 @@
-use std::{
-    cmp::max,
-    hint::cold_path,
-    mem::swap,
-    sync::{Mutex, atomic::AtomicUsize},
-};
+use std::{cmp::max, hint::cold_path, mem::swap};
 
 use block::{BLOCK_SIZE, BlockList};
 use libc::{_SC_PAGESIZE, sysconf};
@@ -17,15 +12,13 @@ use crate::{
             register_major_heap_allocation, reset_tracked_allocations,
             vega_check_allocation_integrity, vega_debug_recursive_integrity_check,
         },
-        roots::{debug_stack_roots, vega_debug_stack_roots},
+        roots::debug_stack_roots,
     },
     heap::{
         ForwardPointer, GenerationIndex, HEAP_ALIGNMENT, HeapObject, HeapObjectHandle,
         finish_block, round_up_to_heap_alignment,
     },
-    make_send::UnsafeMakeSend,
     settings::{RuntimeSettings, settings},
-    thread::ThreadState,
 };
 
 pub mod block;
@@ -308,7 +301,7 @@ unsafe fn scavenge(state: &mut GCState, heap_object: *const HeapObject) {
                     let relocated_pointer =
                         evacuate(state, HeapObject::from_data(*element_pointer));
 
-                    *element_pointer = HeapObject::data(relocated_pointer)
+                    *element_pointer = HeapObject::data(relocated_pointer);
                 };
             }
         }
