@@ -1,4 +1,3 @@
-use std::fmt::Alignment;
 
 pub struct TaggedPointer<T, const ALIGNMENT: usize> {
     pointer: *const T,

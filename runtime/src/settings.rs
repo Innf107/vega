@@ -53,6 +53,11 @@ pub struct RuntimeSettings {
     /// (incompatible with --liveness-integrity for now)
     #[argh(switch, long = "evacuation-integrity")]
     pub evacuation_integrity: bool,
+
+    /// add recursive integrity checks to every stack root before and after each garbage collection
+    /// (implies --liveness-integrity)
+    #[argh(switch, long = "root-integrity")]
+    pub root_integrity: bool,
 }
 
 static mut SETTINGS: MaybeUninit<RuntimeSettings> = MaybeUninit::zeroed();
@@ -98,7 +103,7 @@ pub fn parse_runtime_settings() -> &'static RuntimeSettings {
         .map(|argument| argument.as_str())
         .collect();
 
-    let settings = match RuntimeSettings::from_args(&command_name, &argument_slice) {
+    let mut settings = match RuntimeSettings::from_args(&command_name, &argument_slice) {
         Ok(settings) => settings,
         Err(early_exit) => match early_exit.status {
             Ok(()) => {
@@ -115,6 +120,9 @@ pub fn parse_runtime_settings() -> &'static RuntimeSettings {
             }
         },
     };
+    if settings.root_integrity {
+        settings.liveness_integrity = true;
+    }
     if settings.liveness_integrity && settings.evacuation_integrity {
         eprintln!(
             "{executable_name} +RTS: Flags '--liveness-integrity' and '--evacuation-integrity' are incompatible"

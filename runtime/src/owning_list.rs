@@ -1,7 +1,6 @@
 use std::{
     alloc::{Layout, alloc, dealloc},
     debug_assert_matches,
-    ptr::{null, null_mut},
 };
 
 // This isn't actually accessible to anything outside this module,

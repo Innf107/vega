@@ -11,16 +11,17 @@ use roots::{ShadowStackFrame, for_stack_roots};
 
 use crate::{
     gc::{
+        block::BlockPointer,
         generations::{MAJOR_HEAP, initialize_generations, major_heap, nursery},
         integrity::{
             register_major_heap_allocation, reset_tracked_allocations,
-            vega_check_allocation_integrity,
+            vega_check_allocation_integrity, vega_debug_recursive_integrity_check,
         },
         roots::{debug_stack_roots, vega_debug_stack_roots},
     },
     heap::{
-        ForwardPointer, GenerationIndex, HeapObject, HeapObjectHandle, finish_block,
-        round_up_to_heap_alignment,
+        ForwardPointer, GenerationIndex, HEAP_ALIGNMENT, HeapObject, HeapObjectHandle,
+        finish_block, round_up_to_heap_alignment,
     },
     make_send::UnsafeMakeSend,
     settings::{RuntimeSettings, settings},
@@ -49,6 +50,15 @@ struct GCState {
     allocation_limit: *mut HeapObject,
     collect_major_heap: bool,
 }
+impl GCState {
+    fn has_empty_allocation_block(&self) -> bool {
+        return unsafe {
+            self.allocation_limit
+                .byte_offset_from_unsigned(self.allocation_pointer)
+                == BlockPointer::SIZE_FOR_ALLOCATION
+        };
+    }
+}
 
 pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_collection: bool) {
     let collect_major_heap = force_major_collection
@@ -64,6 +74,12 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
         };
     // println!("GC start (major: {collect_major_heap}, forced: {force_major_collection})");
 
+    if settings().root_integrity {
+        for_stack_roots(shadow_stack_pointer, |pointer_to_root| {
+            vega_debug_recursive_integrity_check(unsafe { *pointer_to_root }.cast_mut());
+        });
+    }
+
     if settings().liveness_integrity {
         cold_path();
         reset_tracked_allocations(collect_major_heap);
@@ -78,6 +94,8 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
             collect_major_heap,
         }
     };
+    // sanity check that GCState::empty_allocation_block works correctly
+    debug_assert!(gc_state.has_empty_allocation_block());
 
     if settings().debug_stack_roots {
         println!("~~~~~~GC (major: {collect_major_heap})~~~~~~~");
@@ -100,7 +118,36 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
             pending_set.pop_back()
         };
         match block {
-            None => break, // We are done for now. In the future, we will wait until either all threads are done or more work is being added
+            None => {
+                if gc_state.has_empty_allocation_block() {
+                    unsafe {
+                        let block =
+                            BlockPointer::from_heap_object_pointer(gc_state.allocation_limit);
+                        block_allocator::free_block(block);
+                    }
+                    // We are done for now. In the future, we will wait until either all threads are done or more work is being added
+                    break;
+                } else {
+                    // The pending set is empty but we still have evacuated heap objects in our gc thread's state that we haven't committed yet.
+
+                    // TODO: This will cause a ton of fragmentation if we have something like a long singly linked list, since
+                    // we will evacuate a single object, exhaust our pending set and immediately have to commit the entire block
+                    // for just one object.
+                    finish_block(
+                        &mut gc_state.allocation_pointer,
+                        &mut gc_state.allocation_limit,
+                        &major_heap().pending_blocks,
+                        |heap_size| {
+                            debug_assert!(
+                                gc_state.collect_major_heap
+                                    || (heap_size
+                                        <= major_heap().max_block_count
+                                            - nursery().max_block_count)
+                            );
+                        },
+                    );
+                }
+            }
             Some(block) => unsafe {
                 for heap_object in block.iter_heap_objects() {
                     scavenge(&mut gc_state, heap_object.cast_const());
@@ -163,6 +210,12 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
         0
     );
 
+    if settings().root_integrity {
+        for_stack_roots(shadow_stack_pointer, |pointer_to_root| {
+            vega_debug_recursive_integrity_check(unsafe { *pointer_to_root }.cast_mut());
+        });
+    }
+
     // println!("GC end");
     // TODO: release other threads *now*, doing so earlier could race the resizing above.
 }
@@ -194,6 +247,7 @@ unsafe fn evacuate(state: &mut GCState, heap_object: *const HeapObject) -> *cons
             unsafe {
                 heap_object
                     .cast::<u8>()
+                    // TODO: use copy_to_non_overlapping
                     .copy_to(to_space_allocation.cast::<u8>(), size);
             }
 
@@ -293,6 +347,7 @@ unsafe fn scavenge(state: &mut GCState, heap_object: *const HeapObject) {
 
 #[inline]
 fn allocate_for_evacuation(gc_state: &mut GCState, size: usize) -> *mut HeapObject {
+    debug_assert!(size.is_multiple_of(HEAP_ALIGNMENT));
     unsafe {
         debug_assert!(gc_state.allocation_limit > gc_state.allocation_pointer);
         if gc_state
@@ -323,10 +378,24 @@ fn allocate_for_evacuation(gc_state: &mut GCState, size: usize) -> *mut HeapObje
                 .byte_offset_from_unsigned(gc_state.allocation_pointer)
                 >= size
         );
+        debug_assert!(
+            gc_state
+                .allocation_pointer
+                .addr()
+                .is_multiple_of(HEAP_ALIGNMENT)
+        );
+
         let pointer = gc_state.allocation_pointer;
         gc_state.allocation_pointer = gc_state
             .allocation_pointer
             .byte_add(round_up_to_heap_alignment(size));
+
+        debug_assert!(
+            gc_state
+                .allocation_pointer
+                .addr()
+                .is_multiple_of(HEAP_ALIGNMENT)
+        );
 
         if settings().liveness_integrity {
             cold_path();

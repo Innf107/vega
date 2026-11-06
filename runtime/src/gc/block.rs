@@ -62,6 +62,8 @@ impl BlockPointer {
         unsafe { self.contents.byte_add(BLOCK_SIZE).as_ptr() as *mut HeapObject }
     }
 
+    pub const SIZE_FOR_ALLOCATION: usize = BLOCK_SIZE - size_of::<BlockDescriptor>();
+
     // Remove a block descriptor from its current list
     pub fn unlink(self) {
         unsafe {

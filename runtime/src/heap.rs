@@ -665,3 +665,13 @@ pub unsafe extern "C" fn vega_allocate_zero_initialized_array(
     };
     HeapObject::data(ArrayHeapObject::as_base(array))
 }
+
+#[test]
+fn round_up_to_heap_alignment_test() {
+    assert_eq!(round_up_to_heap_alignment(16), 16);
+    assert_eq!(round_up_to_heap_alignment(15), 16);
+    assert_eq!(round_up_to_heap_alignment(12), 16);
+    assert_eq!(round_up_to_heap_alignment(8), 8);
+    assert_eq!(round_up_to_heap_alignment(2), 8);
+    assert_eq!(round_up_to_heap_alignment(1236), 1240);
+}
