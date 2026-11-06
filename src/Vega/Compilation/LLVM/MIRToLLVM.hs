@@ -480,11 +480,12 @@ compileInstruction builder = \case
                 layoutInfoTablePointer <- getOrCreateLayoutInfoTablePointer targetLayout
 
                 memoryPointer <- buildRuntimeCall builder "vega_allocate_boxed" [layoutInfoTablePointer] (renderVariable var)
+                dataPointer <- buildGEPOffset builder memoryPointer Heap.headerSize (renderVariable var <> ".data")
                 registerAllocation builder memoryPointer
                 let boxedCompoundValue = Layout.boxedCompoundValue memoryPointer
                 insertVarMapping var boxedCompoundValue Layout.boxedLayout
 
-                buildComplexStore builder targetLayout targetValue memoryPointer
+                buildComplexStore builder targetLayout targetValue dataPointer
     MIR.Unbox{var, boxedTarget, representation} -> do
         (targetValue, _) <- lookupVar boxedTarget
         checkAllocationIntegrity builder (Layout.assertBoxed targetValue)
@@ -495,7 +496,9 @@ compileInstruction builder = \case
                 assert (Vector.null (Layout.decomposedScalarValues targetValue))
                 assert (isNothing (Layout.unboxedPointer targetValue))
                 case Layout.boxedValues targetValue of
-                    [pointerValue] -> asVar_ var layout $ buildComplexLoad builder layout pointerValue
+                    [pointerValue] -> do
+                        dataPointer <- buildGEPOffset builder pointerValue Heap.headerSize (renderVariable var <> ".data")
+                        asVar_ var layout $ buildComplexLoad builder layout dataPointer
                     _ -> panic $ "Trying to unbox non-boxed compound value " <> pretty targetValue
     MIR.ProductConstructor{var, values, representation} -> runSTE \s -> do
         llvmValuesWithLayouts <- for values lookupVar

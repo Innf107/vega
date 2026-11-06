@@ -35,29 +35,8 @@ pub struct HeapObject {
 impl HeapObject {
     pub const HEADER_SIZE_IN_BYTES: usize = size_of::<HeapObject>();
 
-    // SAFETY: the pointer needs to be either a null pointer or a valid pointer pointing to
-    // the data section of a valid heap object. In particular it must *not* point to a forward pointer object.
-    pub unsafe fn from_data(data_pointer: *const u8) -> *const HeapObject {
-        if data_pointer == null() {
-            null()
-        } else {
-            unsafe {
-                let heap_object_pointer =
-                    data_pointer.byte_sub(HeapObject::HEADER_SIZE_IN_BYTES) as *const HeapObject;
-
-                // The argument must not be a forward pointer
-                debug_assert!(matches!(
-                    HeapObject::header(heap_object_pointer).info_table_or_forward_pointer(),
-                    Either::Left(_)
-                ));
-
-                heap_object_pointer
-            }
-        }
-    }
-
-    pub fn data(object: *const HeapObject) -> *mut u8 {
-        if object.is_null()  {
+    pub fn data(object: *mut HeapObject) -> *mut u8 {
+        if object.is_null() {
             return null_mut();
         }
         unsafe { object.byte_add(HeapObject::HEADER_SIZE_IN_BYTES) as *mut u8 }
@@ -66,7 +45,7 @@ impl HeapObject {
     // A textual description of this heap object's object type for use in debugging.
     //
     // SAFETY: the pointer must point to a valid heap object or forward pointer or be a null pointer.
-    pub unsafe fn object_type_description(object: *const HeapObject) -> &'static str {
+    pub unsafe fn object_type_description(object: *mut HeapObject) -> &'static str {
         match unsafe { HeapObject::as_handle(object) } {
             HeapObjectHandle::Boxed(_) => "Boxed",
             HeapObjectHandle::Array(_) => "Array",
@@ -77,7 +56,7 @@ impl HeapObject {
     }
 
     // A description of the details of this type for use in debugging
-    pub unsafe fn details(object: *const HeapObject) -> String {
+    pub unsafe fn details(object: *mut HeapObject) -> String {
         match unsafe { HeapObject::as_handle(object) } {
             HeapObjectHandle::Boxed(handle) => format!(
                 "[size={}, boxed={}]",
@@ -105,8 +84,8 @@ impl HeapObject {
     }
 
     // SAFETY: the heap object pointer needs to be either a null pointer or a pointer to a valid heap object
-    pub unsafe fn header(object: *const HeapObject) -> Header {
-        if object == null() {
+    pub unsafe fn header(object: *mut HeapObject) -> Header {
+        if object.is_null() {
             STATIC_NULL_HEADER
         } else {
             unsafe { (*object).header }
@@ -128,12 +107,12 @@ impl HeapObject {
         unsafe { (*object).header = Header::new_forward_pointer(pointer) }
     }
 
-    pub unsafe fn as_array_object_unchecked(object: *const HeapObject) -> *const ArrayHeapObject {
-        object as *const ArrayHeapObject
+    pub unsafe fn as_array_object_unchecked(object: *mut HeapObject) -> *mut ArrayHeapObject {
+        object.cast::<ArrayHeapObject>()
     }
 
     /// SAFETY: the pointer needs to point to a valid heap object (including forward pointers and null)
-    pub unsafe fn as_handle(object: *const HeapObject) -> HeapObjectHandle {
+    pub unsafe fn as_handle(object: *mut HeapObject) -> HeapObjectHandle {
         let header = unsafe { Self::header(object) };
         match header.info_table_or_forward_pointer() {
             Either::Right(forward_pointer) => HeapObjectHandle::ForwardPointer(forward_pointer),
@@ -165,7 +144,7 @@ impl HeapObject {
 
     // SAFETY: the pointer must point to a valid heap object.
     // This will panic if passed a forward pointer
-    pub unsafe fn total_stride(object: *const HeapObject) -> usize {
+    pub unsafe fn total_stride(object: *mut HeapObject) -> usize {
         match unsafe { HeapObject::as_handle(object) } {
             HeapObjectHandle::Boxed(boxed_handle) => boxed_handle.stride(),
             HeapObjectHandle::Array(array_handle) => array_handle.stride(),
@@ -198,17 +177,17 @@ impl Debug for ForwardPointer {
 }
 
 pub struct BoxedHandle {
-    pub object: *const HeapObject,
+    pub object: *mut HeapObject,
     pub layout: &'static BoxedLayout,
 }
 impl BoxedHandle {
     /// Return a mutable pointer to the boxed element at the given index.
     /// SAFETY: the index must be in (0, self.layout.boxed_count)
-    pub unsafe fn boxed_element(&self, index: usize) -> *mut *const u8 {
+    pub unsafe fn boxed_element(&self, index: usize) -> *mut *mut HeapObject {
         debug_assert!(index < self.layout.boxed_count);
         // In values at-rest, boxed elements are stored first.
         // See Note [At-rest vs in-flight] in src/Vega/Compilation/LLVM/Layout.hs
-        let start_of_boxed_elements = HeapObject::data(self.object) as *mut *const u8;
+        let start_of_boxed_elements = HeapObject::data(self.object).cast::<*mut HeapObject>();
         unsafe { start_of_boxed_elements.add(index) }
     }
 
@@ -218,7 +197,7 @@ impl BoxedHandle {
     }
 }
 pub struct ArrayHandle {
-    pub object: *const ArrayHeapObject,
+    pub object: *mut ArrayHeapObject,
     pub layout: &'static ArrayLayout,
 }
 impl ArrayHandle {
@@ -236,14 +215,13 @@ impl ArrayHandle {
         )
     }
 
-    pub unsafe fn boxed_element(&self, element_index: usize, boxed_index: usize) -> *mut *const u8 {
+    pub unsafe fn boxed_element(&self, element_index: usize, boxed_index: usize) -> *mut *mut HeapObject {
         debug_assert!(element_index < self.length());
         debug_assert!(boxed_index < self.layout.element_boxed_count);
 
         let content_pointer = ArrayHeapObject::contents(self.object);
         let element_pointer = unsafe {
-            content_pointer.byte_add(element_index * self.layout.element_stride_in_bytes)
-                as *mut *const u8
+            content_pointer.byte_add(element_index * self.layout.element_stride_in_bytes).cast::<*mut HeapObject>()
         };
         // Values at-rest store their boxed elements first, so we can treat the element pointer as
         // the pointer to the first boxed element.
@@ -253,7 +231,7 @@ impl ArrayHandle {
 }
 
 pub struct StaticArrayHandle {
-    pub object: *const ArrayHeapObject,
+    pub object: *mut ArrayHeapObject,
     pub layout: &'static ArrayLayout,
 }
 
@@ -272,14 +250,14 @@ impl StaticArrayHandle {
         )
     }
 
-    pub unsafe fn boxed_element(&self, element_index: usize, boxed_index: usize) -> *mut *const u8 {
+    pub unsafe fn boxed_element(&self, element_index: usize, boxed_index: usize) -> *mut *mut HeapObject {
         debug_assert!(element_index < self.length());
         debug_assert!(boxed_index < self.layout.element_boxed_count);
 
         let content_pointer = ArrayHeapObject::contents(self.object);
         let element_pointer = unsafe {
             content_pointer.byte_add(element_index * self.layout.element_stride_in_bytes)
-                as *mut *const u8
+                as *mut *mut HeapObject
         };
         // Values at-rest store their boxed elements first, so we can treat the element pointer as
         // the pointer to the first boxed element.
@@ -289,7 +267,7 @@ impl StaticArrayHandle {
 }
 
 pub struct ForwardPointer {
-    pub to_space_allocation: *const HeapObject,
+    pub to_space_allocation: *mut HeapObject,
 }
 
 #[repr(C)]
@@ -335,7 +313,7 @@ impl Header {
     }
     pub fn new_forward_pointer(pointer: ForwardPointer) -> Self {
         let info_table_pointer_with_tags =
-            TaggedPointer::new(pointer.to_space_allocation as *const InfoTable)
+            TaggedPointer::new(pointer.to_space_allocation as *mut InfoTable)
                 .set_tag::<FORWARD_POINTER_TAG>(true);
         Self {
             info_table_pointer_with_tags,
@@ -357,7 +335,7 @@ impl Header {
             .get_tag::<FORWARD_POINTER_TAG>()
         {
             Either::Right(ForwardPointer {
-                to_space_allocation: actual_pointer as *const HeapObject,
+                to_space_allocation: actual_pointer as *mut HeapObject,
             })
         } else {
             // If this is a real info table pointer, then we can assume that it is statically allocated and will live forever
@@ -419,7 +397,7 @@ pub struct BoxedLayout {
 impl BoxedLayout {
     /// The size of the unboxed part of the layout, i.e. the size of everything that is not a boxed pointer
     pub fn unboxed_size_in_bytes(&self) -> usize {
-        self.size_in_bytes - self.boxed_count * size_of::<*const u8>()
+        self.size_in_bytes - self.boxed_count * size_of::<*mut HeapObject>()
     }
 }
 
@@ -464,10 +442,10 @@ pub struct ArrayHeapObject {
 }
 
 impl ArrayHeapObject {
-    pub fn as_base(object: *const ArrayHeapObject) -> *const HeapObject {
-        object as *const HeapObject
+    pub fn as_base(object: *mut ArrayHeapObject) -> *mut HeapObject {
+        object as *mut HeapObject
     }
-    pub fn contents(object: *const ArrayHeapObject) -> *mut u8 {
+    pub fn contents(object: *mut ArrayHeapObject) -> *mut u8 {
         unsafe { object.byte_add(size_of::<ArrayHeapObject>()) as *mut u8 }
     }
 }
@@ -568,7 +546,7 @@ pub fn allocate_generic(thread_state: &mut ThreadState, byte_count: usize) -> *m
 pub unsafe extern "C" fn vega_allocate_boxed(
     thread_state: &mut ThreadState,
     info_table: &'static InfoTable,
-) -> *mut u8 {
+) -> *mut HeapObject {
     // vega_debug_stack_roots(shadow_stack_pointer);
     let layout = unsafe { info_table.layout.boxed };
 
@@ -591,7 +569,7 @@ pub unsafe extern "C" fn vega_allocate_boxed(
     unsafe {
         *object_pointer = HeapObject { header };
     };
-    HeapObject::data(object_pointer)
+    object_pointer
 }
 
 /// SAFETY: This assumes that array_info_table points to a valid array info table (with object_type = Array)
@@ -625,10 +603,10 @@ pub unsafe extern "C" fn vega_allocate_uninitialized_array(
     thread_state: &mut ThreadState,
     array_info_table: &'static InfoTable,
     size_in_elements: usize,
-) -> *mut u8 {
-    let object_pointer =
+) -> *mut HeapObject {
+    let object_pointer: *mut ArrayHeapObject =
         unsafe { allocate_uninitialized_array(thread_state, array_info_table, size_in_elements) };
-    HeapObject::data(ArrayHeapObject::as_base(object_pointer))
+    ArrayHeapObject::as_base(object_pointer)
 }
 
 /// SAFETY: The resulting array is safe insofar that the garbage collector can safely traverse it, even if it contains boxed

@@ -9,10 +9,10 @@ use crate::{
     make_send::UnsafeMakeSend,
 };
 
-static LIVE_MINOR_ALLOCATIONS: Mutex<UnsafeMakeSend<LazyCell<HashSet<*mut u8>>>> =
+static LIVE_MINOR_ALLOCATIONS: Mutex<UnsafeMakeSend<LazyCell<HashSet<*mut HeapObject>>>> =
     Mutex::new(UnsafeMakeSend::new(LazyCell::new(|| HashSet::new())));
 
-static LIVE_MAJOR_ALLOCATIONS: Mutex<UnsafeMakeSend<LazyCell<HashSet<*mut u8>>>> =
+static LIVE_MAJOR_ALLOCATIONS: Mutex<UnsafeMakeSend<LazyCell<HashSet<*mut HeapObject>>>> =
     Mutex::new(UnsafeMakeSend::new(LazyCell::new(|| HashSet::new())));
 
 pub fn reset_tracked_allocations(include_major_heap: bool) {
@@ -26,7 +26,7 @@ pub fn reset_tracked_allocations(include_major_heap: bool) {
     }
 }
 
-pub fn register_major_heap_allocation(data_pointer: *mut u8) {
+pub fn register_major_heap_allocation(data_pointer: *mut HeapObject) {
     unsafe {
         LIVE_MAJOR_ALLOCATIONS
             .lock()
@@ -37,7 +37,7 @@ pub fn register_major_heap_allocation(data_pointer: *mut u8) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn vega_register_allocation(data_pointer: *mut u8) {
+pub extern "C" fn vega_register_allocation(data_pointer: *mut HeapObject) {
     unsafe {
         LIVE_MINOR_ALLOCATIONS
             .lock()
@@ -48,7 +48,7 @@ pub extern "C" fn vega_register_allocation(data_pointer: *mut u8) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn vega_check_allocation_integrity(data_pointer: *mut u8) {
+pub extern "C" fn vega_check_allocation_integrity(data_pointer: *mut HeapObject) {
     if data_pointer.is_null() {
         return;
     }
@@ -77,17 +77,16 @@ pub extern "C" fn vega_check_allocation_integrity(data_pointer: *mut u8) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn vega_debug_recursive_integrity_check(data_pointer: *mut u8) {
-    vega_check_allocation_integrity(data_pointer);
+pub extern "C" fn vega_debug_recursive_integrity_check(heap_object: *mut HeapObject) {
+    vega_check_allocation_integrity(heap_object);
     // We cannot actually do this recursively since that could cause us to stack overflow, so we
     // use an explicit stack instead.
-    let mut pending_objects = vec![data_pointer.cast_const()];
+    let mut pending_objects = vec![heap_object];
     loop {
         match pending_objects.pop() {
             None => break,
-            Some(data_pointer) => unsafe {
-                vega_check_allocation_integrity(data_pointer.cast_mut());
-                let heap_object = HeapObject::from_data(data_pointer);
+            Some(heap_object) => unsafe {
+                vega_check_allocation_integrity(heap_object);
                 match HeapObject::as_handle(heap_object) {
                     HeapObjectHandle::Boxed(boxed_handle) => {
                         for i in 0..boxed_handle.layout.boxed_count {

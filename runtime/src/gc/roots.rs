@@ -14,13 +14,13 @@ pub struct ShadowStackFrame {
 
 pub fn for_stack_roots(
     shadow_stack_pointer: *mut ShadowStackFrame,
-    mut on_root: impl FnMut(*mut *const u8),
+    mut on_root: impl FnMut(*mut *mut HeapObject),
 ) {
     let mut frame = shadow_stack_pointer;
     while frame != null_mut() {
         unsafe {
             let size = (*frame).size;
-            let pointers = frame.byte_add(size_of::<ShadowStackFrame>()) as *mut *const u8;
+            let pointers = frame.byte_add(size_of::<ShadowStackFrame>()) as *mut *mut HeapObject;
             for i in 0..(size as usize) {
                 if *pointers.add(i) == null_mut() {
                     continue;
@@ -44,17 +44,17 @@ pub fn debug_stack_roots(shadow_stack_pointer: *mut ShadowStackFrame) {
         unsafe {
             let size = (*frame).size;
             println!("frame({size})@{frame:?}");
-            let pointers = frame.byte_add(size_of::<ShadowStackFrame>()) as *mut *const u8;
+            let pointers = frame.byte_add(size_of::<ShadowStackFrame>()) as *mut *mut HeapObject;
             for i in 0..(size as usize) {
-                let pointer_to_data_pointer = pointers.add(i);
+                let pointer_to_heap_object_pointer = pointers.add(i);
 
                 if settings().hide_stack_root_types {
-                    println!("   {pointer_to_data_pointer:?}");
+                    println!("   {pointer_to_heap_object_pointer:?}");
                 } else {
-                    print!("   {pointer_to_data_pointer:?}(");
+                    print!("   {pointer_to_heap_object_pointer:?}(");
                     io::stdout().flush().unwrap();
 
-                    let heap_object_pointer = HeapObject::from_data(*pointer_to_data_pointer);
+                    let heap_object_pointer = *pointer_to_heap_object_pointer;
                     let object_type_description =
                         HeapObject::object_type_description(heap_object_pointer);
                     print!("{object_type_description}): ");
@@ -64,7 +64,7 @@ pub fn debug_stack_roots(shadow_stack_pointer: *mut ShadowStackFrame) {
                 if settings().detailed_stack_roots {
                     println!(
                         "        {}",
-                        HeapObject::details(HeapObject::from_data(*pointer_to_data_pointer))
+                        HeapObject::details(*pointer_to_heap_object_pointer)
                     )
                 }
             }

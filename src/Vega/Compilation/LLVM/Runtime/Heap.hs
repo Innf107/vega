@@ -50,15 +50,16 @@ data ArrayLayout = MkArrayLayout
 
 {- | The size of the object header in bytes.
 The actual object data starts just after this.
-In particular, vega pointers always point *after* the header
 -}
 headerSize :: Int
 headerSize = 8
 
 -- | The offset of the (64 bit) length field from the start of the object data (just *after* the header)
+-- This includes the size of the header
 arrayLengthOffset :: Int
-arrayLengthOffset = 0
+arrayLengthOffset = 8
 
 -- | The offset of the actual array contents from the start of the object data (just *after* the header)
+-- This includes the size of the header
 arrayContentOffset :: Int
-arrayContentOffset = 8
+arrayContentOffset = 16

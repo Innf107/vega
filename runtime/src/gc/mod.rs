@@ -79,7 +79,7 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
 
     if settings().root_integrity {
         for_stack_roots(shadow_stack_pointer, |pointer_to_root| {
-            vega_debug_recursive_integrity_check(unsafe { *pointer_to_root }.cast_mut());
+            vega_debug_recursive_integrity_check(unsafe { *pointer_to_root });
         });
     }
 
@@ -107,10 +107,8 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
     }
 
     for_stack_roots(shadow_stack_pointer, |stack_root| unsafe {
-        let from_object = HeapObject::from_data(*stack_root);
-
-        let relocated_heap_object = evacuate(&mut gc_state, from_object);
-        *stack_root = HeapObject::data(relocated_heap_object);
+        let relocated_heap_object = evacuate(&mut gc_state, *stack_root);
+        *stack_root = relocated_heap_object;
     });
 
     loop {
@@ -153,7 +151,7 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
             }
             Some(block) => unsafe {
                 for heap_object in block.iter_heap_objects() {
-                    scavenge(&mut gc_state, heap_object.cast_const());
+                    scavenge(&mut gc_state, heap_object);
                 }
                 major_heap()
                     .to_space
@@ -215,7 +213,7 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
 
     if settings().root_integrity {
         for_stack_roots(shadow_stack_pointer, |pointer_to_root| {
-            vega_debug_recursive_integrity_check(unsafe { *pointer_to_root }.cast_mut());
+            vega_debug_recursive_integrity_check(unsafe { *pointer_to_root });
         });
     }
 
@@ -224,7 +222,7 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
 }
 
 /// SAFETY: heap_object must point to a valid heap object or a forward pointer
-unsafe fn evacuate(state: &mut GCState, heap_object: *const HeapObject) -> *const HeapObject {
+unsafe fn evacuate(state: &mut GCState, heap_object: *mut HeapObject) -> *mut HeapObject {
     if !state.collect_major_heap
         && unsafe { HeapObject::header(heap_object).generation().is_major() }
     {
@@ -241,7 +239,7 @@ unsafe fn evacuate(state: &mut GCState, heap_object: *const HeapObject) -> *cons
         HeapObjectHandle::Boxed(_) | HeapObjectHandle::Array(_) => {
             if settings().evacuation_integrity {
                 cold_path();
-                vega_check_allocation_integrity(HeapObject::data(heap_object));
+                vega_check_allocation_integrity(heap_object);
             }
             let size = unsafe { HeapObject::total_stride(heap_object) };
             let to_space_allocation: *mut HeapObject = allocate_for_evacuation(state, size);
@@ -290,7 +288,7 @@ unsafe fn evacuate(state: &mut GCState, heap_object: *const HeapObject) -> *cons
 ///
 /// SAFETY: the pointer has to point to a valid heap object.
 /// In particular, it must *NOT* point to a forwarding pointer
-unsafe fn scavenge(state: &mut GCState, heap_object: *const HeapObject) {
+unsafe fn scavenge(state: &mut GCState, heap_object: *mut HeapObject) {
     // SAFETY:
     let handle = unsafe { HeapObject::as_handle(heap_object) };
     match handle {
@@ -309,9 +307,9 @@ unsafe fn scavenge(state: &mut GCState, heap_object: *const HeapObject) {
                     // this is a pointer to the element (which is itself another pointer to the data segment of a heap object)
                     let element_pointer = boxed.boxed_element(i);
                     let relocated_pointer =
-                        evacuate(state, HeapObject::from_data(*element_pointer));
+                        evacuate(state, *element_pointer);
 
-                    *element_pointer = HeapObject::data(relocated_pointer);
+                    *element_pointer = relocated_pointer;
                 };
             }
         }
@@ -322,8 +320,8 @@ unsafe fn scavenge(state: &mut GCState, heap_object: *const HeapObject) {
                         unsafe {
                             let element_pointer = array.boxed_element(element_index, boxed_index);
                             let relocated_pointer =
-                                evacuate(state, HeapObject::from_data(*element_pointer));
-                            *element_pointer = HeapObject::data(relocated_pointer)
+                                evacuate(state, *element_pointer);
+                            *element_pointer = relocated_pointer
                         }
                     }
                 }
@@ -338,8 +336,8 @@ unsafe fn scavenge(state: &mut GCState, heap_object: *const HeapObject) {
                             let element_pointer =
                                 static_array.boxed_element(element_index, boxed_index);
                             let relocated_pointer =
-                                evacuate(state, HeapObject::from_data(*element_pointer));
-                            *element_pointer = HeapObject::data(relocated_pointer)
+                                evacuate(state, *element_pointer);
+                            *element_pointer = relocated_pointer
                         }
                     }
                 }
@@ -402,7 +400,7 @@ fn allocate_for_evacuation(gc_state: &mut GCState, size: usize) -> *mut HeapObje
 
         if settings().liveness_integrity {
             cold_path();
-            register_major_heap_allocation(HeapObject::data(pointer));
+            register_major_heap_allocation(pointer);
         }
 
         pointer

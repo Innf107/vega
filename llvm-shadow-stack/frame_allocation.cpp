@@ -39,13 +39,7 @@ StackFrameAssignments allocateStackFrameSlots(
         active;
 
     for (auto& [value, interval] : sortedIntervals) {
-        outs() << "value: " << interval.from << ".." << interval.to << "\n";
         while (!active.empty()) {
-            outs() << "  previous: " << active.top().second.from << ".."
-                   << active.top().second.to
-                   << "(break: " << (active.top().second.to >= interval.from)
-                   << ")\n";
-
             if (active.top().second.to >= interval.from) {
                 break;
             }
