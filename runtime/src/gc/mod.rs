@@ -136,7 +136,7 @@ pub fn collect_garbage(thread_state: &mut ThreadState, force_major_collection: b
                 if gc_state.has_empty_allocation_block() {
                     unsafe {
                         let block =
-                            BlockPointer::from_heap_object_pointer(gc_state.allocation_limit);
+                            BlockPointer::from_heap_object_pointer(gc_state.allocation_pointer);
                         block_allocator::free_block(block);
                     }
                     // We are done for now. In the future, we will wait until either all threads are done or more work is being added
