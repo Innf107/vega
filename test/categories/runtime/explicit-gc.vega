@@ -1,0 +1,22 @@
+-- type: print(6)
+import internal:Internal (debugInt, debugRecursiveIntegrityCheck, collectGarbage)
+import std:Panic (panic)
+import std:String
+import std:Int
+import std:IO/Posix (print)
+
+data List(a) = Nil | Cons(a, List(a))
+
+sum : List(Int) -> Int
+sum(list) = match list {
+    Nil -> 0
+    Cons(x, xs) -> x + sum(xs)
+}
+
+main : () -> ()
+main() = {
+    let list = Cons(1, Cons(2, Cons(3, Nil)))
+    collectGarbage(False)
+    collectGarbage(True)
+    debugInt(sum(list))
+}

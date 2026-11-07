@@ -2,7 +2,7 @@ use std::{ptr::null_mut, sync::Mutex};
 
 use crate::{
     gc::{block_allocator, roots::ShadowStackFrame},
-    heap::HeapObject,
+    heap::{AllocationState, HeapObject},
     owning_list::OwningList,
 };
 
@@ -14,6 +14,16 @@ pub struct ThreadState {
 }
 
 unsafe impl Send for OwningList<ThreadState> {}
+
+impl AllocationState for ThreadState {
+    fn allocation_pointer(&mut self) -> &mut *mut HeapObject {
+        &mut self.allocation_pointer
+    }
+
+    fn allocation_limit(&mut self) -> &mut *mut HeapObject {
+        &mut self.allocation_limit
+    }
+}
 
 static THREADS: Mutex<OwningList<ThreadState>> = Mutex::new(OwningList::new());
 

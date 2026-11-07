@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     ffi::c_void,
     hint::cold_path,
     ptr::{addr_of, null, null_mut},
@@ -215,13 +216,19 @@ impl ArrayHandle {
         )
     }
 
-    pub unsafe fn boxed_element(&self, element_index: usize, boxed_index: usize) -> *mut *mut HeapObject {
+    pub unsafe fn boxed_element(
+        &self,
+        element_index: usize,
+        boxed_index: usize,
+    ) -> *mut *mut HeapObject {
         debug_assert!(element_index < self.length());
         debug_assert!(boxed_index < self.layout.element_boxed_count);
 
         let content_pointer = ArrayHeapObject::contents(self.object);
         let element_pointer = unsafe {
-            content_pointer.byte_add(element_index * self.layout.element_stride_in_bytes).cast::<*mut HeapObject>()
+            content_pointer
+                .byte_add(element_index * self.layout.element_stride_in_bytes)
+                .cast::<*mut HeapObject>()
         };
         // Values at-rest store their boxed elements first, so we can treat the element pointer as
         // the pointer to the first boxed element.
@@ -250,7 +257,11 @@ impl StaticArrayHandle {
         )
     }
 
-    pub unsafe fn boxed_element(&self, element_index: usize, boxed_index: usize) -> *mut *mut HeapObject {
+    pub unsafe fn boxed_element(
+        &self,
+        element_index: usize,
+        boxed_index: usize,
+    ) -> *mut *mut HeapObject {
         debug_assert!(element_index < self.length());
         debug_assert!(boxed_index < self.layout.element_boxed_count);
 
@@ -450,34 +461,43 @@ impl ArrayHeapObject {
     }
 }
 
+// I would prefer to manually pass these as references into finish_block, but
+// rust's borrow checker doesn't like it if we do that while also borrowing the
+// state for the block_limit_check function.
+// That's why we use a trait so that we can explicitly give the callback a temporary
+// handle on our state.
+pub trait AllocationState {
+    fn allocation_pointer(&mut self) -> &mut *mut HeapObject;
+    fn allocation_limit(&mut self) -> &mut *mut HeapObject;
+}
+
 // Finish the current block and allocate a new one from the block allocator.
 // This is shared between GC and mutator allocation.
 // The arguments should typically be pointers to the allocation pointer and limit of their respective state objects.
 #[inline]
-pub fn finish_block(
-    allocation_pointer: &mut *mut HeapObject,
-    allocation_limit: &mut *mut HeapObject,
+pub fn finish_block<State: AllocationState>(
+    state: &mut State,
     target_list: &'static Mutex<UnsafeMakeSend<BlockList>>,
-    mut block_limit_check: impl FnMut(usize),
+    mut block_limit_check: impl for<'a> FnMut(usize, &'a mut State),
 ) {
     unsafe {
         // TOOD: i don't love the duplication between this and gc::allocate_for_evacuation
-        let filled_block = BlockPointer::from_heap_object_pointer(*allocation_pointer);
-        debug_assert!(filled_block.allocation_limit() == *allocation_limit);
+        let filled_block = BlockPointer::from_heap_object_pointer(*state.allocation_pointer());
+        debug_assert!(filled_block.allocation_limit() == *state.allocation_limit());
         debug_assert!(
-            filled_block.first_heap_object_pointer() <= *allocation_pointer
-                && allocation_pointer <= allocation_limit
+            filled_block.first_heap_object_pointer() <= *state.allocation_pointer()
+                && *state.allocation_pointer() <= *state.allocation_limit()
         );
 
         // We need to make sure that we clearly mark the end of this block so that
         // the heap objects can be traversed properly when scavenging
         if filled_block
             .allocation_limit()
-            .offset_from(*allocation_pointer)
+            .offset_from(*state.allocation_pointer())
             >= size_of::<Header>() as isize
         {
             HeapObject::set_header_unsynchronized(
-                *allocation_pointer,
+                *state.allocation_pointer(),
                 Header::end_of_block_header(),
             );
         }
@@ -487,12 +507,12 @@ pub fn finish_block(
             pending_blocks.get_mut().append(filled_block);
             pending_blocks.get().size_in_blocks()
         };
-        block_limit_check(size);
+        block_limit_check(size, state);
 
         let new_block = block_allocator::allocate_block();
 
-        *allocation_pointer = new_block.first_heap_object_pointer();
-        *allocation_limit = new_block.allocation_limit();
+        *state.allocation_pointer() = new_block.first_heap_object_pointer();
+        *state.allocation_limit() = new_block.allocation_limit();
     }
 }
 
@@ -509,13 +529,12 @@ pub fn allocate_generic(thread_state: &mut ThreadState, byte_count: usize) -> *m
     if remaining_size_in_block < byte_count as isize {
         cold_path();
         finish_block(
-            &mut thread_state.allocation_pointer,
-            &mut thread_state.allocation_limit,
+            thread_state,
             &nursery().used_blocks,
-            |nursery_size| {
+            |nursery_size, thread_state| {
                 if nursery_size >= nursery().max_block_count {
                     cold_path();
-                    collect_garbage(thread_state.shadow_stack_pointer, false);
+                    collect_garbage(thread_state, false);
                 }
             },
         );

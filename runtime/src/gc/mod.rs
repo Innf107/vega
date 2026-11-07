@@ -1,4 +1,4 @@
-use std::{cmp::max, hint::cold_path, mem::swap};
+use std::{cmp::max, hint::cold_path, mem::swap, thread};
 
 use block::{BLOCK_SIZE, BlockList};
 use libc::{_SC_PAGESIZE, sysconf};
@@ -15,8 +15,8 @@ use crate::{
         roots::debug_stack_roots,
     },
     heap::{
-        ForwardPointer, GenerationIndex, HEAP_ALIGNMENT, HeapObject, HeapObjectHandle,
-        finish_block, round_up_to_heap_alignment,
+        AllocationState, ForwardPointer, GenerationIndex, HEAP_ALIGNMENT, HeapObject,
+        HeapObjectHandle, finish_block, round_up_to_heap_alignment,
     },
     settings::{RuntimeSettings, settings},
     thread::ThreadState,
@@ -53,17 +53,26 @@ impl GCState {
         };
     }
 }
+impl AllocationState for GCState {
+    fn allocation_pointer(&mut self) -> &mut *mut HeapObject {
+        &mut self.allocation_pointer
+    }
+
+    fn allocation_limit(&mut self) -> &mut *mut HeapObject {
+        &mut self.allocation_limit
+    }
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn vega_collect_garbage(
-    thread_state: *mut ThreadState,
+    thread_state: &mut ThreadState,
     force_major_collection: bool,
 ) {
-    let shadow_stack_pointer = unsafe { (*thread_state).shadow_stack_pointer };
-    collect_garbage(shadow_stack_pointer, force_major_collection);
+    collect_garbage(thread_state, force_major_collection);
 }
 
-pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_collection: bool) {
+pub fn collect_garbage(thread_state: &mut ThreadState, force_major_collection: bool) {
+    let shadow_stack_pointer = thread_state.shadow_stack_pointer;
     let collect_major_heap = force_major_collection
         || unsafe {
             major_heap().max_block_count
@@ -106,6 +115,10 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
         println!("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
     }
 
+    // TODO: every mutator thread needs to commit its current allocation block before we do a GC.
+    // It's okay if we overrun the nursery limit here since we are about to clear it out anyway.
+    finish_block(thread_state, &nursery().used_blocks, |_, _| {});
+
     for_stack_roots(shadow_stack_pointer, |stack_root| unsafe {
         let relocated_heap_object = evacuate(&mut gc_state, *stack_root);
         *stack_root = relocated_heap_object;
@@ -135,10 +148,9 @@ pub fn collect_garbage(shadow_stack_pointer: *mut ShadowStackFrame, force_major_
                     // we will evacuate a single object, exhaust our pending set and immediately have to commit the entire block
                     // for just one object.
                     finish_block(
-                        &mut gc_state.allocation_pointer,
-                        &mut gc_state.allocation_limit,
+                        &mut gc_state,
                         &major_heap().pending_blocks,
-                        |heap_size| {
+                        |heap_size, gc_state| {
                             debug_assert!(
                                 gc_state.collect_major_heap
                                     || (heap_size
@@ -306,8 +318,7 @@ unsafe fn scavenge(state: &mut GCState, heap_object: *mut HeapObject) {
                 unsafe {
                     // this is a pointer to the element (which is itself another pointer to the data segment of a heap object)
                     let element_pointer = boxed.boxed_element(i);
-                    let relocated_pointer =
-                        evacuate(state, *element_pointer);
+                    let relocated_pointer = evacuate(state, *element_pointer);
 
                     *element_pointer = relocated_pointer;
                 };
@@ -319,8 +330,7 @@ unsafe fn scavenge(state: &mut GCState, heap_object: *mut HeapObject) {
                     for boxed_index in 0..array.layout.element_boxed_count {
                         unsafe {
                             let element_pointer = array.boxed_element(element_index, boxed_index);
-                            let relocated_pointer =
-                                evacuate(state, *element_pointer);
+                            let relocated_pointer = evacuate(state, *element_pointer);
                             *element_pointer = relocated_pointer
                         }
                     }
@@ -335,8 +345,7 @@ unsafe fn scavenge(state: &mut GCState, heap_object: *mut HeapObject) {
                         unsafe {
                             let element_pointer =
                                 static_array.boxed_element(element_index, boxed_index);
-                            let relocated_pointer =
-                                evacuate(state, *element_pointer);
+                            let relocated_pointer = evacuate(state, *element_pointer);
                             *element_pointer = relocated_pointer
                         }
                     }
@@ -358,13 +367,12 @@ fn allocate_for_evacuation(gc_state: &mut GCState, size: usize) -> *mut HeapObje
         {
             cold_path();
             finish_block(
-                &mut gc_state.allocation_pointer,
-                &mut gc_state.allocation_limit,
+                gc_state,
                 &major_heap().pending_blocks,
                 // We don't need any limit checks during garbage collection.
                 // We always make sure that a minor collection has enough space in the major generation.
                 // If there is not enough space, we trigger a full GC
-                |heap_size| {
+                |heap_size, gc_state| {
                     debug_assert!(
                         gc_state.collect_major_heap
                             || (heap_size
