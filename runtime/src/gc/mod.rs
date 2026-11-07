@@ -106,7 +106,7 @@ pub fn collect_garbage(thread_state: &mut ThreadState, force_major_collection: b
             collect_major_heap,
         }
     };
-    // sanity check that GCState::empty_allocation_block works correctly
+    // sanity check that GCState::has_empty_allocation_block works correctly
     debug_assert!(gc_state.has_empty_allocation_block());
 
     if settings().debug_stack_roots {

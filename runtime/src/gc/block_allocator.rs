@@ -45,7 +45,7 @@ pub fn allocate_block() -> BlockPointer {
     let mut free_blocks_guard = GLOBAL_BLOCK_ALLOCATOR.free_blocks.lock().unwrap();
     let free_blocks = unsafe { free_blocks_guard.get_mut() };
 
-    match free_blocks.pop_back() {
+    let block = match free_blocks.pop_back() {
         Some(block) => block,
         None => {
             // We could in principle release the lock here while we allocate new blocks, but if we did, that would only
@@ -77,7 +77,12 @@ pub fn allocate_block() -> BlockPointer {
                 .pop_back()
                 .expect("free_blocks is empty after allocating new blocks from the OS")
         }
-    }
+    };
+    debug_assert!(unsafe {
+        BlockPointer::from_heap_object_pointer(block.first_heap_object_pointer()) == block
+    });
+    debug_assert!(block.is_unlinked());
+    block
 }
 
 // SAFETY: The freed block must not already be free

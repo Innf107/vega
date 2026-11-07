@@ -23,7 +23,7 @@ impl BlockPointer {
     /// SAFETY: the pointer must point to a valid dynamically allocated heap object.
     /// In particular, passing a statically allocated heap object (like a static array), a pointer to the null object
     /// or a null pointer is *not* valid.
-    pub unsafe fn from_heap_object_pointer(heap_object: *const HeapObject) -> Self {
+    pub unsafe fn from_heap_object_pointer(heap_object: *mut HeapObject) -> Self {
         // Blocks are always aligned to BLOCK_SIZE, so we can mask off the last few bits
         // to get a pointer to the start of the block
         let content_ptr =
@@ -81,6 +81,11 @@ impl BlockPointer {
             (*self.descriptor()).next = None;
             (*self.descriptor()).previous = None;
         }
+        debug_assert!(self.is_unlinked());
+    }
+    pub fn is_unlinked(self) -> bool {
+        let descriptor = unsafe { &*self.descriptor() };
+        return descriptor.previous.is_none() && descriptor.next.is_none();
     }
 }
 impl Debug for BlockPointer {
@@ -145,10 +150,7 @@ impl BlockList {
     }
 
     pub fn append(&mut self, block: BlockPointer) {
-        unsafe {
-            debug_assert_matches!((*block.descriptor()).previous, None);
-            debug_assert_matches!((*block.descriptor()).next, None);
-        }
+        debug_assert!(block.is_unlinked());
         match self.contents {
             Some(ref mut non_empty_block_list) => non_empty_block_list.append(block),
             None => {
@@ -172,6 +174,7 @@ impl BlockList {
                         debug_assert_eq!(non_empty_block_list.first, non_empty_block_list.last);
 
                         self.contents = None;
+                        debug_assert!(last_block.is_unlinked());
                         Some(last_block)
                     }
                     Some(previous) => {
@@ -183,7 +186,9 @@ impl BlockList {
 
                             non_empty_block_list.last = previous;
                         }
+                        non_empty_block_list.length_in_blocks -= 1;
 
+                        debug_assert!(last_block.is_unlinked());
                         Some(last_block)
                     }
                 }
@@ -201,6 +206,7 @@ impl BlockList {
                     (*other_contents.first.descriptor()).previous = Some(self_contents.last);
 
                     self_contents.last = other_contents.last;
+                    self_contents.length_in_blocks += other_contents.length_in_blocks;
                 },
             },
         }

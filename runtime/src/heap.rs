@@ -481,7 +481,9 @@ pub fn finish_block<State: AllocationState>(
     mut block_limit_check: impl for<'a> FnMut(usize, &'a mut State),
 ) {
     unsafe {
-        // TOOD: i don't love the duplication between this and gc::allocate_for_evacuation
+        debug_assert!(
+            BlockPointer::from_heap_object_pointer(*state.allocation_pointer()).is_unlinked()
+        );
         let filled_block = BlockPointer::from_heap_object_pointer(*state.allocation_pointer());
         debug_assert!(filled_block.allocation_limit() == *state.allocation_limit());
         debug_assert!(
