@@ -40,7 +40,7 @@ impl HeapObject {
         if object.is_null() {
             return null_mut();
         }
-        unsafe { object.byte_add(HeapObject::HEADER_SIZE_IN_BYTES) as *mut u8 }
+        unsafe { object.byte_add(HeapObject::HEADER_SIZE_IN_BYTES).cast::<u8>() }
     }
 
     // A textual description of this heap object's object type for use in debugging.
@@ -288,7 +288,7 @@ pub struct InfoTable {
     pub layout: Layout,
 }
 
-/**
+/*
 Layout:
 
 Normal heap object:
@@ -473,7 +473,7 @@ pub trait AllocationState {
     fn has_empty_allocation_block(&mut self) -> bool {
         return unsafe {
             self.allocation_limit()
-                .byte_offset_from_unsigned(self.allocation_pointer())
+                .byte_offset_from_unsigned(*self.allocation_pointer())
                 == BlockPointer::SIZE_FOR_ALLOCATION
         };
     }
@@ -616,12 +616,12 @@ pub unsafe fn allocate_uninitialized_array(
     array_info_table: &'static InfoTable,
     length_in_elements: usize,
 ) -> *mut ArrayHeapObject {
-    let stride_in_bytes = unsafe { (*array_info_table).layout.array.element_stride_in_bytes };
+    let stride_in_bytes = unsafe { array_info_table.layout.array.element_stride_in_bytes };
     let size_in_bytes = length_in_elements * stride_in_bytes;
 
     let object_pointer = allocate_generic(
         thread_state,
-        size_of::<ArrayHeapObject>() + size_in_bytes as usize,
+        size_of::<ArrayHeapObject>() + size_in_bytes,
     ) as *mut ArrayHeapObject;
 
     let header = Header::new(array_info_table, GenerationIndex::MINOR);
@@ -657,7 +657,7 @@ pub unsafe fn allocate_zero_initialized_array(
     let array =
         unsafe { allocate_uninitialized_array(thread_state, array_info_table, size_in_elements) };
     let size_in_bytes =
-        size_in_elements * unsafe { (*array_info_table).layout.array.element_stride_in_bytes };
+        size_in_elements * unsafe { array_info_table.layout.array.element_stride_in_bytes };
     unsafe {
         libc::memset(
             ArrayHeapObject::contents(array) as *mut c_void,

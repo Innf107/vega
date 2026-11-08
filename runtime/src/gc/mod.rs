@@ -158,12 +158,25 @@ pub fn collect_garbage(thread_state: &mut ThreadState, force_major_collection: b
                 for heap_object in block.iter_heap_objects() {
                     scavenge(&mut gc_state, heap_object);
                 }
-                major_heap()
-                    .to_space
-                    .lock()
-                    .unwrap()
-                    .get_mut()
-                    .append(block);
+                if collect_major_heap {
+                    // TODO: idk if this is rare enough that cold_path is a good idea.
+                    // It might just not make a difference either way though
+                    // (so we should measure it!)
+                    cold_path();
+                    major_heap()
+                        .to_space
+                        .lock()
+                        .unwrap()
+                        .get_mut()
+                        .append(block);
+                } else {
+                    major_heap()
+                        .used_blocks
+                        .lock()
+                        .unwrap()
+                        .get_mut()
+                        .append(block);
+                }
             },
         }
     }
@@ -176,15 +189,20 @@ pub fn collect_garbage(thread_state: &mut ThreadState, force_major_collection: b
         );
         block_allocator::free_block_list(used_blocks);
     }
-    unsafe {
-        let mut used = major_heap().used_blocks.lock().unwrap();
-        let mut to_space = major_heap().to_space.lock().unwrap();
-        swap(&mut *used, &mut *to_space);
-        let previously_used_blocks = std::mem::replace(to_space.get_mut(), BlockList::new());
-        block_allocator::free_block_list(previously_used_blocks);
-    }
 
     if collect_major_heap {
+        // We only swap the major heap semispaces if we are doing a major collection and have
+        // actually collected the objects in the major heap.
+        // Minor collections just allocate into the regular major_heap().used_blocks list
+        // and leave everything else untouched.
+        unsafe {
+            let mut used = major_heap().used_blocks.lock().unwrap();
+            let mut to_space = major_heap().to_space.lock().unwrap();
+            swap(&mut *used, &mut *to_space);
+            let previously_used_blocks = std::mem::replace(to_space.get_mut(), BlockList::new());
+            block_allocator::free_block_list(previously_used_blocks);
+        }
+
         let current_size = major_heap().max_block_count;
         let live_size = unsafe {
             major_heap()
@@ -267,7 +285,7 @@ unsafe fn evacuate(state: &mut GCState, heap_object: *mut HeapObject) -> *mut He
             }
             unsafe {
                 HeapObject::override_with_forward_pointer_unsynchronized(
-                    heap_object as *mut HeapObject,
+                    heap_object,
                     ForwardPointer {
                         to_space_allocation,
                     },

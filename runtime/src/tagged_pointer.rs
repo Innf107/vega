@@ -7,7 +7,7 @@ pub struct TaggedPointer<T, const ALIGNMENT: usize> {
 impl<T, const ALIGNMENT: usize> Clone for TaggedPointer<T, ALIGNMENT> {
     fn clone(&self) -> Self {
         Self {
-            pointer: self.pointer.clone(),
+            pointer: self.pointer,
         }
     }
 }

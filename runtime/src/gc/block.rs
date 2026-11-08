@@ -85,7 +85,7 @@ impl BlockPointer {
     }
     pub fn is_unlinked(self) -> bool {
         let descriptor = unsafe { &*self.descriptor() };
-        return descriptor.previous.is_none() && descriptor.next.is_none();
+        descriptor.previous.is_none() && descriptor.next.is_none()
     }
 }
 impl Debug for BlockPointer {
@@ -104,9 +104,9 @@ impl Iterator for HeapObjectIterator {
     fn next(&mut self) -> Option<Self::Item> {
         unsafe {
             if self.limit.byte_offset_from(self.current) < (size_of::<Header>() as isize) {
-                return None;
+                None
             } else if HeapObject::header(self.current).is_end_of_block_header() {
-                return None;
+                None
             } else {
                 let heap_object: *mut HeapObject = self.current;
                 self.current = self.current.byte_add(HeapObject::total_stride(heap_object));
