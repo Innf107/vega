@@ -42,8 +42,7 @@ DenseMap<BasicBlock*, BitSet> computeLiveness(
         for (auto* block : post_order(&function)) {
             BitSet liveThisIteration;
             for (auto* successor : successors(block)) {
-                liveThisIteration |= genSets[successor];
-                liveThisIteration -= killSets[successor];
+                liveThisIteration |= liveIntoBlock[successor];
             }
             liveThisIteration |= genSets[block];
             liveThisIteration -= killSets[block];
