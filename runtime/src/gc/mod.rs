@@ -44,15 +44,6 @@ struct GCState {
     allocation_limit: *mut HeapObject,
     collect_major_heap: bool,
 }
-impl GCState {
-    fn has_empty_allocation_block(&self) -> bool {
-        return unsafe {
-            self.allocation_limit
-                .byte_offset_from_unsigned(self.allocation_pointer)
-                == BlockPointer::SIZE_FOR_ALLOCATION
-        };
-    }
-}
 impl AllocationState for GCState {
     fn allocation_pointer(&mut self) -> &mut *mut HeapObject {
         &mut self.allocation_pointer
@@ -115,9 +106,11 @@ pub fn collect_garbage(thread_state: &mut ThreadState, force_major_collection: b
         println!("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
     }
 
-    // TODO: every mutator thread needs to commit its current allocation block before we do a GC.
-    // It's okay if we overrun the nursery limit here since we are about to clear it out anyway.
-    finish_block(thread_state, &nursery().used_blocks, |_, _| {});
+    if !thread_state.has_empty_allocation_block() {
+        // TODO: every mutator thread needs to commit its current allocation block before we do a GC.
+        // It's okay if we overrun the nursery limit here since we are about to clear it out anyway.
+        finish_block(thread_state, &nursery().used_blocks, |_, _| {});
+    }
 
     for_stack_roots(shadow_stack_pointer, |stack_root| unsafe {
         let relocated_heap_object = evacuate(&mut gc_state, *stack_root);

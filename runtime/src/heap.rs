@@ -469,6 +469,14 @@ impl ArrayHeapObject {
 pub trait AllocationState {
     fn allocation_pointer(&mut self) -> &mut *mut HeapObject;
     fn allocation_limit(&mut self) -> &mut *mut HeapObject;
+
+    fn has_empty_allocation_block(&mut self) -> bool {
+        return unsafe {
+            self.allocation_limit()
+                .byte_offset_from_unsigned(self.allocation_pointer())
+                == BlockPointer::SIZE_FOR_ALLOCATION
+        };
+    }
 }
 
 // Finish the current block and allocate a new one from the block allocator.
@@ -509,12 +517,17 @@ pub fn finish_block<State: AllocationState>(
             pending_blocks.get_mut().append(filled_block);
             pending_blocks.get().size_in_blocks()
         };
-        block_limit_check(size, state);
-
+        // We allocate the new block before the GC check since we already added it to the pending set.
+        // If we didn't do it this way, the GC would try to add it to the pending set again
+        // and then fail a debug assertion because it is not unlinked.
+        //
+        // Since the block is still empty, the GC will just leave it alone and we can use it after
+        // the collection is done.
         let new_block = block_allocator::allocate_block();
-
         *state.allocation_pointer() = new_block.first_heap_object_pointer();
         *state.allocation_limit() = new_block.allocation_limit();
+
+        block_limit_check(size, state);
     }
 }
 
