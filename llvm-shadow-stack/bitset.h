@@ -87,17 +87,14 @@ class BitSet {
     }
 
     void operator-=(BitSet& other) {
-        // his could be asymptotically faster but that doesn't matter
-        // unless other has more than 63 entries and the ~ needs a
-        // memory allocation (which is extremely unlikely)
-        vector &= ~other.vector;
+        vector.reset(other.vector);
     }
 
     bool operator==(BitSet& other) {
         if (vector.size() == other.vector.size()) {
             return vector == other.vector;
         } else {
-            return vector.subsetOf(other.vector) ||
+            return vector.subsetOf(other.vector) &&
                 other.vector.subsetOf(vector);
         }
     }

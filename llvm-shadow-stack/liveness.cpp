@@ -45,6 +45,8 @@ DenseMap<BasicBlock*, BitSet> computeLiveness(
                 liveThisIteration |= genSets[successor];
                 liveThisIteration -= killSets[successor];
             }
+            liveThisIteration |= genSets[block];
+            liveThisIteration -= killSets[block];
             if (liveIntoBlock[block] != liveThisIteration) {
                 changed = true;
                 liveIntoBlock[block] = liveThisIteration;
