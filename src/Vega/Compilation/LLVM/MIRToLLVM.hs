@@ -555,10 +555,7 @@ compileInstruction builder = \case
     MIR.LoadByteArrayLiteral{var, bytes} -> do
         global <- createStaticByteArray bytes
 
-        -- The vega pointer should point after the header object
-        pointer <- buildGEPOffset builder (LLVM.globalAsValue global) Heap.headerSize "bytes"
-
-        insertVarMapping var (Layout.boxedCompoundValue pointer) Layout.byteArrayLayout
+        insertVarMapping var (Layout.boxedCompoundValue (LLVM.globalAsValue global)) Layout.byteArrayLayout
     MIR.LoadSumTag{var, sum} -> do
         (sumValue, sumLayout) <- lookupVar sum
         let (tagSize, tagLocation) = case Layout.details sumLayout of
