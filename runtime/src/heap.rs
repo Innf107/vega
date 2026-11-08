@@ -503,7 +503,7 @@ pub fn finish_block<State: AllocationState>(
         // the heap objects can be traversed properly when scavenging
         if filled_block
             .allocation_limit()
-            .offset_from(*state.allocation_pointer())
+            .byte_offset_from(*state.allocation_pointer())
             >= size_of::<Header>() as isize
         {
             HeapObject::set_header_unsynchronized(
@@ -539,7 +539,7 @@ pub fn allocate_generic(thread_state: &mut ThreadState, byte_count: usize) -> *m
     let remaining_size_in_block = unsafe {
         thread_state
             .allocation_limit
-            .offset_from(thread_state.allocation_pointer)
+            .byte_offset_from(thread_state.allocation_pointer)
     };
     if remaining_size_in_block < byte_count as isize {
         cold_path();
@@ -558,7 +558,7 @@ pub fn allocate_generic(thread_state: &mut ThreadState, byte_count: usize) -> *m
         unsafe {
             thread_state
                 .allocation_limit
-                .offset_from(thread_state.allocation_pointer)
+                .byte_offset_from(thread_state.allocation_pointer)
         } >= byte_count as isize
     );
 
