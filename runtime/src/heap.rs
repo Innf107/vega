@@ -674,11 +674,11 @@ pub unsafe extern "C" fn vega_allocate_zero_initialized_array(
     thread_state: &mut ThreadState,
     array_info_table: &'static InfoTable,
     size_in_elements: usize,
-) -> *mut u8 {
+) -> *mut HeapObject {
     let array = unsafe {
         allocate_zero_initialized_array(thread_state, array_info_table, size_in_elements)
     };
-    HeapObject::data(ArrayHeapObject::as_base(array))
+    ArrayHeapObject::as_base(array)
 }
 
 #[test]

@@ -3,7 +3,7 @@
 {-# LANGUAGE RequiredTypeArguments #-}
 {-# LANGUAGE TypeAbstractions #-}
 
-module Vega.Compilation.LLVM.MIRToLLVM (compile, Config(..), addMainFunction, useCCallingConvention) where
+module Vega.Compilation.LLVM.MIRToLLVM (compile, Config (..), addMainFunction, useCCallingConvention) where
 
 import Relude hiding (NonEmpty, State, evalState, get, modify, prettyCallStack, put, trace)
 
@@ -70,9 +70,9 @@ import Vega.Util (Sign (..), forIndexed_, viaList, type (?))
 import Vega.Util qualified as Util
 import Witherable qualified
 
-data Config = MkConfig {
-    heapIntegrityChecks :: Bool
-}
+data Config = MkConfig
+    { heapIntegrityChecks :: Bool
+    }
 
 data DeclarationState = MkDeclarationState
     { registeredBlocks :: HashMap MIR.BlockDescriptor LLVM.BasicBlock
@@ -777,7 +777,7 @@ compilePrimopCall builder primop arguments representationArguments returnReprese
         EmptyArray -> do
             -- TODO: it's a bit silly to re-create a new array here every time
             global <- createStaticByteArray mempty
-            Layout.boxedCompoundValue <$> buildGEPOffset builder (LLVM.globalAsValue global) Heap.headerSize varName
+            pure (Layout.boxedCompoundValue (LLVM.globalAsValue global))
         UnsafeReadArray -> compileUnsafeReadArray builder arguments returnRepresentation varName
         UnsafeReadMutableArray -> compileUnsafeReadArray builder arguments returnRepresentation varName
         UnsafeWriteMutableArray -> compileUnsafeWriteArray builder arguments returnRepresentation varName
@@ -809,11 +809,12 @@ compilePrimopCall builder primop arguments representationArguments returnReprese
         DebugInt -> outOfLineBuiltin builder "vega_debug_int" simpleArgumentValues returnRepresentation varName
         DebugStackRoots -> outOfLineBuiltin builder "vega_debug_stack_roots" simpleArgumentValues returnRepresentation varName
         CollectGarbage -> outOfLineBuiltin builder "vega_collect_garbage" simpleArgumentValues returnRepresentation varName
-        DebugRecursiveIntegrityCheck -> 
-            if ?config.heapIntegrityChecks then
-                outOfLineBuiltin builder "vega_debug_recursive_integrity_check" simpleArgumentValues returnRepresentation varName
-            else
-                pure Layout.unitCompoundValue
+        DebugRecursiveIntegrityCheck ->
+            if ?config.heapIntegrityChecks
+                then
+                    outOfLineBuiltin builder "vega_debug_recursive_integrity_check" simpleArgumentValues returnRepresentation varName
+                else
+                    pure Layout.unitCompoundValue
         Panic -> undefined
         UnsafeCoerce -> identity
   where
@@ -1087,10 +1088,7 @@ getOrCreateArrayInfoTablePointer static elementLayout = do
             LLVM.setInitializer llvmInfoTableGlobal infoTableConstant
             pure (LLVM.globalAsValue llvmInfoTableGlobal)
 
-{- | Create a static byte array object from a statically known constant.
-This returns a pointer to the object header.
-Uses as a boxed vega pointer need to offset it by 'Heap.headerSize'.
--}
+-- | Create a static byte array object from a statically known constant.
 createStaticByteArray :: (Compile es) => ByteString -> Eff es LLVM.Global
 createStaticByteArray bytes = do
     infoTable <- getOrCreateArrayInfoTablePointer True (Layout.intLayout (Size.fromBytes 1))
@@ -1504,8 +1502,8 @@ This is only valid if the pointer is the pointer passed to 'registerAllocation'.
 Using it on interior pointers is not supported.
 
 If heap integrity checks are disabled, this function does nothing.
- -}
-checkAllocationIntegrity :: Compile es => LLVMBuilder.Builder -> LLVM.Value -> Eff es ()
+-}
+checkAllocationIntegrity :: (Compile es) => LLVMBuilder.Builder -> LLVM.Value -> Eff es ()
 checkAllocationIntegrity builder pointer = case ?config.heapIntegrityChecks of
     False -> pure ()
     True -> do
@@ -1516,15 +1514,13 @@ checkAllocationIntegrity builder pointer = case ?config.heapIntegrityChecks of
 This has to be the exact pointer that is saved in the shadow stack or stored on the heap, not an interior pointer.
 
 If heap integrity checks are disabled, this function does nothing.
- -}
-registerAllocation :: Compile es => LLVMBuilder.Builder -> LLVM.Value -> Eff es ()
+-}
+registerAllocation :: (Compile es) => LLVMBuilder.Builder -> LLVM.Value -> Eff es ()
 registerAllocation builder pointer = case ?config.heapIntegrityChecks of
     False -> pure ()
     True -> do
         _ <- buildRuntimeCall builder "vega_register_allocation" [pointer] ""
         pure ()
-
-
 
 {- NOTE [Closure Representation]:
 Closures with payload representation `r` are *always* represented as products (FunctionPointer * r).
