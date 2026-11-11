@@ -65,6 +65,7 @@ fn allocate_for_evacuation(gc_state: &mut GCState, size: usize) -> *mut HeapObje
                 gc_state.collect_major_heap
                     || (heap_size <= major_heap().max_block_count - nursery().max_block_count)
             );
+            false
         },
     );
 
@@ -131,7 +132,7 @@ pub fn collect_garbage(thread_state: &mut ThreadState, force_major_collection: b
     if !thread_state.has_empty_allocation_block() {
         // TODO: every mutator thread needs to commit its current allocation block before we do a GC.
         // It's okay if we overrun the nursery limit here since we are about to clear it out anyway.
-        finish_block(thread_state, &nursery().used_blocks, |_, _| {});
+        finish_block(thread_state, &nursery().used_blocks, |_, _| false);
     }
 
     for_stack_roots(shadow_stack_pointer, |stack_root| unsafe {
@@ -172,6 +173,7 @@ pub fn collect_garbage(thread_state: &mut ThreadState, force_major_collection: b
                                         <= major_heap().max_block_count
                                             - nursery().max_block_count)
                             );
+                            false
                         },
                     );
                 }

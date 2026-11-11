@@ -34,13 +34,16 @@ pub trait AllocationState {
 
 // Finish the current block and allocate a new one from the block allocator.
 // This is shared between GC and mutator allocation.
-// The arguments should typically be pointers to the allocation pointer and limit of their respective state objects.
+//
+// `block_limit_check` should return true if it invalidates any of the blocks in the target list
+// In particular, this is the case if a nursery allocation triggers a garabage collection.
+// `finish_block` returns that result.
 #[inline]
 pub fn finish_block<State: AllocationState>(
     state: &mut State,
     target_list: &'static Mutex<UnsafeMakeSend<BlockList>>,
-    mut block_limit_check: impl for<'a> FnMut(usize, &'a mut State),
-) {
+    mut block_limit_check: impl for<'a> FnMut(usize, &'a mut State) -> bool,
+) -> bool {
     unsafe {
         debug_assert!(
             BlockPointer::from_heap_object_pointer(*state.allocation_pointer()).is_unlinked()
@@ -80,19 +83,22 @@ pub fn finish_block<State: AllocationState>(
         *state.allocation_pointer() = new_block.first_heap_object_pointer();
         *state.allocation_limit() = new_block.allocation_limit();
 
-        block_limit_check(size, state);
+        block_limit_check(size, state)
     }
 }
 
 // Allocate 'byte_count' bytes in the current allocation pointer.
 // This does *not* include the size of a heap object header
 // and the returned memory is not initialized in any way.
+//
+// `block_limit_check` should return true if it invalidates any of the blocks in the target list
+// In particular, this is the case if a nursery allocation triggers a garabage collection.
 #[inline]
 pub fn allocate_generic<State: AllocationState>(
     state: &mut State,
     byte_count: usize,
     target_list: &'static Mutex<UnsafeMakeSend<BlockList>>,
-    block_limit_check: impl for<'a> FnMut(usize, &'a mut State),
+    block_limit_check: impl for<'a> FnMut(usize, &'a mut State) -> bool,
 ) -> *mut HeapObject {
     let allocation_size = round_up_to_heap_alignment(byte_count);
 
@@ -102,15 +108,20 @@ pub fn allocate_generic<State: AllocationState>(
         cold_path();
         let previous_allocation_pointer = *state.allocation_pointer();
 
-        finish_block(state, target_list, block_limit_check);
+        let block_invalidated = finish_block(state, target_list, block_limit_check);
         // In the edge case that the allocation *exactly* fills up the rest of the block,
         // we still need to allocate a new block since otherwise the allocation pointer would
         // point to the start of the next object, but we *can* return a pointer to the old block
         // since there is (just barely) enough space left for the allocation.
         //
-        // We don't need to increment the allocation pointer here, since that one already points to
+        // However, if finish_block triggered a garbage collection, then the previous allocation block has
+        // already been invalidated and moved back to the block allocator, so we need to
+        // allocate into the new block as usual. This does not waste any space since the previous not quite filled
+        // block has already been scavenged.
+        //
+        // We don't need to increment the allocation pointer here, since it already points to
         // the start of the new block allocated by finish_block.
-        if remaining_size_in_block == allocation_size as isize {
+        if !block_invalidated && (remaining_size_in_block == allocation_size as isize) {
             return previous_allocation_pointer;
         }
     }
@@ -144,7 +155,9 @@ pub fn allocate_mutator(thread_state: &mut ThreadState, byte_count: usize) -> *m
             if nursery_size >= nursery().max_block_count {
                 cold_path();
                 collect_garbage(thread_state, false);
+                return true;
             }
+            false
         },
     )
 }
