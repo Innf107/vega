@@ -16,11 +16,7 @@ fromValue value
     | otherwise = panic $ "Trying to create alignment value with non-power of 2 value" Pretty.<+> number value
 
 align :: Alignment -> Int -> Int
-align MkAlignment{alignment} value = do
-    let mask = alignment - 1
-    if value .&. mask == 0
-        then value
-        else (value .&. complement mask) + alignment
+align MkAlignment{alignment} value = (value + (alignment - 1)) .&. (0 - alignment)
 
 instance Pretty Alignment where
     pretty alignment = number (toInt alignment)

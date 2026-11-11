@@ -37,6 +37,7 @@ library
       Vega.Compilation.LLVM.MIRToLLVM
       Vega.Compilation.LLVM.Runtime
       Vega.Compilation.LLVM.Runtime.Heap
+      Vega.Compilation.LLVM.Runtime.Thread
       Vega.Compilation.LLVM.Runtime.ToLLVMConstant
       Vega.Compilation.LLVM.ShadowStack
       Vega.Compilation.MIR.CoreToMIR

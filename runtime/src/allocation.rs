@@ -114,10 +114,10 @@ pub fn allocate_generic<State: AllocationState>(
         // point to the start of the next object, but we *can* return a pointer to the old block
         // since there is (just barely) enough space left for the allocation.
         //
-        // However, if finish_block triggered a garbage collection, then the previous allocation block has
-        // already been invalidated and moved back to the block allocator, so we need to
-        // allocate into the new block as usual. This does not waste any space since the previous not quite filled
-        // block has already been scavenged.
+        // However, this does not work if finish_block triggered a garbage collection, since
+        // then the previous allocation block has already been invalidated and moved back to the block allocator,
+        // so we need to allocate into the new block as usual.
+        // This does not waste any space since the previous not quite filled block has already been scavenged.
         //
         // We don't need to increment the allocation pointer here, since it already points to
         // the start of the new block allocated by finish_block.
@@ -160,6 +160,69 @@ pub fn allocate_mutator(thread_state: &mut ThreadState, byte_count: usize) -> *m
             false
         },
     )
+}
+
+// Slow path for mtuator allocations. This assumes that the current block has already been exhausted and allocates
+// a new block.
+//
+// `byte_count` must be aligned to HEAP_ALIGNMENT
+//
+// This does *not* automatically include the heap object header and does not initialize the memory in any way,
+// similarly to `allocate_mutator`.
+#[unsafe(no_mangle)]
+pub extern "C" fn vega_allocate_slow(
+    thread_state: &mut ThreadState,
+    allocation_size: usize,
+) -> *mut HeapObject {
+    debug_assert!(allocation_size.is_multiple_of(HEAP_ALIGNMENT));
+    
+    let previous_allocation_pointer = thread_state.allocation_pointer;
+
+    let remaining_size_in_block = unsafe {
+        thread_state
+            .allocation_limit
+            .byte_offset_from_unsigned(thread_state.allocation_pointer)
+    };
+
+    let block_invalidated = finish_block(
+        thread_state,
+        &nursery().used_blocks,
+        |nursery_size, thread_state| {
+            if nursery_size >= nursery().max_block_count {
+                cold_path();
+                collect_garbage(thread_state, false);
+                return true;
+            }
+            false
+        },
+    );
+    // In the edge case that the allocation *exactly* fills up the rest of the block,
+    // we still need to allocate a new block since otherwise the allocation pointer would
+    // point to the start of the next object, but we *can* return a pointer to the old block
+    // since there is (just barely) enough space left for the allocation.
+    //
+    // However, this does not work if finish_block triggered a garbage collection, since
+    // then the previous allocation block has already been invalidated and moved back to the block allocator,
+    // so we need to allocate into the new block as usual.
+    // This does not waste any space since the previous not quite filled block has already been scavenged.
+    //
+    // We don't need to increment the allocation pointer here, since it already points to
+    // the start of the new block allocated by finish_block.
+    if !block_invalidated && (remaining_size_in_block == allocation_size) {
+        return previous_allocation_pointer;
+    }
+
+    let pointer = thread_state.allocation_pointer;
+    unsafe {
+        thread_state.allocation_pointer =
+            (thread_state.allocation_pointer).byte_add(allocation_size);
+    };
+    debug_assert!(
+        (thread_state.allocation_pointer())
+            .addr()
+            .is_multiple_of(HEAP_ALIGNMENT)
+    );
+    pointer
 }
 
 /// Allocate a box for the given info table and return a pointer to the (uninitialized) *data*.

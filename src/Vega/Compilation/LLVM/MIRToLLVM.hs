@@ -50,7 +50,9 @@ import Vega.Compilation.LLVM.Layout (CompoundValue (..), Layout)
 import Vega.Compilation.LLVM.Layout qualified as Layout
 import Vega.Compilation.LLVM.Runtime (Definition (..), RuntimeDefinitions (..), declareRuntimeDefinitions)
 import Vega.Compilation.LLVM.Runtime qualified as Runtime
+import Vega.Compilation.LLVM.Runtime.Heap (heapAlignment)
 import Vega.Compilation.LLVM.Runtime.Heap qualified as Heap
+import Vega.Compilation.LLVM.Runtime.Thread qualified as Thread
 import Vega.Compilation.LLVM.Runtime.ToLLVMConstant (ToLLVMConstant (toLLVMConstant), size)
 import Vega.Compilation.LLVM.Runtime.ToLLVMConstant qualified as ToLLVMConstant
 import Vega.Compilation.MIR.Syntax qualified as MIR
@@ -469,19 +471,62 @@ compileInstruction builder = \case
         fieldValue <- Layout.buildValue fieldBuilder
         insertVarMapping var fieldValue fieldLayout
     MIR.Box{var, target} -> do
-        -- TODO: we should probably inline the fast path for minor heap allocations here
         (targetValue, targetLayout) <- lookupVar target
 
         case Size.inBytes (Layout.sizeAtRest targetLayout) of
             -- We special case `box(())` to return a null pointer since there is no information stored in a trivial target like this anyway
             -- and we don't have pointer comparisons or anything like that
             0 -> insertVarMapping var (Layout.boxedCompoundValue Layout.boxedNullPointer) Layout.boxedLayout
-            _ -> do
+            sizeInBytes -> do
                 layoutInfoTablePointer <- getOrCreateLayoutInfoTablePointer targetLayout
+                let payloadSize = Alignment.align heapAlignment sizeInBytes
+                let allocationSize = payloadSize + Heap.headerSize
+                let allocationSizeConstant = LLVM.constInt LLVM.int64Type (fromIntegral allocationSize) False
 
-                memoryPointer <- buildRuntimeCall builder "vega_allocate_boxed" [layoutInfoTablePointer] (renderVariable var)
-                dataPointer <- buildGEPOffset builder memoryPointer Heap.headerSize (renderVariable var <> ".data")
+                allocationPointerPointer <- buildGEPOffset builder threadStatePointer Thread.threadStateAllocationPointerOffset ""
+                -- The allocation pointer does not *actually* point to a valid heap object (it points one past the last one),
+                -- so it should not have addrspace(1). Instead, we load it as a regular addrspace(0) pointer and only cast it
+                -- to addrspace(1) once we have fully initialized it.
+                -- (and we hope that LLVM optimizations are not going to break this reasoning)
+                allocationPointer <- LLVMBuilder.buildLoad builder LLVM.pointerType allocationPointerPointer "allocationPointer"
+                allocationAddress <- LLVMBuilder.buildPtrToInt builder allocationPointer LLVM.int64Type "allocationAddress"
+                allocationLimitPointer <- buildGEPOffset builder threadStatePointer Thread.threadStateAllocationLimitOffset ""
+                allocationLimit <- LLVMBuilder.buildLoad builder LLVM.int64Type allocationLimitPointer "allocationLimit"
+                remainingSize <- LLVMBuilder.buildSub builder allocationLimit allocationAddress "remainingSize"
+                enoughSpace <- LLVMBuilder.buildICmp builder LLVM.IntUGT remainingSize allocationSizeConstant "enoughSpace"
+
+                fastPathBlock <- LLVM.appendBasicBlock ?function "allocation-fast-path"
+                slowPathBlock <- LLVM.appendBasicBlock ?function "allocation-slow-path"
+                continuationBlock <- LLVM.appendBasicBlock ?function ""
+
+                _ <- LLVMBuilder.buildCondBr builder enoughSpace fastPathBlock slowPathBlock
+
+                LLVMBuilder.positionBuilderAtEnd builder slowPathBlock
+                slowPathPointer <- buildRuntimeCall builder "vega_allocate_slow" [allocationSizeConstant] ""
+                _ <- LLVMBuilder.buildBr builder continuationBlock
+
+                LLVMBuilder.positionBuilderAtEnd builder fastPathBlock
+                fastPathPointer <- LLVMBuilder.buildAddrSpaceCast builder allocationPointer Layout.boxedPointerType ""
+                newAllocationPointer <- buildGEPOffset builder allocationPointer allocationSize ""
+                _ <- LLVMBuilder.buildStore builder newAllocationPointer allocationPointerPointer
+                _ <- LLVMBuilder.buildBr builder continuationBlock
+
+                LLVMBuilder.positionBuilderAtEnd builder continuationBlock
+                memoryPointer <-
+                    LLVMBuilder.buildPhi
+                        builder
+                        Layout.boxedPointerType
+                        [ (slowPathPointer, slowPathBlock)
+                        , (fastPathPointer, fastPathBlock)
+                        ]
+                        (renderVariable var)
+                -- The heap object should contain a header for a new *nursery* object
+                -- Fortunately the tag bit for the generation is 0 for nursery objects
+                -- so we can just pass the info table pointer on.
+                _ <- LLVMBuilder.buildStore builder layoutInfoTablePointer memoryPointer
                 registerAllocation builder memoryPointer
+
+                dataPointer <- buildGEPOffset builder memoryPointer Heap.headerSize (renderVariable var <> ".data")
                 let boxedCompoundValue = Layout.boxedCompoundValue memoryPointer
                 insertVarMapping var boxedCompoundValue Layout.boxedLayout
 

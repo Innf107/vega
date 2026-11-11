@@ -21,6 +21,7 @@ data Definition = MkDefinition
 
 data RuntimeDefinitions = MkRuntimeDefinitions
     { vega_allocate_boxed :: Definition
+    , vega_allocate_slow :: Definition
     , vega_allocate_uninitialized_array :: Definition
     , vega_allocate_zero_initialized_array :: Definition
     , vega_debug_int :: Definition
@@ -48,6 +49,8 @@ declareRuntimeDefinitions :: (MonadIO io, ?context :: LLVM.Context) => LLVM.Modu
 declareRuntimeDefinitions module_ = do
     vega_allocate_boxed <- defineFunction module_ "vega_allocate_boxed" True $ attributeFunctionType [(LLVM.pointerType, []), (LLVM.pointerType, [])] (Layout.boxedPointerType, [])
 
+    vega_allocate_slow <- defineFunction module_ "vega_allocate_slow" True $ attributeFunctionType [(LLVM.pointerType, []), (LLVM.int64Type, [])] (Layout.boxedPointerType, [])
+
     vega_allocate_uninitialized_array <- defineFunction module_ "vega_allocate_uninitialized_array" True $ attributeFunctionType [(LLVM.pointerType, []), (LLVM.pointerType, []), (LLVM.int64Type, [])] (Layout.boxedPointerType, [])
 
     vega_allocate_zero_initialized_array <- defineFunction module_ "vega_allocate_zero_initialized_array" True $ attributeFunctionType [(LLVM.pointerType, []), (LLVM.pointerType, []), (LLVM.int64Type, [])] (Layout.boxedPointerType, [])
@@ -73,6 +76,7 @@ declareRuntimeDefinitions module_ = do
     pure
         ( MkRuntimeDefinitions
             { vega_allocate_boxed
+            , vega_allocate_slow
             , vega_allocate_uninitialized_array
             , vega_allocate_zero_initialized_array
             , vega_debug_int

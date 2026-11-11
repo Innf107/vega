@@ -9,6 +9,8 @@ import Data.Word (Word64)
 import GHC.Generics (Generic)
 import Relude (Int)
 import Vega.Compilation.LLVM.Runtime.ToLLVMConstant (CEnum (..), CStruct (..), CUnion (..), ToLLVMConstant)
+import Vega.Alignment (Alignment)
+import qualified Vega.Alignment as Alignment
 
 data InfoTable = MkInfoTable
     { objectType :: ObjectType
@@ -47,6 +49,9 @@ data ArrayLayout = MkArrayLayout
     }
     deriving stock (Generic)
     deriving (ToLLVMConstant) via CStruct ArrayLayout
+
+heapAlignment :: Alignment
+heapAlignment = Alignment.fromValue 8
 
 {- | The size of the object header in bytes.
 The actual object data starts just after this.
