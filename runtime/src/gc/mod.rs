@@ -371,12 +371,13 @@ fn allocate_for_evacuation(gc_state: &mut GCState, size: usize) -> *mut HeapObje
     debug_assert!(size.is_multiple_of(HEAP_ALIGNMENT));
     unsafe {
         debug_assert!(gc_state.allocation_limit > gc_state.allocation_pointer);
-        if gc_state
+        let remaining_size_in_block = gc_state
             .allocation_limit
-            .byte_offset_from_unsigned(gc_state.allocation_pointer)
-            < size
-        {
+            .byte_offset_from_unsigned(gc_state.allocation_pointer);
+        if remaining_size_in_block <= size {
             cold_path();
+            let previous_allocation_pointer = gc_state.allocation_pointer;
+
             finish_block(
                 gc_state,
                 &major_heap().pending_blocks,
@@ -391,6 +392,16 @@ fn allocate_for_evacuation(gc_state: &mut GCState, size: usize) -> *mut HeapObje
                     );
                 },
             );
+            // In the edge case that the allocation *exactly* fills up the rest of the block,
+            // we still need to allocate a new block since otherwise the allocation pointer would
+            // point to the start of the next object, but we *can* return a pointer to the old block
+            // since there is (just barely) enough space left for the allocation.
+            //
+            // We don't need to increment the allocation pointer here, since that one already points to
+            // the start of the new block allocated by finish_block.
+            if remaining_size_in_block == size {
+                return previous_allocation_pointer;
+            }
         }
         debug_assert!(
             gc_state
@@ -408,7 +419,7 @@ fn allocate_for_evacuation(gc_state: &mut GCState, size: usize) -> *mut HeapObje
         let pointer = gc_state.allocation_pointer;
         gc_state.allocation_pointer = gc_state
             .allocation_pointer
-            .byte_add(round_up_to_heap_alignment(size));
+            .byte_add(size);
 
         debug_assert!(
             gc_state

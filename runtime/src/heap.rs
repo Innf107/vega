@@ -40,7 +40,11 @@ impl HeapObject {
         if object.is_null() {
             return null_mut();
         }
-        unsafe { object.byte_add(HeapObject::HEADER_SIZE_IN_BYTES).cast::<u8>() }
+        unsafe {
+            object
+                .byte_add(HeapObject::HEADER_SIZE_IN_BYTES)
+                .cast::<u8>()
+        }
     }
 
     // A textual description of this heap object's object type for use in debugging.
@@ -536,13 +540,17 @@ pub fn finish_block<State: AllocationState>(
 // and the returned memory is not initialized in any way.
 #[inline]
 pub fn allocate_generic(thread_state: &mut ThreadState, byte_count: usize) -> *mut HeapObject {
+    let allocation_size = round_up_to_heap_alignment(byte_count);
+
     let remaining_size_in_block = unsafe {
         thread_state
             .allocation_limit
             .byte_offset_from(thread_state.allocation_pointer)
     };
-    if remaining_size_in_block < byte_count as isize {
+    if remaining_size_in_block <= allocation_size as isize {
         cold_path();
+        let previous_allocation_pointer = thread_state.allocation_pointer;
+
         finish_block(
             thread_state,
             &nursery().used_blocks,
@@ -553,6 +561,16 @@ pub fn allocate_generic(thread_state: &mut ThreadState, byte_count: usize) -> *m
                 }
             },
         );
+        // In the edge case that the allocation *exactly* fills up the rest of the block,
+        // we still need to allocate a new block since otherwise the allocation pointer would
+        // point to the start of the next object, but we *can* return a pointer to the old block
+        // since there is (just barely) enough space left for the allocation.
+        //
+        // We don't need to increment the allocation pointer here, since that one already points to
+        // the start of the new block allocated by finish_block.
+        if remaining_size_in_block == allocation_size as isize {
+            return previous_allocation_pointer;
+        }
     }
     debug_assert!(
         unsafe {
@@ -564,10 +582,14 @@ pub fn allocate_generic(thread_state: &mut ThreadState, byte_count: usize) -> *m
 
     let pointer = thread_state.allocation_pointer;
     unsafe {
-        thread_state.allocation_pointer = round_pointer_up_to_heap_alignment(
-            thread_state.allocation_pointer.byte_add(byte_count),
-        );
+        thread_state.allocation_pointer = thread_state.allocation_pointer.byte_add(allocation_size);
     };
+    debug_assert!(
+        thread_state
+            .allocation_pointer
+            .addr()
+            .is_multiple_of(HEAP_ALIGNMENT)
+    );
     pointer
 }
 
@@ -619,10 +641,9 @@ pub unsafe fn allocate_uninitialized_array(
     let stride_in_bytes = unsafe { array_info_table.layout.array.element_stride_in_bytes };
     let size_in_bytes = length_in_elements * stride_in_bytes;
 
-    let object_pointer = allocate_generic(
-        thread_state,
-        size_of::<ArrayHeapObject>() + size_in_bytes,
-    ) as *mut ArrayHeapObject;
+    let object_pointer =
+        allocate_generic(thread_state, size_of::<ArrayHeapObject>() + size_in_bytes)
+            as *mut ArrayHeapObject;
 
     let header = Header::new(array_info_table, GenerationIndex::MINOR);
     unsafe { (*object_pointer).base = HeapObject { header } };
