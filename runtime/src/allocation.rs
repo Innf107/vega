@@ -116,7 +116,7 @@ pub fn allocate_generic<State: AllocationState>(
     }
     debug_assert!(
         unsafe { (*state.allocation_limit()).byte_offset_from(*state.allocation_pointer()) }
-            >= byte_count as isize
+            >= allocation_size as isize
     );
 
     let pointer = *state.allocation_pointer();
