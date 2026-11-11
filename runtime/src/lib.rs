@@ -9,3 +9,4 @@ pub mod primitive;
 pub mod settings;
 pub mod tagged_pointer;
 pub mod thread;
+pub mod allocation;

@@ -5,7 +5,7 @@ use libc::{_SC_PAGESIZE, sysconf};
 use roots::{ShadowStackFrame, for_stack_roots};
 
 use crate::{
-    gc::{
+    allocation::{AllocationState, allocate_generic, finish_block}, gc::{
         block::BlockPointer,
         generations::{MAJOR_HEAP, initialize_generations, major_heap, nursery},
         integrity::{
@@ -13,13 +13,10 @@ use crate::{
             vega_check_allocation_integrity, vega_debug_recursive_integrity_check,
         },
         roots::debug_stack_roots,
-    },
-    heap::{
-        AllocationState, ForwardPointer, GenerationIndex, HEAP_ALIGNMENT, HeapObject,
-        HeapObjectHandle, finish_block, round_up_to_heap_alignment,
-    },
-    settings::{RuntimeSettings, settings},
-    thread::ThreadState,
+    }, heap::{
+        ForwardPointer, GenerationIndex, HEAP_ALIGNMENT, HeapObject,
+        HeapObjectHandle, round_up_to_heap_alignment,
+    }, settings::{RuntimeSettings, settings}, thread::ThreadState,
 };
 
 pub mod block;
@@ -53,6 +50,31 @@ impl AllocationState for GCState {
         &mut self.allocation_limit
     }
 }
+
+#[inline]
+fn allocate_for_evacuation(gc_state: &mut GCState, size: usize) -> *mut HeapObject {
+    let pointer = allocate_generic(
+        gc_state,
+        size,
+        &major_heap().pending_blocks,
+        |heap_size, gc_state| {
+            // We don't need any limit checks during garbage collection.
+            // We always make sure that a minor collection has enough space in the major generation.
+            // If there is not enough space, we trigger a full GC
+            debug_assert!(
+                gc_state.collect_major_heap
+                    || (heap_size <= major_heap().max_block_count - nursery().max_block_count)
+            );
+        },
+    );
+
+    if settings().liveness_integrity {
+        cold_path();
+        register_major_heap_allocation(pointer);
+    }
+    pointer
+}
+
 
 #[unsafe(no_mangle)]
 pub extern "C" fn vega_collect_garbage(
@@ -366,73 +388,3 @@ unsafe fn scavenge(state: &mut GCState, heap_object: *mut HeapObject) {
     }
 }
 
-#[inline]
-fn allocate_for_evacuation(gc_state: &mut GCState, size: usize) -> *mut HeapObject {
-    debug_assert!(size.is_multiple_of(HEAP_ALIGNMENT));
-    unsafe {
-        debug_assert!(gc_state.allocation_limit > gc_state.allocation_pointer);
-        let remaining_size_in_block = gc_state
-            .allocation_limit
-            .byte_offset_from_unsigned(gc_state.allocation_pointer);
-        if remaining_size_in_block <= size {
-            cold_path();
-            let previous_allocation_pointer = gc_state.allocation_pointer;
-
-            finish_block(
-                gc_state,
-                &major_heap().pending_blocks,
-                // We don't need any limit checks during garbage collection.
-                // We always make sure that a minor collection has enough space in the major generation.
-                // If there is not enough space, we trigger a full GC
-                |heap_size, gc_state| {
-                    debug_assert!(
-                        gc_state.collect_major_heap
-                            || (heap_size
-                                <= major_heap().max_block_count - nursery().max_block_count)
-                    );
-                },
-            );
-            // In the edge case that the allocation *exactly* fills up the rest of the block,
-            // we still need to allocate a new block since otherwise the allocation pointer would
-            // point to the start of the next object, but we *can* return a pointer to the old block
-            // since there is (just barely) enough space left for the allocation.
-            //
-            // We don't need to increment the allocation pointer here, since that one already points to
-            // the start of the new block allocated by finish_block.
-            if remaining_size_in_block == size {
-                return previous_allocation_pointer;
-            }
-        }
-        debug_assert!(
-            gc_state
-                .allocation_limit
-                .byte_offset_from_unsigned(gc_state.allocation_pointer)
-                >= size
-        );
-        debug_assert!(
-            gc_state
-                .allocation_pointer
-                .addr()
-                .is_multiple_of(HEAP_ALIGNMENT)
-        );
-
-        let pointer = gc_state.allocation_pointer;
-        gc_state.allocation_pointer = gc_state
-            .allocation_pointer
-            .byte_add(size);
-
-        debug_assert!(
-            gc_state
-                .allocation_pointer
-                .addr()
-                .is_multiple_of(HEAP_ALIGNMENT)
-        );
-
-        if settings().liveness_integrity {
-            cold_path();
-            register_major_heap_allocation(pointer);
-        }
-
-        pointer
-    }
-}

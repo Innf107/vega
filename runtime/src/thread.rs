@@ -1,9 +1,7 @@
 use std::{ptr::null_mut, sync::Mutex};
 
 use crate::{
-    gc::{block_allocator, roots::ShadowStackFrame},
-    heap::{AllocationState, HeapObject},
-    owning_list::OwningList,
+    allocation::AllocationState, gc::{block_allocator, roots::ShadowStackFrame}, heap::HeapObject, owning_list::OwningList,
 };
 
 #[repr(C)]
