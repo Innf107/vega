@@ -39,7 +39,7 @@ import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
 import Vega.Loc (HasLoc (getLoc), Loc)
 import Vega.MultiSet (MultiSet)
 import Vega.MultiSet qualified as MultiSet
-import Vega.Panic (panic)
+import Vega.Panic (assert, panic)
 import Vega.Pretty (align, emphasis, errorText, intercalateDoc, keyword, lparen, note, pretty, rparen, (<+>))
 import Vega.Seq.NonEmpty (NonEmpty (..), toSeq)
 import Vega.Seq.NonEmpty qualified as NonEmpty
@@ -1015,12 +1015,22 @@ inferType env syntax = do
                         (_, arguments, argumentsSyntax) <- unzip3Seq <$> for argumentsSyntax \syntax -> inferType env syntax
                         pure (dummyResult, TypeApplication typeConstructor arguments, TypeApplicationS loc typeConstructorSyntax argumentsSyntax)
                 constructorKind -> do
-                    (argumentKinds, arguments, argumentsSyntax) <-
-                        unzip3Seq <$> for argumentsSyntax \argumentSyntax -> do
-                            inferType env argumentSyntax
+                    -- We could save a few unification variables by inferring the types of the arguments first and then checking
+                    -- the constructor against that, but that would lead to drastically worse error messages with the wrong
+                    -- source locations, so we invent unification variables for the parameters and check the arguments against that instead.
+                    parameterKinds <- for argumentsSyntax \_ -> do
+                        kind <- MetaVar <$> freshMeta "k" Kind
+                        MetaVar <$> freshMeta "a" kind
                     resultKindKind <- MetaVar <$> freshMeta "k" Kind
                     resultKind <- MetaVar <$> freshMeta "r" resultKindKind
-                    subsumes (getLoc typeConstructorSyntax) env constructorKind (TypeFunction argumentKinds resultKind)
+                    subsumes (getLoc typeConstructorSyntax) env constructorKind (TypeFunction parameterKinds resultKind)
+
+                    assert (length parameterKinds == length argumentsSyntax)
+                    (arguments, argumentsSyntax) <-
+                        Seq.unzip <$> for (Seq.zip argumentsSyntax parameterKinds) \(argumentSyntax, parameterKind) -> do
+                            (kind, type_, typeSyntax) <- inferType env argumentSyntax
+                            subsumes (getLoc argumentSyntax) env kind parameterKind
+                            pure (type_, typeSyntax)
 
                     pure (resultKind, TypeApplication typeConstructor arguments, TypeApplicationS loc typeConstructorSyntax argumentsSyntax)
         TypeVarS loc localName -> do
@@ -2007,7 +2017,7 @@ Now, if τ contains uses of `a`, these will stay as real type variables and infe
 This is the only way that real type variables can sneak in, so it is safe to simply check them for equality like this
 without performing any sort of level checks or anything similar.
 It is however very unfortunate that we cannot catch the common class of type checker bugs
-where type variables are not instantiated correctly. 
+where type variables are not instantiated correctly.
 -}
 
 {- NOTE [Kinds of foralls]:
