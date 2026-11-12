@@ -612,9 +612,15 @@ patternLeaf =
             ]
 
 expr :: Parser (Expr Parsed)
-expr = label "expression" exprLogical
+expr = label "expression" exprLoop
   where
     makeBinOp operator = \expr1 expr2 -> BinaryOperator (getLoc expr1 <> getLoc expr2) expr1 operator expr2
+
+    exprLoop =
+        choice
+            [ loop
+            , exprLogical
+            ]
 
     exprLogical =
         exprCompare
@@ -727,6 +733,19 @@ expr = label "expression" exprLogical
                 endLoc <- single RBrace
                 pure (Syntax.Match{loc = startLoc <> endLoc, scrutinee, cases, returnRepresentation = ()})
             ]
+
+loop :: Parser (Expr Parsed)
+loop = do
+    startLoc <- single Lexer.Loop
+    functionName <- unqualifiedIdentifier
+    loopParameters <- arguments do
+        parameterPattern <- pattern_
+        _ <- single Lexer.Equals
+        initialExpr <- expr
+        pure (parameterPattern, initialExpr)
+    _ <- single Lexer.Arrow
+    loopBody <- expr
+    pure (Syntax.Loop { loc = startLoc <> getLoc loopBody, functionName, loopParameters, loopBody })
 
 blockOrRecord :: Parser (Expr Parsed)
 blockOrRecord = do

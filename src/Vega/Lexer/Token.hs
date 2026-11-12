@@ -56,6 +56,7 @@ data Token
     | Import
     | External
     | Shadow
+    | Loop
     deriving (Show, Eq, Ord, Generic)
 
 instance Pretty Token where
@@ -112,3 +113,4 @@ instance Pretty Token where
         Import -> Pretty.keyword "import"
         External -> Pretty.keyword "external"
         Shadow -> Pretty.keyword "shadow"
+        Loop -> Pretty.keyword "loop"

@@ -24,7 +24,7 @@ import Vega.Loc (Loc)
 import Vega.Panic (panic)
 import Vega.Pretty qualified as Pretty
 import Vega.Seq.NonEmpty qualified as NonEmpty
-import Vega.Util (mapAccumLM)
+import Vega.Util (mapAccumLM, unzip3Seq)
 import Vega.Util qualified as Util
 
 type Rename es =
@@ -474,6 +474,16 @@ renameExpr env = \case
         scrutinee <- renameExpr env scrutinee
         cases <- traverse (renameMatchCase env) cases
         pure (Match{loc, scrutinee, cases, returnRepresentation})
+    Loop{loc, functionName, loopParameters, loopBody} -> do
+        (functionName, functionTransformer) <- bindLocalVar loc env False functionName
+        (parameterTransformers, loopParameters) <-
+            Seq.unzip <$> for loopParameters \(parameter, initialExpr) -> do
+                (parameter, envTrans) <- renamePattern env parameter
+                initialExpr <- renameExpr env initialExpr
+                pure (envTrans, (parameter, initialExpr))
+        let bodyEnv = Util.compose parameterTransformers $ functionTransformer env
+        loopBody <- renameExpr bodyEnv loopBody
+        pure (Loop{loc, functionName, loopParameters, loopBody})
 
 renameStatement :: (Rename es) => Env -> Statement Parsed -> Eff es (Statement Renamed, Env -> Env)
 renameStatement env = \case

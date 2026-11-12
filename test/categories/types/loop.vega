@@ -1,0 +1,13 @@
+-- type: print(6)
+import internal:Internal (debugInt)
+
+data List(a) = Nil | Cons(a, List(a))
+
+sum : List(Int) -> Int
+sum(list) = loop go(shadow list = list, total = 0) -> match list {
+    Nil -> total
+    Cons(x, xs) -> go(xs, total + x)
+}
+
+main : () -> ()
+main() = debugInt(sum(Cons(1,Cons(2,Cons(3,Nil)))))

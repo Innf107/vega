@@ -681,6 +681,26 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
                 pure (MkMatchCase{loc, pattern_, body})
             returnRepresentation <- representationOfType loc env expectedType
             pure (Match{loc, scrutinee, cases, returnRepresentation})
+        Loop{loc, functionName, loopParameters, loopBody} -> do
+            (loopParameters, parameterTypes, parameterTransformers) <-
+                unzip3Seq <$> for loopParameters \(parameter, initialExpr) -> do
+                    (parameter, parameterType, envTrans) <- inferPattern env parameter
+                    parameterRepresentation <- representationOfType loc env parameterType
+                    -- Initial expressions are evaluated outside the actual function so they
+                    -- should inherit the ambient effect and should not use the environment
+                    -- transformer from their corresponding pattern
+                    initialExpr <- check env ambientEffect parameterType initialExpr
+                    pure (((parameter, parameterRepresentation), initialExpr), parameterType, envTrans)
+
+            bodyEffect <- MetaVar <$> freshMeta "e" Effect
+
+            let functionType = Function parameterTypes bodyEffect expectedType
+
+            let bodyEnv = Util.compose parameterTransformers $ bindVarType functionName functionType env
+            loopBody <- check bodyEnv bodyEffect expectedType loopBody
+            returnRepresentation <- representationOfType loc env expectedType
+            pure (Loop{loc, functionName, loopParameters, loopBody=(loopBody, returnRepresentation)})
+
 
 infer :: (TypeCheck es) => Env -> Effect -> Expr Renamed -> Eff es (Type, Expr Typed)
 infer env ambientEffect expr = do
@@ -843,6 +863,10 @@ infer env ambientEffect expr = do
 
             returnRepresentation <- representationOfType loc env resultType
             pure (resultType, Match{loc, scrutinee, cases, returnRepresentation})
+        expr@Loop{} -> do
+            returnType <- MetaVar <$> freshTypeMeta "r"
+            expr <- check env ambientEffect returnType expr
+            pure (returnType, expr)
 
 checkStatements :: (TypeCheck es) => Env -> Effect -> Seq (Statement Renamed) -> Eff es (Env, Seq (Statement Typed))
 checkStatements env ambientEffect statements = mapAccumLM (\env -> checkStatement env ambientEffect) env statements

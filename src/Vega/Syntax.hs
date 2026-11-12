@@ -255,6 +255,12 @@ data Expr p
         , cases :: Seq (MatchCase p)
         , returnRepresentation :: XRepresentation p
         }
+    | Loop
+        { loc :: Loc
+        , functionName :: XLocalName p
+        , loopParameters :: Seq (XWithRepresentation p (Pattern p), Expr p)
+        , loopBody :: XWithRepresentation p (Expr p)
+        }
     deriving stock (Generic)
     deriving anyclass (HasLoc)
 

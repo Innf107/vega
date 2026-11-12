@@ -19,11 +19,13 @@ import Relude qualified
 
 import Data.HashMap.Strict (alter)
 import Data.HashMap.Strict qualified as HashMap
+import Data.HashSet qualified as HashSet
 import Data.Map qualified as Map
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Traversable (for)
 import Effectful.Reader.Static (Reader, ask, runReader)
+import Effectful.State.Static.Local (get, modify, put, runState)
 import Vega.Builtins qualified as Builtins
 import Vega.Compilation.Core.Syntax (nameToCoreName)
 import Vega.Compilation.Core.Syntax qualified as Core
@@ -37,7 +39,7 @@ import Vega.Effect.Meta.Static (BindMeta, ReadMeta, followMetasWithoutPathCompre
 import Vega.Effect.Meta.Static qualified as Meta
 import Vega.Effect.Trace (Category (..), Trace, trace, withTrace)
 import Vega.Effect.Unique.Static.Local (NewUnique, newUnique, runNewUnique)
-import Vega.Panic (panic, assert, assertIn)
+import Vega.Panic (assert, assertIn, panic)
 import Vega.Pretty (align, indent, intercalateDoc, keyword, number, pretty, (<+>))
 import Vega.Seq.NonEmpty (pattern NonEmpty)
 import Vega.Seq.NonEmpty qualified as NonEmpty
@@ -45,9 +47,7 @@ import Vega.Syntax (Pass (..))
 import Vega.Syntax qualified as Vega
 import Vega.Util qualified as Util
 import Vega.VectorMap qualified as VectorMap
-import Witherable (wither, Filterable (mapMaybe))
-import Effectful.State.Static.Local (runState, modify, get, put)
-import qualified Data.HashSet as HashSet
+import Witherable (Filterable (mapMaybe), wither)
 
 type Compile es =
     ( GraphPersistence :> es
@@ -327,6 +327,46 @@ compileExpr expr = do
             (statements, returnExpr) <- compilePatternMatch scrutinee (fmap (\Vega.MkMatchCase{pattern_, body} -> (pattern_, body)) cases)
             returnRepresentation <- convertRepresentation returnRepresentation
             pure (statements, returnExpr, returnRepresentation)
+        Vega.Loop{functionName, loopParameters, loopBody = (loopBody, vegaReturnRepresentation)} -> do
+            let coreFunctionName = Core.UserProvided functionName
+            returnRepresentation <- convertRepresentation vegaReturnRepresentation
+
+            coreParameters <- for loopParameters \((_, vegaRepresentation), _) -> do
+                local <- newLocal
+                representation <- convertRepresentation vegaRepresentation
+                pure (local, representation)
+
+            let caseTree = PatternMatching.serializeSubPatterns (fmap (\((pattern_, _), _) -> pattern_) loopParameters) ()
+
+            (caseStatements, caseExpr, _representation) <-
+                compileCaseTree
+                    (\() -> compileExpr loopBody)
+                    caseTree
+                    (fmap (\(local, _) -> Core.Var (Core.Local local)) coreParameters)
+
+            let functionStatement =
+                    Core.LetFunction
+                        { name = coreFunctionName
+                        , parameters = coreParameters
+                        , returnRepresentation
+                        , statements = caseStatements
+                        , result = caseExpr
+                        }
+            (initialArgumentStatements, initialArguments) <-
+                Seq.unzip <$> for loopParameters \(_pattern, initialExpr) -> do
+                    compileExprToValue_ initialExpr
+            pure
+                ( fold initialArgumentStatements <> [functionStatement]
+                , -- Loop expressions cannot have polymorphic types so we don't need to
+                  -- pass any representation arguments here
+                  Core.Application
+                    { function = Core.Local coreFunctionName
+                    , representationArguments = []
+                    , arguments = initialArguments
+                    , resultRepresentation = returnRepresentation
+                    }
+                , returnRepresentation
+                )
 
 -- | Like 'compileExprToValue' but discards the representation
 compileExprToValue_ :: (Compile es) => Vega.Expr Typed -> Eff es (Seq Core.Statement, Core.Value)
@@ -409,6 +449,7 @@ compileExprToValue expr = do
         Vega.If{} -> deferToLet
         Vega.SequenceBlock{} -> deferToLet
         Vega.Match{} -> deferToLet
+        Vega.Loop{} -> deferToLet
 
 compileCorePrimop :: Builtins.CorePrimop -> Core.Representation -> Seq Core.Value -> Eff es (Seq Core.Statement, Core.Expr)
 compileCorePrimop primop returnRepresentation arguments = case primop of
@@ -574,11 +615,13 @@ compileCaseTree compileGoal caseTree scrutinees = do
                             -- BindVar, even though the leaves from the other tree don't actually use that variable.
                             -- This means that we need to filter for only those variables that are actually being used by this leaf
                             -- and ignore the rest.
-                            let actuallyBoundValues = boundValues & Witherable.mapMaybe \(originalVar, valueLocal) -> 
-                                    if originalVar `HashSet.member` boundVarSet then
-                                        Just $ Core.Var (Core.Local valueLocal)
-                                    else
-                                        Nothing
+                            let actuallyBoundValues =
+                                    boundValues & Witherable.mapMaybe \(originalVar, valueLocal) ->
+                                        if originalVar `HashSet.member` boundVarSet
+                                            then
+                                                Just $ Core.Var (Core.Local valueLocal)
+                                            else
+                                                Nothing
                             pure ([], Core.JumpJoin joinPointName actuallyBoundValues, representation)
                     _ -> panic $ "Not all scrutinees consumed. Remaining: [" <> intercalateDoc ", " (fmap pretty scrutinees) <> "]"
             PatternMatching.ConstructorCase{constructors, scrutineeRepresentation, default_} -> do
@@ -705,13 +748,14 @@ boundVarsAndFrequencies ::
 boundVarsAndFrequencies tree = fmap snd $ runState mempty $ do
     PatternMatching.traverseLeaves tree \locals goal -> do
         state <- get
-        next <- state & flip HashMap.alterF goal \case
-            Nothing -> do
-                localsWithRepresentations <- for locals \(local, vegaRepresentation) -> do
-                    representation <- convertRepresentation vegaRepresentation
-                    pure (Core.UserProvided local, representation)
-                pure $ Just (localsWithRepresentations, 1 :: Int)
-            Just (locals, count) -> pure $ Just (locals, count + 1)
+        next <-
+            state & flip HashMap.alterF goal \case
+                Nothing -> do
+                    localsWithRepresentations <- for locals \(local, vegaRepresentation) -> do
+                        representation <- convertRepresentation vegaRepresentation
+                        pure (Core.UserProvided local, representation)
+                    pure $ Just (localsWithRepresentations, 1 :: Int)
+                Just (locals, count) -> pure $ Just (locals, count + 1)
         put next
 
 newLocal :: (Compile es) => Eff es Core.LocalCoreName

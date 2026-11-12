@@ -18,6 +18,7 @@ import Vega.Error (LexicalError (..))
 import Vega.Lexer.Token (Token (..))
 import Vega.Loc (Loc (..))
 import Vega.Util (Sign (..))
+import Debug.Trace qualified as Trace
 
 newtype Lexer a = MkLexer (Either LexicalError a)
     deriving newtype (Functor, Applicative, Monad)
@@ -273,6 +274,7 @@ lexIdentifier chars state = case state of
             "_" -> pure (Underscore, state)
             "external" -> pure (External, state)
             "shadow" -> pure (Shadow, state)
+            "loop" -> pure (Loop, state)
             ident -> pure (Ident ident, state)
 
 isIdentifierStart :: Char -> Bool
