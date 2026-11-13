@@ -23,11 +23,27 @@ import std:OutArray (OutArray)
 import std:Ref
 import std:Ref (Ref)
 import std:Stream(Stream, Bounded)
+import std:ArrayView
+import std:ArrayView (ArrayView)
+import std:Maybe
+import std:Maybe (Maybe, Just, Nothing)
+
+empty : forall a. () -> Array(a)
+empty() = emptyArray()
 
 read : forall a. (Array(a), Int) -> a
 read(array, index) = {
     boundsCheck(array, index, "std:Array:read")
     unsafeReadArray(array, index)
+}
+
+readMaybe : forall a. (Array(a), Int) -> Maybe(a)
+readMaybe(array, index) = {
+    if index >= 0 && index < length(array) then {
+        Just(unsafeReadArray(array, index))
+    } else {
+        Nothing
+    }
 }
 
 readMutable : forall a. (MutableArray(a), Int) -> a
@@ -224,3 +240,6 @@ sliceToStream({ array, offset, length }) = {
         }
     })
 }
+
+view : forall a. Array(a) -> ArrayView(a)
+view(array) = ArrayView.fromFunction({ read = \i -> read(array, i), length = length(array) })

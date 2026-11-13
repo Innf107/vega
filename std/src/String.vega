@@ -1,6 +1,8 @@
 
 import std:Array (copyArray)
 import std:Array
+import std:ArrayView
+import std:ArrayView (ArrayView)
 import std:List (List, Nil, Cons)
 import std:Maybe (Maybe, Nothing, Just)
 import std:Ordering (Ordering, Less, Equal, Greater)
@@ -52,16 +54,17 @@ replicateChar(char, length) = {
 length : String -> Int
 length(String({ content=_, offset=_, length })) = length
 
-unsafeIndex : (String, Int) -> UInt8
-unsafeIndex(String({content, offset, length}), index) = unsafeReadArray(content, offset + index)
+unsafeRead : (String, Int) -> UInt8
+unsafeRead(String({content, offset, length}), index) = unsafeReadArray(content, offset + index)
 
-index : (String, Int) -> UInt8
-index(string, index) = match indexMaybe(string, index) {
-    Nothing -> panic(append(append(append("String.index: Index ", Int.toString(index)), " out of range for string of length "), Int.toString(length(string))))
+read : (String, Int) -> UInt8
+read(string, index) = match readMaybe(string, index) {
+    Nothing -> panic(append(append(append("String.read: Index ", Int.toString(index)), " out of range for string of length "), Int.toString(length(string))))
+    Just(char) -> char
 }
 
-indexMaybe : (String, Int) -> Maybe(UInt8)
-indexMaybe(string, index) = if index < length(string) then Nothing else Just(unsafeIndex(string, index))
+readMaybe : (String, Int) -> Maybe(UInt8)
+readMaybe(string, index) = if index < length(string) then Nothing else Just(unsafeRead(string, index))
 
 append : (String, String) -> String
 append(string1, string2) = {
@@ -215,7 +218,7 @@ uncons(string) = {
     if length(string) == 0 then 
         Nothing
     else
-        Just((unsafeIndex(string, 0), drop(string, 1)))
+        Just((unsafeRead(string, 0), drop(string, 1)))
 }
 
 -- O(n)
@@ -233,3 +236,9 @@ compare(string1, string2) = match (uncons(string1), uncons(string2)) {
 
 toByteStream : String -> Stream(UInt8)
 toByteStream(String({ content, offset, length })) = Array.sliceToStream({ array=content, offset=offset, length=length })
+
+view : String -> ArrayView(UInt8)
+view(string) = ArrayView.fromFunction({ read = \i -> read(string, i), length = length(string) })
+
+isPrefix : { prefix : String, full : String } -> Bool
+isPrefix({ prefix, full }) = ArrayView.isPrefix({ prefix = view(prefix), full = view(full) })

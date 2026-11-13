@@ -1,0 +1,49 @@
+import std:Array
+import std:Maybe (Maybe, Nothing, Just)
+import std:Maybe
+import std:Panic (panic)
+import std:ArrayView
+import std:String
+
+data CharMap(a)
+
+lookupCharMap : forall a. (CharMap(a), UInt8) -> Maybe(a)
+lookupCharMap(map, char) = panic("todo")
+
+data Trie(a)
+    = Node({ 
+        -- We don't need to waste two words to store slices here so we
+        -- use a direct Array instead of a String.
+        -- These are going to be small-ish in practice anyway
+        prefix: Array(UInt8),
+        next: Maybe(CharMap(Trie(a))),
+        value: Maybe(a)
+     })
+
+empty : forall a. () -> Trie(a)
+empty() = Node({ prefix = Array.empty(), next = Nothing, value = Nothing })
+
+lookup : forall a. (Trie(a), String) -> Maybe(a)
+lookup(Node({ prefix, next, value }), string) = {
+    if ArrayView.isPrefix({prefix = Array.view(prefix), full = String.view(string) }) then {
+        if String.length(string) == Array.length(prefix) then {
+            value
+        } else match next {
+            Nothing -> Nothing
+            -- The next char is the char one *after* the prefix
+            Just(shadow next) -> {
+                let nextChar = String.read(string, Array.length(prefix))
+                match lookupCharMap(next, nextChar) {
+                    Nothing -> Nothing
+                    Just(subTrie) -> {
+                        -- We have matched the prefix and are now matching one char through the next map
+                        let remainingString = String.drop(string, Array.length(prefix) + 1)
+                        lookup(subTrie, remainingString)
+                    }
+                }
+            }
+        }
+    } else {
+        Nothing
+    }
+}

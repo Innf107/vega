@@ -1,0 +1,44 @@
+import internal:Internal(uint8ToInt)
+import std:Maybe (Maybe, Just, Nothing)
+
+-- Virtual wrapper for anything that can be indexed into like an array.
+-- TODO: this should be parameterized by an effect and probably by the representation
+-- of its closure in the future
+data ArrayView(a) = ArrayView({
+    read : Int -> a,
+    length : Int
+})
+
+fromFunction : forall a. { read : Int -> a, length : Int } -> ArrayView(a)
+fromFunction(contents) = ArrayView(contents)
+
+read : forall a. (ArrayView(a), Int) -> a
+read(ArrayView({read, length=_}), index) = read(index)
+
+length : forall a. ArrayView(a) -> Int
+length(ArrayView({length, read=_})) = length
+
+readMaybe : forall a. (ArrayView(a), Int) -> Maybe(a)
+readMaybe(view, index) = {
+    if index >= 0 && index < length(view) then {
+        Just(read(view, index))
+    } else {
+        Nothing
+    }
+}
+
+-- TODO: we should expand this to anything that implements Eq in the future
+isPrefix : { prefix : ArrayView(UInt8), full : ArrayView(UInt8) } -> Bool
+isPrefix({ prefix, full }) = {
+    if length(prefix) > length(full) then {
+        False
+    } else loop go(i = 0) -> {
+        if i >= length(prefix) then {
+            True
+        } else if uint8ToInt(read(prefix, i)) != uint8ToInt(read(full, i)) then {
+            False
+        } else {
+            go(i + 1)
+        }
+    }
+}
