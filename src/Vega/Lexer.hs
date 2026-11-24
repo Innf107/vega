@@ -149,6 +149,8 @@ lex state = case state of
     '*' :! state -> pure (Asterisk, state)
     '/' :! state -> pure (Slash, state)
     '+' :! state -> pure (Plus, state)
+    '-' :! char :! state
+        | Char.isDigit char -> lexNumber [char, '-'] state
     '-' :! state -> pure (Minus, state)
     '"' :! state -> lexStringLiteral [] state
     char :! state
