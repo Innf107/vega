@@ -711,7 +711,8 @@ expr = label "expression" exprLoop
                 pure (Syntax.DoubleLiteral loc float)
             , do
                 startLoc <- single LBracket
-                elements <- expr `sepBy` comma
+                elements <- expr `sepEndBy` comma
+                _ <- MegaParsec.many (single Lexer.Semicolon)
                 endLoc <- single RBracket
                 pure (Syntax.ArrayLiteral {loc = startLoc <> endLoc, elements, elementRepresentation = ()})
             , do
