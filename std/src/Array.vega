@@ -79,6 +79,18 @@ length : forall a. Array(a) -> Int
 length(array) = arrayLength(array)
 
 
+copyArrayView : forall a. ({
+        targetArray : MutableArray(a),
+        targetOffset : Int,
+        source : ArrayView(a)
+    }) -> ()
+copyArrayView({targetArray, targetOffset, source}) = loop go(index = 0) -> {
+    if index < ArrayView.length(source) then {
+        writeMutable(targetArray, targetOffset + index, ArrayView.read(source, index))
+        go(index + 1)
+    } else {}
+}
+
 -- TODO: This should probably use some primop that compiles directly to a memmov
 -- TODO: bounds checks lol
 copyArray : forall a. ({ 
@@ -119,6 +131,9 @@ unsafeWithPointerAtOffset : forall r. (Array(UInt8), Int, Pointer(UInt8) -> r) -
 unsafeWithPointerAtOffset(array, offset, cont) = {
     cont(offsetPointerBytes(unsafeArrayContents(array), offset))
 }
+
+fromView : forall a. ArrayView(a) -> Array(a)
+fromView(view) = generate(ArrayView.length(view), \i -> ArrayView.read(view, i))
 
 fromList : forall a. List(a) -> Array(a)
 fromList(list) = match list {
@@ -243,3 +258,23 @@ sliceToStream({ array, offset, length }) = {
 
 view : forall a. Array(a) -> ArrayView(a)
 view(array) = ArrayView.fromFunction({ read = \i -> read(array, i), length = length(array) })
+
+
+
+flattenView : forall a. (ArrayView(ArrayView(a))) -> Array(a)
+flattenView(view) = {
+    let totalLength = ArrayView.sum(ArrayView.map(view, \inner -> ArrayView.length(inner)))
+    
+    let targetArray = unsafeUninitializedMutableArray(totalLength)
+
+    let filledInTotal = ArrayView.foldl(view, 0, \filledSoFar inner -> {
+        copyArrayView({ targetArray = targetArray, targetOffset = filledSoFar, source = inner })
+        
+        filledSoFar + ArrayView.length(view)
+    })
+
+    unsafeFreezeArray(targetArray)
+}
+
+flatMapView : forall a b. (ArrayView(a), a -> ArrayView(b)) -> Array(b)
+flatMapView(view, f) = flattenView(ArrayView.map(view, f))

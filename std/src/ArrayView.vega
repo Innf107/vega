@@ -1,5 +1,6 @@
 import internal:Internal(uint8ToInt)
 import std:Maybe (Maybe, Just, Nothing)
+import std:Array
 
 -- Virtual wrapper for anything that can be indexed into like an array.
 -- TODO: this should be parameterized by an effect and probably by the representation
@@ -12,9 +13,13 @@ data ArrayView(a) = ArrayView({
 fromFunction : forall a. { read : Int -> a, length : Int } -> ArrayView(a)
 fromFunction(contents) = ArrayView(contents)
 
+-- Read the element at the given view of the index
+--
+-- The complexity of this operation can vary depending on how the view was constructed
 read : forall a. (ArrayView(a), Int) -> a
 read(ArrayView({read, length=_}), index) = read(index)
 
+-- | O(1)
 length : forall a. ArrayView(a) -> Int
 length(ArrayView({length, read=_})) = length
 
@@ -26,6 +31,45 @@ readMaybe(view, index) = {
         Nothing
     }
 }
+
+for : forall a. (ArrayView(a), a -> ()) -> ()
+for(view, f) = loop go (index = 0) -> {
+    if index < length(view) then {
+        f(read(view, index))
+        go(index + 1)
+    } else {}
+}
+
+forIndexed : forall a. (ArrayView(a), (Int, a) -> ()) -> ()
+forIndexed(view, f) = loop go (index = 0) -> {
+    if index < length(view) then {
+        f(index, read(view, index))
+        go(index + 1)
+    } else {}
+}
+
+foldl : forall a b. (ArrayView(a), b, (b, a) -> b) -> b
+foldl(view, nil, snoc) = loop go(acc = nil, index = 0) -> {
+    if index < length(view) then {
+        let shadow acc = snoc(acc, read(view, index))
+        go(acc, index + 1)
+    } else {
+        acc
+    }
+}
+
+foldr : forall a b. (ArrayView(a), b, (a, b) -> b) -> b
+foldr(view, nil, cons) = loop go(acc = nil, index = length(view) - 1) -> {
+    if (index >= 0) then {
+        let shadow acc = cons(read(view, index), acc)
+        go(acc, index - 1)
+    } else {
+        acc
+    }
+}
+
+sum : ArrayView(Int) -> Int
+sum(view) = foldl(view, 0, \x y -> x + y)
 
 -- TODO: we should expand this to anything that implements Eq in the future
 isPrefix : { prefix : ArrayView(UInt8), full : ArrayView(UInt8) } -> Bool
@@ -42,3 +86,31 @@ isPrefix({ prefix, full }) = {
         }
     }
 }
+
+-- Lazily map a function over every element of the view.
+-- This will be recomputed on every access, so it should only be used if the operation is
+-- cheap or will only be used once.
+-- If this is not your use case, use `mapMaterialized`.
+--
+-- Lazy operations like map can be used to fuse several operations together without allocating any intermediate arrays.
+-- For example, `ArrayViwe.sum(ArrayView.map(Array.view(array), f))` will only perform a constant number of heap allocations,
+-- whereas the equivalent array code would have to allocate an array for the result of `map`
+--
+-- O(1), but will call the passed function on every access
+map : forall a b. (ArrayView(a), a -> b) -> ArrayView(b)
+map(view, f) = ArrayView({
+    read = \i -> f(read(view, i)),
+    length = length(view)
+})
+
+-- Like `map` but will immediately materialize the result as an intermediate array.
+-- You should use this if the function you're mapping is expensive or the array is expected to
+-- be accessed many times, where `map` would call the passed function on every access.
+--
+-- Unlike `map`, this will allocate an intermediate array and will not participate in fusion.
+--
+-- This is entirely a convenience wrapper around `\(view, f) -> Array.view(Array.fromView(map(view, f)))`
+--
+-- O(n)
+mapMaterialized : forall a b. (ArrayView(a), a -> b) -> ArrayView(b)
+mapMaterialized(view, f) = Array.view(Array.fromView(map(view, f)))

@@ -130,6 +130,15 @@ concatList(list) = {
     String({content = unsafeFreezeArray(combinedArray), length = size, offset = 0})
 }
 
+concatView : ArrayView(String) -> String
+concatView(stringView) = {
+    let array = Array.flatMapView(stringView, \string -> view(string))
+    fromByteArray(array)
+}
+
+concatArray : Array(String) -> String
+concatArray(array) = concatView(Array.view(array))
+
 -- TODO: this could probably be some sort of crazy optimized SIMD magic
 -- (would be very cool if we could do that in vega itself)
 findByteIndex : (UInt8, String) -> Maybe(Int)
