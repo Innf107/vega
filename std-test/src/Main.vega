@@ -1,0 +1,9 @@
+import stdtest:Framework
+import stdtest:Test/String
+
+main : () -> ()
+main() = {
+    Framework.run({ path = "std-test/src" },
+        [ String.category()
+        ])
+}

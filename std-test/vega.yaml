@@ -1,0 +1,6 @@
+name: stdtest
+# TODO: we should really be able to run these tests on the JS backend as well
+backend: release
+
+dependencies:
+- { type: local, src: '../std' }

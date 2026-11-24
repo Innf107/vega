@@ -1,0 +1,7 @@
+import internal:Internal (uint8ToInt)
+-- Special-cased helper functions to make working with raw bytes a bit less annoying.
+-- these should probably eventually all become type class methods
+
+equal : (UInt8, UInt8) -> Bool
+equal(byte1, byte2) = uint8ToInt(byte1) == uint8ToInt(byte2)
+

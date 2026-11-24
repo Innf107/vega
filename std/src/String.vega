@@ -41,6 +41,9 @@ fromByteArray(array) = {
 toByteArray : String -> Array(UInt8)
 toByteArray(String(string)) = Array.fromSliceUnsafe({ array = string.content, length = string.length, offset = string.offset })
 
+fromView : ArrayView(UInt8) -> String
+fromView(arrayView) = fromByteArray(Array.fromView(arrayView))
+
 unsafeFromByteArraySlice : ({ content : Array(UInt8), offset : Int, length : Int }) -> String
 unsafeFromByteArraySlice(record) = String(record)
 
@@ -64,7 +67,7 @@ read(string, index) = match readMaybe(string, index) {
 }
 
 readMaybe : (String, Int) -> Maybe(UInt8)
-readMaybe(string, index) = if index < length(string) then Nothing else Just(unsafeRead(string, index))
+readMaybe(string, index) = if index >= 0 && index < length(string) then Just(unsafeRead(string, index)) else Nothing
 
 append : (String, String) -> String
 append(string1, string2) = {
@@ -131,7 +134,9 @@ concatList(list) = {
 }
 
 concatView : ArrayView(String) -> String
-concatView(stringView) = {
+concatView(stringView) = if ArrayView.length(stringView) == 1 then {
+    ArrayView.read(stringView, 0)
+} else {
     let array = Array.flatMapView(stringView, \string -> view(string))
     fromByteArray(array)
 }
@@ -241,6 +246,12 @@ compare(string1, string2) = match (uncons(string1), uncons(string2)) {
         Greater -> Greater
         Equal -> compare(rest1, rest2)
     }
+}
+
+equal : (String, String) -> Bool
+equal(string1, string2) = match compare(string1, string2) {
+    Equal -> True
+    _ -> False
 }
 
 toByteStream : String -> Stream(UInt8)

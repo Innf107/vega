@@ -1,0 +1,40 @@
+import std:String
+import std:UInt8
+import std:Maybe
+import std:Array
+
+import stdtest:Framework (Category, Test, test, expectPass)
+
+category : () -> Category
+category() = Category({
+        name = "Strings",
+        path = "Test/String.vega",
+        tests = tests()
+    })
+
+tests : () -> Array(Test)
+tests() = [
+    expectPass("read literal", \ -> {
+        UInt8.equal(String.read("abcdefg", 4), 101u8)
+    }),
+    expectPass("readMaybe out of bounds", \ -> {
+        Maybe.isNothing(String.readMaybe("abcd", 5))
+    }),
+    expectPass("readMaybe negative", \ -> {
+        Maybe.isNothing(String.readMaybe("abcd", -1))
+    }),
+    expectPass("round-trip to/fromByteArray", \ -> {
+        let string = "abcdefghijklmnopqrstuvwxyz"
+        String.equal(string, String.fromByteArray(String.toByteArray(string)))
+    }),
+    expectPass("round-trip from/toByteArray", \ -> {
+        let array = [0u8, 123u8, 127u8, 254u8]
+        Array.equal(UInt8.equal, array, String.toByteArray(String.fromByteArray(array)))
+    }),
+    expectPass("concatArray", \ -> {
+        String.equal
+            ( String.concatArray(["Heat", " ", "from ", "fire", ",", " fi", "re from", " ", "heat", "."])
+            , "Heat from fire, fire from heat."
+            )
+    })
+]

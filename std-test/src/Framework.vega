@@ -1,0 +1,50 @@
+import std:Ref
+import std:Int
+import std:IO/Posix (print, printAll)
+import std:Array
+import std:String
+-- This is pretty inconvenient for now since we don't yet have type classes to make all the tests nicer
+-- and we don't yet have any sort of access to call stacks for source locations so we need to pass them in manually
+
+data Category = Category({
+    name : String,
+    path : String,
+    tests : Array(Test)
+})
+
+data Test = Test({
+    name : String,
+    expectPass : () -> Bool
+})
+
+run : ({ path : String }, Array(Category)) -> ()
+run({path = basePath}, categories) = {
+    let totalRun = Ref.new(0)
+    let totalFailed = Ref.new(0)
+    Array.for(categories, \Category({ name=categoryName, path = categoryPathSegment, tests }) -> {
+        let categoryPath = String.concatArray([basePath, "/", categoryPathSegment])
+        printAll(["\e[1m\e[34m~~~~~~~~~~~~", categoryName, " (", categoryPath, ")~~~~~~~~~~~~\e[0m"])
+        Array.for(tests, \Test({name=testName, expectPass}) -> {
+            if expectPass() then {
+                printAll(["\e[32m    [", testName, "]: passed\e[0m"])
+            } else {
+                printAll(["\e[1m\e[31m    [", testName, "]: FAILED\e[0m"])
+                Ref.add(totalFailed, 1)
+            }
+            Ref.add(totalRun, 1)
+        })
+
+    })
+    if Ref.read(totalFailed) == 0 then {
+        print("\e[1m\e[32mAll tests passed\e[0m")
+    } else {
+        printAll(["\e[1m\e[31m", Int.toString(Ref.read(totalFailed)), "/", Int.toString(Ref.read(totalRun)), " tests failed\e[0m"])
+    }
+}
+
+expectPass : (String, () -> Bool) -> Test
+expectPass(name, condition) = Test({
+    name = name, 
+    expectPass = condition
+})
+

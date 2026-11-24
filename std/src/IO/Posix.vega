@@ -73,6 +73,11 @@ print(message) = {
     printFD(stdout(), message)
 }
 
+printAll : Array(String) -> ()
+printAll(messages) = {
+    print(String.concatArray(messages))
+}
+
 -- This reads the entire contents of the file descriptor into the given string.
 -- This will not perform any form of streaming, so you should not use it if the file is large
 readAllToString : FileDescriptor -> String

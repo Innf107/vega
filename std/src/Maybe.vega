@@ -2,4 +2,8 @@ data Maybe(a) =
     | Nothing
     | Just(a)
 
-
+isNothing : forall a. Maybe(a) -> Bool
+isNothing(maybe) = match maybe {
+    Nothing -> True
+    Just(_) -> False
+}

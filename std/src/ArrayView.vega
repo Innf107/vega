@@ -87,6 +87,19 @@ isPrefix({ prefix, full }) = {
     }
 }
 
+equal : forall a. ((a, a) -> Bool, ArrayView(a), ArrayView(a)) -> Bool
+equal(comparison, view1, view2) = if length(view1) != length(view2) then {
+    False
+} else loop go(index = 0) -> {
+    if index >= length(view1) then
+        True
+     else if comparison(read(view1, index), read(view2, index)) then {
+        go(index + 1)
+    } else {
+        False
+    }
+}
+
 -- Lazily map a function over every element of the view.
 -- This will be recomputed on every access, so it should only be used if the operation is
 -- cheap or will only be used once.

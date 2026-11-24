@@ -12,6 +12,7 @@ import internal:Internal
     , arrayLength
     , mutableArrayLength
     , unsafeUninitializedMutableArray
+    , debugInt
     )
 import std:List (List, Cons, Nil)
 import std:List
@@ -270,7 +271,7 @@ flattenView(view) = {
     let filledInTotal = ArrayView.foldl(view, 0, \filledSoFar inner -> {
         copyArrayView({ targetArray = targetArray, targetOffset = filledSoFar, source = inner })
         
-        filledSoFar + ArrayView.length(view)
+        filledSoFar + ArrayView.length(inner)
     })
 
     unsafeFreezeArray(targetArray)
@@ -278,3 +279,6 @@ flattenView(view) = {
 
 flatMapView : forall a b. (ArrayView(a), a -> ArrayView(b)) -> Array(b)
 flatMapView(view, f) = flattenView(ArrayView.map(view, f))
+
+equal : forall a. ((a, a) -> Bool, Array(a), Array(a)) -> Bool
+equal(comparison, array1, array2) = ArrayView.equal(comparison, view(array1), view(array2))
