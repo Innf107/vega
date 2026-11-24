@@ -711,7 +711,7 @@ expr = label "expression" exprLoop
                 pure (Syntax.DoubleLiteral loc float)
             , do
                 startLoc <- single LBracket
-                elements <- expr `sepBy` expr
+                elements <- expr `sepBy` comma
                 endLoc <- single RBracket
                 pure (Syntax.ArrayLiteral {loc = startLoc <> endLoc, elements, elementRepresentation = ()})
             , do

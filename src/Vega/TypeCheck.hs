@@ -613,15 +613,7 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
                     }
                 )
         StringLiteral{} -> deferToInference
-        ArrayLiteral{loc, elements} -> do
-            elements <- for elements \element -> do
-                check env ambientEffect expectedType element
-            elementType <- MetaVar <$> freshTypeMeta "element"
-
-            subsumes loc env (arrayType elementType) expectedType
-            elementRepresentation <- representationOfType loc env elementType
-
-            pure (ArrayLiteral {loc, elements, elementRepresentation})
+        ArrayLiteral{} -> deferToInference
         IntLiteral{} -> deferToInference
         DoubleLiteral{} -> deferToInference
         If{loc, condition, thenBranch, elseBranch} -> do
