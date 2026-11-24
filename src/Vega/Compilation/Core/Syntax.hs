@@ -284,6 +284,9 @@ functionRepresentation = ProductRep [PrimitiveRep Vega.PointerRep, PrimitiveRep 
 boolRepresentation :: Representation
 boolRepresentation = SumRep [ProductRep [], ProductRep []]
 
+unitRepresentation :: Representation
+unitRepresentation = ProductRep []
+
 falseValue :: Value
 falseValue =
     SumConstructor

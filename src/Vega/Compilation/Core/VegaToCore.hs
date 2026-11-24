@@ -229,6 +229,60 @@ compileExpr expr = do
             assert (representation == returnRepresentation)
             pure ([], Core.Lambda variables bodyStatements body returnRepresentation, Core.functionRepresentation)
         Vega.StringLiteral{} -> deferToValue
+        Vega.ArrayLiteral{elements = [], elementRepresentation} -> do
+            elementRepresentation <- convertRepresentation elementRepresentation
+            pure
+                ( []
+                , Core.Application
+                    { function = Core.Global (Builtins.primopName Builtins.EmptyArray)
+                    , representationArguments = [elementRepresentation]
+                    , arguments = []
+                    , resultRepresentation = Core.ArrayRep elementRepresentation
+                    }
+                , Core.ArrayRep elementRepresentation
+                )
+        Vega.ArrayLiteral{elements, elementRepresentation} -> do
+            elementRepresentation <- convertRepresentation elementRepresentation
+            let arrayRepresentation = Core.ArrayRep elementRepresentation
+            arrayVar <- newLocal
+            let arrayCreation =
+                    Core.Let
+                        arrayVar
+                        arrayRepresentation
+                        ( Core.Application
+                            { function = Core.Global (Builtins.primopName Builtins.UnsafeUninitializedMutableArray)
+                            , representationArguments = [elementRepresentation]
+                            , arguments = [Core.Literal (Core.IntLiteral{value = fromIntegral (length elements), sizeInBits = 64})]
+                            , resultRepresentation = arrayRepresentation
+                            }
+                        )
+            buildStatements <- Util.forIndexed elements \element index -> do
+                (statements, value) <- compileExprToValue_ element
+                wildcardName <- newLocal
+                pure $
+                    statements
+                        :|> Core.Let
+                            wildcardName
+                            elementRepresentation
+                            ( Core.Application
+                                { function = Core.Global (Builtins.primopName Builtins.UnsafeWriteMutableArray)
+                                , representationArguments = [elementRepresentation]
+                                , arguments =
+                                    [ Core.Var (Core.Local arrayVar)
+                                    , Core.Literal (Core.IntLiteral{value = fromIntegral (index), sizeInBits = 64})
+                                    , value
+                                    ]
+                                , resultRepresentation = Core.unitRepresentation
+                                }
+                            )
+            let freezeExpr =
+                    Core.Application
+                        { function = Core.Global (Builtins.primopName Builtins.UnsafeFreezeArray)
+                        , representationArguments = [elementRepresentation]
+                        , arguments = [Core.Var (Core.Local arrayVar)]
+                        , resultRepresentation = arrayRepresentation
+                        }
+            pure (arrayCreation :<| fold buildStatements, freezeExpr, arrayRepresentation)
         Vega.IntLiteral{} -> deferToValue
         Vega.DoubleLiteral{} -> deferToValue
         Vega.TupleLiteral{} -> deferToValue
@@ -421,6 +475,7 @@ compileExprToValue expr = do
                     pure ([], Core.Instantiation{varName = nameToCoreName varName, representationArguments = representationArguments}, representation)
         Vega.Lambda{} -> deferToLet
         Vega.StringLiteral _loc literal -> pure ([], Core.Literal (Core.StringLiteral literal), Builtins.stringRepresentation)
+        Vega.ArrayLiteral{} -> deferToLet
         Vega.IntLiteral _loc literal literalTypeInBits -> do
             let sizeInBits = case literalTypeInBits of
                     Nothing -> 64

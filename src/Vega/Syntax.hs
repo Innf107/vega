@@ -14,6 +14,7 @@ import Data.Text qualified as Text
 import Effectful (Eff, IOE, runEff, runPureEff, (:>))
 import GHC.Generics (Generically (..))
 import System.IO.Unsafe (unsafePerformIO)
+import Vega.Constraint (ConstraintQueue)
 import {-# SOURCE #-} Vega.Effect.Meta.Static qualified as Meta
 import Vega.MultiSet (MultiSet)
 import Vega.MultiSet qualified as MultiSet
@@ -23,7 +24,6 @@ import {-# SOURCE #-} Vega.TypeCheck.IntSum qualified as IntSum
 import Vega.Util (Sign)
 import Vega.VectorMap (VectorMap)
 import Vega.VectorMap qualified as VectorMap
-import Vega.Constraint (ConstraintQueue)
 
 newtype PackageName = MkPackageName Text
     deriving stock (Generic, Eq, Show, Ord)
@@ -224,6 +224,11 @@ data Expr p
         , body :: XWithRepresentation p (Expr p)
         }
     | StringLiteral Loc Text
+    | ArrayLiteral
+        { loc :: Loc
+        , elements :: Seq (Expr p)
+        , elementRepresentation :: XRepresentation p
+        }
     | IntLiteral
         { loc :: Loc
         , value :: Integer

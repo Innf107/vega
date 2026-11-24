@@ -438,6 +438,9 @@ renameExpr env = \case
         body <- renameExpr (Util.compose transformers env) body
         pure (Lambda loc boundTypeParameters parameters body)
     StringLiteral loc literal -> pure (StringLiteral loc literal)
+    ArrayLiteral{loc, elements, elementRepresentation} -> do
+        elements <- for elements (renameExpr env)
+        pure (ArrayLiteral{loc, elements, elementRepresentation})
     IntLiteral{loc, value, literalTypeInBits} -> pure (IntLiteral{loc, value, literalTypeInBits})
     DoubleLiteral loc literal -> pure (DoubleLiteral loc literal)
     TupleLiteral loc elements -> do

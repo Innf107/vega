@@ -1,6 +1,7 @@
 module Vega.Builtins (
     Primop (..),
     primops,
+    primopName,
     asPrimop,
     primopType,
     primopRepresentation,
@@ -137,6 +138,9 @@ primopVarName = \case
 
 primops :: HashMap Text Primop
 primops = fromList [(primopVarName primop, primop) | primop <- [minBound .. maxBound]]
+
+primopName :: Primop -> GlobalName
+primopName primop = internalName (primopVarName primop)
 
 asPrimop :: GlobalName -> Maybe Primop
 asPrimop name

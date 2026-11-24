@@ -577,8 +577,8 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
         Application{} -> deferToInference
         -- TODO: not entirely sure if this is correct or if we should try to stay in check mode
         VisibleTypeApplication{} -> deferToInference
-        Lambda loc typeParameters parameters body -> do
-            (env, typeWithoutBoundParameters) <- bindTypeParameters loc env typeParameters expectedType
+        Lambda loc boundTypeParameters parameters body -> do
+            (env, typeWithoutBoundParameters) <- bindTypeParameters loc env boundTypeParameters expectedType
 
             -- Any type variables *not* bound above are not going to be available in the body
             -- and so are just skolemized away here
@@ -604,8 +604,24 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
                     pure ((pattern_, representation), envTrans)
             body <- check (compose envTransformers env) expectedEffect returnType body
             returnRepresentation <- representationOfType loc env returnType
-            pure (Lambda loc typeParameters parameters (body, returnRepresentation))
+            pure
+                ( Lambda
+                    { loc
+                    , boundTypeParameters
+                    , parameters
+                    , body = (body, returnRepresentation)
+                    }
+                )
         StringLiteral{} -> deferToInference
+        ArrayLiteral{loc, elements} -> do
+            elements <- for elements \element -> do
+                check env ambientEffect expectedType element
+            elementType <- MetaVar <$> freshTypeMeta "element"
+
+            subsumes loc env (arrayType elementType) expectedType
+            elementRepresentation <- representationOfType loc env elementType
+
+            pure (ArrayLiteral {loc, elements, elementRepresentation})
         IntLiteral{} -> deferToInference
         DoubleLiteral{} -> deferToInference
         If{loc, condition, thenBranch, elseBranch} -> do
@@ -699,8 +715,7 @@ check env ambientEffect expectedType expr = withTrace TypeCheck ("check:" <+> sh
             let bodyEnv = Util.compose parameterTransformers $ bindVarType functionName functionType env
             loopBody <- check bodyEnv bodyEffect expectedType loopBody
             returnRepresentation <- representationOfType loc env expectedType
-            pure (Loop{loc, functionName, loopParameters, loopBody=(loopBody, returnRepresentation)})
-
+            pure (Loop{loc, functionName, loopParameters, loopBody = (loopBody, returnRepresentation)})
 
 infer :: (TypeCheck es) => Env -> Effect -> Expr Renamed -> Eff es (Type, Expr Typed)
 infer env ambientEffect expr = do
@@ -789,6 +804,13 @@ infer env ambientEffect expr = do
             returnRepresentation <- representationOfType loc env bodyType
             pure (Function parameterTypes bodyEffect bodyType, Lambda loc typeParameters parameters (body, returnRepresentation))
         StringLiteral loc literal -> pure (Builtins.stringType, StringLiteral loc literal)
+        ArrayLiteral {loc, elements}  -> do
+            elementType <- MetaVar <$> freshTypeMeta "e"
+
+            elements <- for elements \element -> check env ambientEffect elementType element
+
+            elementRepresentation <- representationOfType loc env elementType
+            pure (arrayType elementType, ArrayLiteral {loc, elements, elementRepresentation})
         IntLiteral loc literal literalTypeInBits -> pure (typeForIntLiteral literalTypeInBits, IntLiteral loc literal literalTypeInBits)
         DoubleLiteral loc literal -> pure (Builtins.doubleType, DoubleLiteral loc literal)
         BinaryOperator loc left operator right -> do
@@ -1393,6 +1415,12 @@ substituteTypeVariables substitution type_ =
         type_@PrimitiveRep{} -> pure type_
         type_@Kind -> pure type_
         type_@Integer -> pure type_
+
+arrayType :: Type -> Type
+arrayType elementType = TypeApplication (TypeConstructor (Global (internalName "Array"))) [elementType]
+
+mutableArrayType :: Type -> Type
+mutableArrayType elementType = TypeApplication (TypeConstructor (Global (internalName "MutableArray"))) [elementType]
 
 typeForIntLiteral :: Maybe (Sign, Int) -> Type
 typeForIntLiteral = \case

@@ -710,6 +710,11 @@ expr = label "expression" exprLoop
                 (float, loc) <- doubleLit
                 pure (Syntax.DoubleLiteral loc float)
             , do
+                startLoc <- single LBracket
+                elements <- expr `sepBy` expr
+                endLoc <- single RBracket
+                pure (Syntax.ArrayLiteral {loc = startLoc <> endLoc, elements, elementRepresentation = ()})
+            , do
                 (elements, loc) <- argumentsWithLoc expr
                 case elements of
                     (expr :<| Empty) -> pure expr

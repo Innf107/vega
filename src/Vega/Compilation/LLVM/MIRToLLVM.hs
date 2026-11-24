@@ -750,7 +750,7 @@ compileNonTailCall builder var returnLayout functionType function argumentCompou
             -- The sret parameter is always the first parameter
             callInstr <- buildCallWithAttributes builder functionType function ([returnedValueAtRestPointer] <> argumentValues) ""
 
-            -- We can keep the alloca for the unboxed segment here since it's gointo hg ave the exact same lifetime as the loaded value anyway
+            -- We can keep the alloca for the unboxed segment here since it's going to have the exact same lifetime as the loaded value anyway
             asVar_ var returnLayout $ buildLoadAsReference builder returnLayout returnedValueAtRestPointer
 
             pure callInstr
