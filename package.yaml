@@ -60,7 +60,7 @@ ghc-options:
 library:
   source-dirs: src
   cxx-sources:
-  - llvm-shadow-stack/VegaShadowStackPlugin.cpp
+  - llvm-shadow-stack/shadow_stack.cpp
   - llvm-shadow-stack/frame_allocation.cpp
   - llvm-shadow-stack/intervals.cpp
   - llvm-shadow-stack/liveness.cpp
