@@ -1,0 +1,76 @@
+import std:Maybe (Maybe, Just, Nothing)
+import std:Array
+import std:Panic (panic)
+import std:UInt8
+import std:Ordering (Ordering, Less, Equal, Greater)
+
+-- Persistent Map of bytes represented as a sorted array
+-- TODO: Might be nice to turn this into a tree if the array becomes too large
+data ByteMap(a) = ByteMap({ 
+    -- We store the keys seperately so that searching is (much) more cache efficient.
+    -- Even in a full map, we only need to touch up to 256 bytes to find the correct key
+    keys: Array(UInt8), 
+    -- The elements are boxed since we append to the map by creating a new array and copying all the elements over.
+    -- With a box this is generally fine, but if we stored unboxed elements we might need to copy up to 255 very large values
+    -- on every insertion
+    values: Array(Box(a))
+})
+
+empty : forall a. () -> ByteMap(a)
+empty() = ByteMap({
+    keys = Array.empty(),
+    values = Array.empty()
+})
+
+length : forall a. (ByteMap(a)) -> Int
+length(ByteMap(map)) = Array.length(map.keys)
+
+
+-- Returns the smallest index with a key that is >= the given key and whether that index exactly contains the key.
+-- The index might point one past the array if all elements are smaller than the index
+lookupIndex : forall a. (ByteMap(a), UInt8) -> { found : Bool, index : Int }
+lookupIndex(ByteMap(map), key) = loop go(i = 0) -> match Array.readMaybe(map.keys, i) {
+    Nothing -> { found = False, index = i }
+    Just(foundKey) -> match UInt8.compare(foundKey, key) {
+        -- The array is sorted so we can stop immediately
+        Greater -> { found = False, index = i }
+        Less -> go(i + 1)
+        Equal -> { found = True, index = i }
+    }
+}
+
+lookup : forall a. (ByteMap(a), UInt8) -> Maybe(a)
+lookup(ByteMap({ keys, values }) as map, key) = match lookupIndex(map, key) {
+    { found = True, index } -> Just(unbox(Array.read(values, index))) 
+    { found = False, index } -> Nothing
+}
+
+insert : forall a. (ByteMap(a), UInt8, a) -> ByteMap(a)
+insert(ByteMap({ keys, values}) as map, key, newValue) = match lookupIndex(map, key) {
+    { found = True, index } -> ByteMap({ keys = keys, values = Array.replace(values, index, box(newValue)) })
+    { found = False, index } -> {
+        let newKeys = Array.insertAt(keys, index, key)
+        let newValues = Array.insertAt(values, index, box(newValue))
+        ByteMap({ keys = newKeys, values = newValues })
+    }
+}
+
+alter : forall a. (ByteMap(a), UInt8, Maybe(a) -> Maybe(a)) -> ByteMap(a)
+alter(ByteMap({ keys, values }) as map, key, function) = match lookupIndex(map, key) {
+    { found = True, index } -> {
+        let value = Array.read(values, index)
+        match function(Just(unbox(value))) {
+            Just(newValue) -> ByteMap({ keys = keys, values = Array.replace(values, index, box(newValue)) })
+            Nothing -> ByteMap({ keys = Array.delete(keys, index), values = Array.delete(values, index) })
+        }
+    }
+    { found = False, index } -> {
+        match function(Nothing) {
+            Nothing -> map
+            Just(newValue) -> ByteMap({ 
+                keys = Array.insertAt(keys, index, key), 
+                values = Array.insertAt(values, index, box(newValue))
+            })
+        }
+    }
+}

@@ -14,3 +14,6 @@ panic(message) = {
     -- this will never run but we need to include it since exit technically returns ()
     panic(message)
 }
+
+panicAll : forall a. Array(String) -> a
+panicAll(messageSegments) = panic(String.concatArray(messageSegments))

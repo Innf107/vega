@@ -1,0 +1,74 @@
+import std:ByteMap (ByteMap)
+import std:ByteMap
+import std:Maybe(Maybe, Just, Nothing)
+
+import stdtest:Framework (Category, Test, test, expectPass)
+
+
+
+category : () -> Category
+category() = Category({
+        name = "ByteMap",
+        path = "Test/ByteMap.vega",
+        tests = tests()
+    })
+
+tests : () -> Array(Test)
+tests() = [
+    expectPass("length after distinct insertions", \ -> {
+        let bytemap = ByteMap.empty()
+        let shadow bytemap = ByteMap.insert(bytemap, 65u8, ()) -- A
+        let shadow bytemap = ByteMap.insert(bytemap, 68u8, ()) -- D
+        let shadow bytemap = ByteMap.insert(bytemap, 66u8, ()) -- B
+        let shadow bytemap = ByteMap.insert(bytemap, 67u8, ()) -- C
+        let shadow bytemap = ByteMap.insert(bytemap, 90u8, ()) -- Z
+        ByteMap.length(bytemap) == 5
+    }),
+    expectPass("length after overlapping insertions", \ -> {
+        let bytemap = ByteMap.empty()
+        let shadow bytemap = ByteMap.insert(bytemap, 65u8, ()) -- A
+        let shadow bytemap = ByteMap.insert(bytemap, 68u8, ()) -- D
+        let shadow bytemap = ByteMap.insert(bytemap, 65u8, ()) -- A
+        let shadow bytemap = ByteMap.insert(bytemap, 67u8, ()) -- C
+        let shadow bytemap = ByteMap.insert(bytemap, 68u8, ()) -- D
+        ByteMap.length(bytemap) == 3
+    }),
+    expectPass("lookup after inserts", \ -> {
+        let bytemap = ByteMap.empty()
+        let shadow bytemap = ByteMap.insert(bytemap, 65u8, 1) -- A
+        let shadow bytemap = ByteMap.insert(bytemap, 68u8, 2) -- D
+        let shadow bytemap = ByteMap.insert(bytemap, 66u8, 3) -- B
+        let shadow bytemap = ByteMap.insert(bytemap, 67u8, 4) -- C
+        let shadow bytemap = ByteMap.insert(bytemap, 90u8, 5) -- Z
+        match ByteMap.lookup(bytemap, 66u8) {
+            Just(3) -> True
+            _ -> False
+        }
+    }),
+    expectPass("overriding inserts", \ -> {
+        let bytemap = ByteMap.empty()
+        let shadow bytemap = ByteMap.insert(bytemap, 65u8, 1) -- A
+        let shadow bytemap = ByteMap.insert(bytemap, 68u8, 2) -- D
+        let shadow bytemap = ByteMap.insert(bytemap, 66u8, 3) -- B
+        let shadow bytemap = ByteMap.insert(bytemap, 66u8, 33) -- B
+        let shadow bytemap = ByteMap.insert(bytemap, 66u8, 333) -- B
+        let shadow bytemap = ByteMap.insert(bytemap, 67u8, 4) -- C
+        let shadow bytemap = ByteMap.insert(bytemap, 90u8, 5) -- Z
+        match ByteMap.lookup(bytemap, 66u8) {
+            Just(333) -> True
+            _ -> False
+        }
+    }),
+    expectPass("lookup missing", \ -> {
+        let bytemap = ByteMap.empty()
+        let shadow bytemap = ByteMap.insert(bytemap, 65u8, ()) -- A
+        let shadow bytemap = ByteMap.insert(bytemap, 68u8, ()) -- D
+        let shadow bytemap = ByteMap.insert(bytemap, 65u8, ()) -- A
+        let shadow bytemap = ByteMap.insert(bytemap, 67u8, ()) -- C
+        let shadow bytemap = ByteMap.insert(bytemap, 68u8, ()) -- D
+        match ByteMap.lookup(bytemap, 69u8) {
+            Nothing -> True
+            _ -> False
+        }
+    })
+]

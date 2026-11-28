@@ -1,0 +1,46 @@
+import std:Trie
+import std:Maybe(Maybe, Just, Nothing)
+
+import stdtest:Framework (Category, Test, test, expectPass)
+
+
+
+category : () -> Category
+category() = Category({
+        name = "Trie",
+        path = "Test/Trie.vega",
+        tests = tests()
+    })
+
+tests : () -> Array(Test)
+tests() = [
+    expectPass("insert / lookup disjoint keys", \ -> {
+        let trie = Trie.empty()
+        let shadow trie = Trie.insert(trie, "abc", 1)
+        let shadow trie = Trie.insert(trie, "bcd", 2)
+        let shadow trie = Trie.insert(trie, "cde", 3)
+        match (Trie.lookup(trie, "abc"), Trie.lookup(trie, "bcd"), Trie.lookup(trie, "cde"), Trie.lookup(trie, "anything else")) {
+            (Just(1), Just(2), Just(3), Nothing) -> True
+            _ -> False
+        }
+    }),
+    expectPass("insert / lookup shared prefixes", \ -> {
+        let trie = Trie.empty()
+        let shadow trie = Trie.insert(trie, "abc", 1)
+        let shadow trie = Trie.insert(trie, "abd", 2)
+        let shadow trie = Trie.insert(trie, "bc", 3)
+        let shadow trie = Trie.insert(trie, "ae", 4)
+        let shadow trie = Trie.insert(trie, "abdf", 5)
+        match (
+            Trie.lookup(trie, "abc"),
+            Trie.lookup(trie, "abd"),
+            Trie.lookup(trie, "bc"),
+            Trie.lookup(trie, "ae"),
+            Trie.lookup(trie, "abdf"),
+            Trie.lookup(trie, "anything else"),
+            Trie.lookup(trie, "ab")) {
+            (Just(1), Just(2), Just(3), Just(4), Just(5), Nothing, Nothing) -> True
+            _ -> False
+        }
+    }),
+]

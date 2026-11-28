@@ -18,9 +18,10 @@ import std:List (List, Cons, Nil)
 import std:List
 import std:Int
 import std:String
-import std:Panic (panic)
+import std:Panic (panic, panicAll)
 import std:OutArray
 import std:OutArray (OutArray)
+import std:Ordering (Ordering, Less, Equal, Greater)
 import std:Ref
 import std:Ref (Ref)
 import std:Stream(Stream, Bounded)
@@ -37,6 +38,9 @@ read(array, index) = {
     boundsCheck(array, index, "std:Array:read")
     unsafeReadArray(array, index)
 }
+
+unsafeRead : forall a. (Array(a), Int) -> a
+unsafeRead(array, index) = unsafeReadArray(array, index)
 
 readMaybe : forall a. (Array(a), Int) -> Maybe(a)
 readMaybe(array, index) = {
@@ -59,26 +63,89 @@ writeMutable(array, index, value) = {
     unsafeWriteMutableArray(array, index, value)
 }
 
+-- Replace a value at an index of an immutable array.
+--
+-- If you want to replace many elements consider using
+-- mutableCopy instead of calling this in a loop
+--
+-- O(n)
+replace : forall a. (Array(a), Int, a) -> Array(a)
+replace(array, index, newValue) = {
+    boundsCheck(array, index, "std:Array:replace")
+    let newArray = mutableCopy(array)
+    writeMutable(newArray, index, newValue)
+    unsafeFreezeArray(newArray)
+}
+
+-- Insert a value at an index, pushing the previous value at that index and everything after it over by one.
+-- The index can either be a valid index of the array or one past the end, in which case the new element will
+-- be appended to the array
+--
+-- O(n)
+insertAt : forall a. (Array(a), Int, a) -> Array(a)
+insertAt(array, indexToInsertAt, newValue) = {
+    -- We need a custom bounds check so that we can allow indices one past the end of the array
+    if indexToInsertAt < 0 || indexToInsertAt >= length(array) + 1 then {
+        panicAll(["std:Array:insertAt: index ", Int.toString(indexToInsertAt), " out of bounds for array of length ", Int.toString(length(array))])
+    } else {
+        generate(length(array) + 1, \newIndex -> {
+            match Int.compare(newIndex, indexToInsertAt) {
+                Less -> unsafeRead(array, newIndex)
+                Equal -> newValue
+                Greater -> unsafeRead(array, newIndex - 1)
+            }
+        })
+    }
+}
+
+-- Delete the value at the given index and return a new array with all values after it shifted back to fill the gap.
+--
+-- O(n)
+delete : forall a. (Array(a), Int) -> Array(a)
+delete(array, deletedIndex) = {
+    boundsCheck(array, deletedIndex, "std:Array:delete")
+    generate(length(array) - 1, \newIndex -> {
+        if newIndex < deletedIndex then {
+            unsafeRead(array, newIndex)
+        } else {
+            unsafeRead(array, newIndex + 1)
+        }
+    })
+}
+
+-- O(|prefix|)
+take : forall a. (Array(a), Int) -> Array(a)
+take(array, prefixSize) = generate(Int.min(prefixSize, length(array)), \index -> unsafeRead(array, index))
+
+-- O(n - |prefix|)
+drop : forall a. (Array(a), Int) -> Array(a)
+drop(array, prefixSize) = generate(Int.max(0, length(array) - prefixSize), \index -> unsafeRead(array, index + prefixSize))
+
+-- O(n)
+mutableCopy : forall a. Array(a) -> MutableArray(a)
+mutableCopy(array) = generateMutable(length(array), \index -> unsafeRead(array, index))
 
 boundsCheck : forall a. (Array(a), Int, String) -> ()
 boundsCheck(array, index, name) =
     if index >= 0 && index < arrayLength(array) then 
         ()
     else
-        panic(String.append(String.append(String.append(String.append(name, ": index "), Int.toString(index)), " out of bounds for array of length "), Int.toString(arrayLength(array))))
+        panicAll([name, ": index ", Int.toString(index), " out of bounds for array of length ", Int.toString(length(array))])
 
 boundsCheckMutable : forall a. (MutableArray(a), Int, String) -> ()
 boundsCheckMutable(array, index, name) =
     if index >= 0 && index < mutableArrayLength(array) then 
         ()
     else
-        panic(String.append(String.append(String.append(String.append(name, ": index "), Int.toString(index)), " out of bounds for array of length "), Int.toString(mutableArrayLength(array))))
+        panicAll([name, ": index ", Int.toString(index), " out of bounds for array of length ", Int.toString(lengthMutable(array))])
 
 
 length : forall a. Array(a) -> Int
 -- This mostly exists for API consistency but also so user code doesn't need to interact with any of the primops directly
 length(array) = arrayLength(array)
 
+lengthMutable : forall a. MutableArray(a) -> Int
+lengthMutable(array) = mutableArrayLength(array)
 
 copyArrayView : forall a. ({
         targetArray : MutableArray(a),
@@ -186,19 +253,23 @@ forIndexed(array, f) = {
     go(0)
 }
 
+generateMutable : forall a.(Int, Int -> a) -> MutableArray(a)
+generateMutable(length, makeElement) = {
+    let array = unsafeUninitializedMutableArray(length)
+    loop go(i = 0) -> {
+        if i < length then {
+            writeMutable(array, i, makeElement(i))
+            go(i + 1)
+        } else {}
+    }
+    array
+}
+
 generate : forall a.(Int, Int -> a) -> Array(a)
 generate(length, makeElement) = if length <= 0 then {
     emptyArray()
 } else {
-    let firstElement = makeElement(0)
-    let array = replicateMutableArray(length, firstElement)
-    let go(i) = if i < length then {
-        writeMutable(array, i, makeElement(i))
-        go(i + 1)
-    } else {}
-    -- We already set the first element (everywhere) so we start at 1
-    go(1)
-    unsafeFreezeArray(array)
+    unsafeFreezeArray(generateMutable(length, makeElement))
 }
 
 -- Freeze a slice of an MutableArray under the assumption that it will not be used afterwards.

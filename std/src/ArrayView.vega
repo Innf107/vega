@@ -1,6 +1,9 @@
 import internal:Internal(uint8ToInt)
 import std:Maybe (Maybe, Just, Nothing)
 import std:Array
+import std:Panic (panic, panicAll)
+import std:Int
+import std:UInt8
 
 -- Virtual wrapper for anything that can be indexed into like an array.
 -- TODO: this should be parameterized by an effect and probably by the representation
@@ -9,6 +12,12 @@ data ArrayView(a) = ArrayView({
     read : Int -> a,
     length : Int
 })
+
+empty : forall a. () -> ArrayView(a)
+empty() = ArrayView({ 
+    read = panic("trying to read from empty array view"),
+    length = 0
+ })
 
 fromFunction : forall a. { read : Int -> a, length : Int } -> ArrayView(a)
 fromFunction(contents) = ArrayView(contents)
@@ -71,21 +80,88 @@ foldr(view, nil, cons) = loop go(acc = nil, index = length(view) - 1) -> {
 sum : ArrayView(Int) -> Int
 sum(view) = foldl(view, 0, \x y -> x + y)
 
--- TODO: we should expand this to anything that implements Eq in the future
-isPrefix : { prefix : ArrayView(UInt8), full : ArrayView(UInt8) } -> Bool
-isPrefix({ prefix, full }) = {
-    if length(prefix) > length(full) then {
-        False
-    } else loop go(i = 0) -> {
-        if i >= length(prefix) then {
-            True
-        } else if uint8ToInt(read(prefix, i)) != uint8ToInt(read(full, i)) then {
-            False
-        } else {
+sharedPrefixLength : (ArrayView(UInt8), ArrayView(UInt8)) -> Int
+sharedPrefixLength(view1, view2) = {
+    let sharedLength = Int.min(length(view1), length(view2))
+    loop go(i = 0) -> {
+        if i >= sharedLength then {
+            i
+        } else if UInt8.equal(read(view1, i), read(view2, i)) then {
             go(i + 1)
+        } else {
+            -- If we return the index, that means that all elements leading up to but not 
+            -- including the index were equal, which is what we want here
+            i
         }
     }
 }
+
+sharedPrefix : (ArrayView(UInt8), ArrayView(UInt8)) -> ArrayView(UInt8)
+sharedPrefix(view1, view2) = {
+    let prefixLength = sharedPrefixLength(view1, view2)
+    take(view1, prefixLength)
+}
+
+-- TODO: we should expand this to anything that implements Eq in the future
+isPrefix : { prefix : ArrayView(UInt8), full : ArrayView(UInt8) } -> Bool
+isPrefix({ prefix, full }) = sharedPrefixLength(prefix, full) == length(prefix)
+
+-- O(|prefix|)
+stripPrefix : { prefix : ArrayView(UInt8), full : ArrayView(UInt8) } -> Maybe(ArrayView(UInt8))
+stripPrefix({ prefix, full }) = if isPrefix({ prefix = prefix, full = full }) then {
+    Just(drop(full, length(prefix)))
+} else {
+    Nothing
+}
+
+
+-- O(1)
+take : forall a. (ArrayView(a), Int) -> ArrayView(a)
+take(ArrayView({ read, length }) as arrayView, takenLength) = {
+    if takenLength >= length then {
+        arrayView
+    } else {
+        ArrayView({
+            length = takenLength,
+            read = \index -> if index < takenLength then {
+                read(index) 
+            } else { 
+                panicAll(
+                    [ "Trying to read at out-of-bounds index "
+                    , Int.toString(index), " of an ArrayView that has been truncated to "
+                    , Int.toString(takenLength)
+                    , " elements with std:ArrayView:take"
+                    ])
+            }
+        })
+    }
+}
+
+-- O(1)
+drop : forall a. (ArrayView(a), Int) -> ArrayView(a)
+drop(ArrayView({ read, length }) as arrayView, dropped) = {
+    if dropped <= 0 then {
+        arrayView
+    } else if dropped >= length then {
+        empty()
+    } else {
+        ArrayView({
+            length = length - dropped,
+            read = \index -> if index < length - dropped then {
+                read(index + dropped)
+            } else { 
+                panicAll(
+                    [ "Trying to read at out-of-bounds index "
+                    , Int.toString(index)
+                    , " of an ArrayView that has been truncated to "
+                    , Int.toString(length - dropped)
+                    , " elements with std:ArrayView:drop"
+                    ])
+            }
+        })
+    }
+}
+
 
 equal : forall a. ((a, a) -> Bool, ArrayView(a), ArrayView(a)) -> Bool
 equal(comparison, view1, view2) = if length(view1) != length(view2) then {

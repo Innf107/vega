@@ -49,3 +49,6 @@ compare(x, y) = if x == y then Equal else if x < y then Less else Greater
 
 min : (Int, Int) -> Int
 min(x, y) = if x <= y then x else y
+
+max : (Int, Int) -> Int
+max(x, y) = if x >= y then x else y

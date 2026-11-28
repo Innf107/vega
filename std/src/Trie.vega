@@ -4,46 +4,89 @@ import std:Maybe
 import std:Panic (panic)
 import std:ArrayView
 import std:String
-
-data CharMap(a)
-
-lookupCharMap : forall a. (CharMap(a), UInt8) -> Maybe(a)
-lookupCharMap(map, char) = panic("todo")
+import std:ByteMap (ByteMap)
+import std:ByteMap
 
 data Trie(a)
     = Node({ 
         -- We don't need to waste two words to store slices here so we
         -- use a direct Array instead of a String.
         -- These are going to be small-ish in practice anyway
+        --
+        -- TODO: We do lose some sharing here though so i'm not sure if this is that
+        -- great actually. Maybe we should just use actual Strings and instead
+        -- optimize their representation a bit so they don't always take up two full extra words?
         prefix: Array(UInt8),
-        next: Maybe(CharMap(Trie(a))),
+        next: ByteMap(Trie(a)),
         value: Maybe(a)
      })
 
 empty : forall a. () -> Trie(a)
-empty() = Node({ prefix = Array.empty(), next = Nothing, value = Nothing })
+empty() = Node({ prefix = [], next = ByteMap.empty(), value = Nothing })
 
 lookup : forall a. (Trie(a), String) -> Maybe(a)
 lookup(Node({ prefix, next, value }), string) = {
     if ArrayView.isPrefix({prefix = Array.view(prefix), full = String.view(string) }) then {
         if String.length(string) == Array.length(prefix) then {
             value
-        } else match next {
-            Nothing -> Nothing
-            -- The next char is the char one *after* the prefix
-            Just(shadow next) -> {
-                let nextChar = String.read(string, Array.length(prefix))
-                match lookupCharMap(next, nextChar) {
-                    Nothing -> Nothing
-                    Just(subTrie) -> {
-                        -- We have matched the prefix and are now matching one char through the next map
-                        let remainingString = String.drop(string, Array.length(prefix) + 1)
-                        lookup(subTrie, remainingString)
-                    }
+        } else {
+            let nextByte = String.read(string, Array.length(prefix))
+            match ByteMap.lookup(next, nextByte) {
+                Nothing -> Nothing
+                Just(subTrie) -> {
+                    -- We have matched the prefix and are now matching one byte through the next map
+                    let remainingString = String.drop(string, Array.length(prefix) + 1)
+                    lookup(subTrie, remainingString)
                 }
             }
         }
     } else {
         Nothing
+    }
+}
+
+insert : forall a. (Trie(a), String, a) -> Trie(a)
+insert(Node({ prefix, next, value }), key, newValue) = {
+    let sharedLength = ArrayView.sharedPrefixLength(Array.view(prefix), String.view(key))
+    if sharedLength == Array.length(prefix) then {
+        if (String.length(key) <= sharedLength) then {
+            -- The key exactly matched this node so we just override our value
+            Node({ prefix = prefix, next = next, value = Just(newValue) })
+        } else {
+            let nextByte = String.read(key, sharedLength)
+            -- We drop the length of the prefix + the one byte that we're handling separately via the
+            -- ByteMap
+            let remainingKey = String.drop(key, sharedLength + 1)
+            let newNext = ByteMap.alter(next, nextByte, \existingNode -> match existingNode {
+                -- We don't share anything else so we can just keep the entire rest of the string as a compressed key
+                Nothing -> Just(Node({ prefix = String.toByteArray(remainingKey), next = ByteMap.empty(), value = Just(newValue) }))
+
+                Just(existing) -> Just(insert(existing, remainingKey, newValue))
+            })
+            Node({ prefix = prefix, next = newNext, value = value })
+        }
+    } else {
+        -- We need to split up the prefix
+        let topLevelPrefix = Array.take(prefix, sharedLength)
+        let nextByteFromPrevious = Array.read(prefix, sharedLength)
+        -- We drop one more since we also include one byte in the map
+        let remainingPrefixFromPrevious = Array.drop(prefix, sharedLength + 1)
+
+        let nextNewByte = String.read(key, sharedLength)
+        let remainingNewPrefix = String.toByteArray(String.drop(key, sharedLength + 1))
+
+        let topLevelNext = ByteMap.empty()
+        let shadow topLevelNext = ByteMap.insert(topLevelNext, nextByteFromPrevious, Node({ 
+            prefix = remainingPrefixFromPrevious, 
+            next = next, 
+            value = value
+        }))
+        let shadow topLevelNext = ByteMap.insert(topLevelNext, nextNewByte, Node({ 
+            prefix = remainingNewPrefix, 
+            next = ByteMap.empty(),
+            value = Just(newValue)
+        }))
+
+        Node({ prefix = topLevelPrefix, next = topLevelNext, value = Nothing })
     }
 }

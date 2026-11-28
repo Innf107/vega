@@ -1,9 +1,14 @@
+
 import stdtest:Framework
+import stdtest:Test/ByteMap
 import stdtest:Test/String
+import stdtest:Test/Trie
 
 main : () -> ()
 main() = {
     Framework.run({ path = "std-test/src" },
-        [ String.category()
+        [ ByteMap.category()
+        , String.category()
+        , Trie.category()
         ])
 }

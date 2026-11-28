@@ -1,7 +1,18 @@
-import internal:Internal (uint8ToInt)
 -- Special-cased helper functions to make working with raw bytes a bit less annoying.
 -- these should probably eventually all become type class methods
+import internal:Internal (uint8ToInt)
+import std:Ordering (Ordering, Less, Equal, Greater)
+import std:Ordering
 
 equal : (UInt8, UInt8) -> Bool
 equal(byte1, byte2) = uint8ToInt(byte1) == uint8ToInt(byte2)
 
+compare : (UInt8, UInt8) -> Ordering
+compare(byte1, byte2) = {
+    if uint8ToInt(byte1) == uint8ToInt(byte2) then
+       Equal
+    else if uint8ToInt(byte1) < uint8ToInt(byte2) then
+        Less
+    else 
+        Greater
+}
